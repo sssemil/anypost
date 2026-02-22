@@ -23,6 +23,9 @@ export const generateAccountKey = (): AccountKey => {
 };
 
 export const accountKeyFromSeed = (seedPhrase: string): AccountKey => {
+  if (!validateMnemonic(seedPhrase, wordlist)) {
+    throw new Error("Invalid seed phrase");
+  }
   const entropy = mnemonicToEntropy(seedPhrase, wordlist);
   return keyFromSeed(entropy);
 };
@@ -32,9 +35,5 @@ export const exportAccountKey = (key: AccountKey): ExportedAccountKey => {
   return { seedPhrase };
 };
 
-export const importAccountKey = (seedPhrase: string): AccountKey => {
-  if (!validateMnemonic(seedPhrase, wordlist)) {
-    throw new Error("Invalid seed phrase");
-  }
-  return accountKeyFromSeed(seedPhrase);
-};
+export const importAccountKey = (seedPhrase: string): AccountKey =>
+  accountKeyFromSeed(seedPhrase);

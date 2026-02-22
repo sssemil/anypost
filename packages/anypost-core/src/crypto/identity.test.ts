@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { ed25519 } from "@noble/curves/ed25519.js";
 import {
   generateAccountKey,
   accountKeyFromSeed,
@@ -13,13 +14,20 @@ const TEST_SEED_2 =
   "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote";
 
 describe("Account Key Generation", () => {
-  it("generateAccountKey should produce an ed25519 keypair", () => {
+  it("generateAccountKey should produce a valid ed25519 signing keypair", () => {
     const key = generateAccountKey();
 
     expect(key.publicKey).toBeInstanceOf(Uint8Array);
     expect(key.privateKey).toBeInstanceOf(Uint8Array);
     expect(key.publicKey.length).toBe(32);
     expect(key.privateKey.length).toBe(32);
+
+    const expectedPublicKey = ed25519.getPublicKey(key.privateKey);
+    expect(key.publicKey).toEqual(expectedPublicKey);
+
+    const message = new Uint8Array([1, 2, 3, 4]);
+    const signature = ed25519.sign(message, key.privateKey);
+    expect(ed25519.verify(signature, message, key.publicKey)).toBe(true);
   });
 
   it("generateAccountKey should produce different keys each call", () => {
@@ -73,7 +81,15 @@ describe("Account Key Generation", () => {
     expect(restored.privateKey).toEqual(key.privateKey);
   });
 
+  it("accountKeyFromSeed should reject invalid seed phrases", () => {
+    expect(() => accountKeyFromSeed("not a valid seed phrase")).toThrow(
+      "Invalid seed phrase"
+    );
+  });
+
   it("importAccountKey should reject invalid seed phrases", () => {
-    expect(() => importAccountKey("not a valid seed phrase")).toThrow();
+    expect(() => importAccountKey("not a valid seed phrase")).toThrow(
+      "Invalid seed phrase"
+    );
   });
 });
