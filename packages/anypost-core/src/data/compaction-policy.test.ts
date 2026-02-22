@@ -192,6 +192,12 @@ describe("input validation", () => {
       createCompactionPolicy({ messageThreshold: 100, retainedMessageCount: 200 }),
     ).toThrow(RangeError);
   });
+
+  it("should reject retainedMessageCount equal to messageThreshold", () => {
+    expect(() =>
+      createCompactionPolicy({ messageThreshold: 100, retainedMessageCount: 100 }),
+    ).toThrow(RangeError);
+  });
 });
 
 describe("defaults", () => {

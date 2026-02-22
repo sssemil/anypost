@@ -36,9 +36,9 @@ export const createCompactionPolicy = (
       `retainedMessageCount must be a positive integer, got ${retainedMessageCount}`,
     );
   }
-  if (retainedMessageCount > messageThreshold) {
+  if (retainedMessageCount >= messageThreshold) {
     throw new RangeError(
-      `retainedMessageCount (${retainedMessageCount}) must be <= messageThreshold (${messageThreshold})`,
+      `retainedMessageCount (${retainedMessageCount}) must be < messageThreshold (${messageThreshold})`,
     );
   }
 
