@@ -22,6 +22,7 @@ export const createPersistedGroupDocument = async (
     doc,
     destroy: async () => {
       await persistence.destroy();
+      doc.destroy();
     },
   };
 };
@@ -67,12 +68,14 @@ export const openMessageContentStore = async (): Promise<MessageContentStore> =>
   };
 };
 
+type StorageManager = { persist: () => Promise<boolean> };
+type NavigatorWithStorage = { storage?: StorageManager };
+
 export const requestPersistentStorage = async (): Promise<boolean> => {
-  if (typeof navigator !== "undefined") {
-    const nav = navigator as { storage?: { persist?: () => Promise<boolean> } };
-    if (nav.storage?.persist) {
-      return nav.storage.persist();
-    }
+  const nav: NavigatorWithStorage | undefined =
+    typeof navigator !== "undefined" ? (navigator as unknown as NavigatorWithStorage) : undefined;
+  if (nav?.storage?.persist) {
+    return nav.storage.persist();
   }
   return false;
 };
