@@ -312,20 +312,38 @@ describe("Epoch key retention", () => {
       });
 
       const epochData = bob1.newGroupState.clientState.historicalReceiverData.get(1n);
-      expect(epochData).toBeDefined();
+      if (epochData === undefined) {
+        throw new Error("Expected epoch 1n receiver data to exist");
+      }
 
-      const pskBefore = new Uint8Array(epochData!.resumptionPsk);
-      const senderSecretBefore = new Uint8Array(epochData!.senderDataSecret);
+      const pskBefore = new Uint8Array(epochData.resumptionPsk);
+      const senderSecretBefore = new Uint8Array(epochData.senderDataSecret);
       expect(pskBefore.some((b) => b !== 0)).toBe(true);
       expect(senderSecretBefore.some((b) => b !== 0)).toBe(true);
+
+      const intermediateNodes = Object.values(epochData.secretTree.intermediateNodes);
+      const hasNonZeroIntermediate = intermediateNodes.some(
+        (node) => node.some((b) => b !== 0),
+      );
+      expect(hasNonZeroIntermediate).toBe(true);
 
       pruneGroupState({
         groupState: bob1.newGroupState,
         expiredEpochs: [1n],
       });
 
-      expect(epochData!.resumptionPsk.every((b) => b === 0)).toBe(true);
-      expect(epochData!.senderDataSecret.every((b) => b === 0)).toBe(true);
+      expect(epochData.resumptionPsk.every((b) => b === 0)).toBe(true);
+      expect(epochData.senderDataSecret.every((b) => b === 0)).toBe(true);
+
+      const allIntermediateZeroed = intermediateNodes.every(
+        (node) => node.every((b) => b === 0),
+      );
+      expect(allIntermediateZeroed).toBe(true);
+
+      Object.values(epochData.secretTree.leafNodes).forEach((node) => {
+        expect(node.handshake.secret.every((b) => b === 0)).toBe(true);
+        expect(node.application.secret.every((b) => b === 0)).toBe(true);
+      });
     });
 
     it("messages from pruned epochs should not be decryptable (forward secrecy)", async () => {

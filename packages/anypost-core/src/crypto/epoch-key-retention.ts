@@ -1,4 +1,5 @@
 import { zeroOutUint8Array } from "ts-mls";
+import type { SecretTree, GenerationSecret } from "ts-mls";
 import type { MlsGroupState } from "./mls-manager.js";
 
 const DEFAULT_MAX_AGE_DAYS = 30;
@@ -93,6 +94,19 @@ export const pruneTracker = (
   };
 };
 
+const zeroGenerationSecret = (gs: GenerationSecret): void => {
+  zeroOutUint8Array(gs.secret);
+  Object.values(gs.unusedGenerations).forEach(zeroOutUint8Array);
+};
+
+const zeroSecretTree = (tree: SecretTree): void => {
+  Object.values(tree.intermediateNodes).forEach(zeroOutUint8Array);
+  Object.values(tree.leafNodes).forEach((node) => {
+    zeroGenerationSecret(node.handshake);
+    zeroGenerationSecret(node.application);
+  });
+};
+
 type PruneGroupStateOptions = {
   readonly groupState: MlsGroupState;
   readonly expiredEpochs: readonly bigint[];
@@ -109,6 +123,7 @@ export const pruneGroupState = (
     if (expiredSet.has(epoch)) {
       zeroOutUint8Array(data.resumptionPsk);
       zeroOutUint8Array(data.senderDataSecret);
+      zeroSecretTree(data.secretTree);
       newData.delete(epoch);
     }
   }
