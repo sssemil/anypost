@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import * as Y from "yjs";
-import type { Libp2p, PubSub } from "@libp2p/interface";
+import type { Libp2p } from "@libp2p/interface";
 import { createLibp2p } from "libp2p";
 import { tcp } from "@libp2p/tcp";
 import { noise } from "@chainsafe/libp2p-noise";
@@ -8,7 +8,6 @@ import { yamux } from "@chainsafe/libp2p-yamux";
 import { gossipsub } from "@chainsafe/libp2p-gossipsub";
 import { identify } from "@libp2p/identify";
 import { createYjsSyncProvider } from "./yjs-sync-provider.js";
-import type { YjsSyncProvider } from "./yjs-sync-provider.js";
 
 const createTestNode = async (): Promise<Libp2p> =>
   createLibp2p({
@@ -153,8 +152,8 @@ describe("Yjs Sync Provider", () => {
       expect(docA.getArray("messages").length).toBe(2);
       expect(docB.getArray("messages").length).toBe(2);
 
-      const idsA = docA.getArray("messages").toArray().map((m: { id: string }) => m.id).sort();
-      const idsB = docB.getArray("messages").toArray().map((m: { id: string }) => m.id).sort();
+      const idsA = docA.getArray<{ id: string }>("messages").toArray().map((m) => m.id).sort();
+      const idsB = docB.getArray<{ id: string }>("messages").toArray().map((m) => m.id).sort();
       expect(idsA).toEqual(idsB);
 
       providerA.stop();
