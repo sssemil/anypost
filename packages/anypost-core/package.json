@@ -17,7 +17,16 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@chainsafe/libp2p-gossipsub": "^14.1.2",
+    "@chainsafe/libp2p-noise": "^16.1.5",
+    "@chainsafe/libp2p-yamux": "^7.0.4",
+    "@libp2p/bootstrap": "^11.0.47",
+    "@libp2p/circuit-relay-v2": "^3.2.24",
+    "@libp2p/dcutr": "^2.0.38",
+    "@libp2p/identify": "^3.0.39",
+    "@libp2p/websockets": "^9.2.19",
     "cbor-x": "^1.6.0",
+    "libp2p": "^2.10.0",
     "zod": "^4.3.6"
   }
 }
