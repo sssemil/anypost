@@ -6,6 +6,7 @@ import {
   isOnline,
   recordTypingStart,
   getTypingMembers,
+  pruneExpired,
 } from "./presence.js";
 
 const HEARTBEAT_TIMEOUT_MS = 30_000;
@@ -121,5 +122,50 @@ describe("Typing Tracker", () => {
 
     expect(getTypingMembers(tracker, "channel1")).toEqual(["peer1"]);
     expect(getTypingMembers(tracker, "channel2")).toEqual(["peer2"]);
+  });
+});
+
+describe("pruneExpired", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("should remove expired heartbeat entries from the tracker", () => {
+    vi.useFakeTimers();
+    let tracker = createPresenceTracker();
+
+    tracker = recordHeartbeat(tracker, "peer1");
+    vi.advanceTimersByTime(HEARTBEAT_TIMEOUT_MS + 1);
+    tracker = recordHeartbeat(tracker, "peer2");
+
+    const pruned = pruneExpired(tracker);
+
+    expect(getOnlineMembers(pruned)).toEqual(["peer2"]);
+    expect(isOnline(pruned, "peer1")).toBe(false);
+  });
+
+  it("should remove expired typing entries from the tracker", () => {
+    vi.useFakeTimers();
+    let tracker = createPresenceTracker();
+
+    tracker = recordTypingStart(tracker, "channel1", "peer1");
+    vi.advanceTimersByTime(TYPING_TIMEOUT_MS + 1);
+    tracker = recordTypingStart(tracker, "channel1", "peer2");
+
+    const pruned = pruneExpired(tracker);
+
+    expect(getTypingMembers(pruned, "channel1")).toEqual(["peer2"]);
+  });
+
+  it("should remove empty channel entries after pruning typing", () => {
+    vi.useFakeTimers();
+    let tracker = createPresenceTracker();
+
+    tracker = recordTypingStart(tracker, "channel1", "peer1");
+    vi.advanceTimersByTime(TYPING_TIMEOUT_MS + 1);
+
+    const pruned = pruneExpired(tracker);
+
+    expect(getTypingMembers(pruned, "channel1")).toEqual([]);
   });
 });

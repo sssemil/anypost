@@ -56,3 +56,25 @@ export const getTypingMembers = (
     .filter(([, timestamp]) => now - timestamp <= TYPING_TIMEOUT_MS)
     .map(([peerId]) => peerId);
 };
+
+export const pruneExpired = (tracker: PresenceTracker): PresenceTracker => {
+  const now = Date.now();
+  const heartbeats = new Map(
+    [...tracker.heartbeats].filter(
+      ([, timestamp]) => now - timestamp <= HEARTBEAT_TIMEOUT_MS,
+    ),
+  );
+  const typing = new Map(
+    [...tracker.typing]
+      .map(([channelId, peers]) => {
+        const activePeers = new Map(
+          [...peers].filter(
+            ([, timestamp]) => now - timestamp <= TYPING_TIMEOUT_MS,
+          ),
+        );
+        return [channelId, activePeers] as const;
+      })
+      .filter(([, peers]) => peers.size > 0),
+  );
+  return { heartbeats, typing };
+};

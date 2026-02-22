@@ -18,4 +18,5 @@ export {
   isOnline,
   recordTypingStart,
   getTypingMembers,
+  pruneExpired,
 } from "./presence.js";
