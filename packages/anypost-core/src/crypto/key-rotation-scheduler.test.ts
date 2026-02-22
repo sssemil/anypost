@@ -19,14 +19,15 @@ describe("Key rotation scheduler", () => {
       expect(getTimeSinceRotation(scheduler, 1000)).toBe(0);
     });
 
-    it("should accept custom rotation interval and message threshold", () => {
+    it("should apply custom rotation interval", () => {
       const scheduler = createRotationScheduler({
         now: 1000,
         rotationIntervalMs: 3600_000,
         messageThreshold: 500,
       });
 
-      expect(isRotationDue(scheduler, 1000)).toBe(false);
+      expect(isRotationDue(scheduler, 1000 + 3600_000)).toBe(false);
+      expect(isRotationDue(scheduler, 1000 + 3600_000 + 1)).toBe(true);
     });
   });
 
