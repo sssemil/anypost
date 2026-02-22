@@ -15,7 +15,7 @@ import {
   updateKeys,
 } from "./mls-manager.js";
 import type { MlsContext, MlsKeyPackageBundle } from "./mls-manager.js";
-import type { MessageContent } from "../shared/schemas.js";
+import { createMessageContent } from "../shared/factories.js";
 
 const makeIdentity = (name: string): Uint8Array =>
   new TextEncoder().encode(name);
@@ -57,15 +57,10 @@ const setupTwoMemberGroup = async () => {
   return { context, aliceState: addResult.newGroupState, bobState: bobGroup };
 };
 
-const textContent = (text: string): MessageContent => ({
-  type: "text",
-  text,
-});
-
 describe("Encrypted message flow", () => {
   it("should encrypt MessageContent into MLS ciphertext", async () => {
     const { context, aliceState } = await setupTwoMemberGroup();
-    const content = textContent("hello encrypted world");
+    const content = createMessageContent({ text: "hello encrypted world" });
 
     const result = await encryptContent({
       context,
@@ -79,7 +74,39 @@ describe("Encrypted message flow", () => {
 
   it("should decrypt MLS ciphertext back to original MessageContent", async () => {
     const { context, aliceState, bobState } = await setupTwoMemberGroup();
-    const content = textContent("secret message from alice");
+    const content = createMessageContent({ text: "secret message from alice" });
+
+    const encResult = await encryptContent({
+      context,
+      groupState: aliceState,
+      content,
+    });
+
+    const decResult = await decryptContent({
+      context,
+      groupState: bobState,
+      message: encResult.ciphertext,
+    });
+
+    expect(decResult.kind).toBe("message");
+    if (decResult.kind === "message") {
+      expect(decResult.content).toEqual(content);
+    }
+  });
+
+  it("should round-trip MessageContent with attachments through encryption", async () => {
+    const { context, aliceState, bobState } = await setupTwoMemberGroup();
+    const content = createMessageContent({
+      text: "message with attachment",
+      attachments: [
+        {
+          name: "test.bin",
+          mimeType: "application/octet-stream",
+          size: 4,
+          data: new Uint8Array([0xde, 0xad, 0xbe, 0xef]),
+        },
+      ],
+    });
 
     const encResult = await encryptContent({
       context,
@@ -101,7 +128,7 @@ describe("Encrypted message flow", () => {
 
   it("non-member should fail to decrypt encrypted content", async () => {
     const { context, aliceState } = await setupTwoMemberGroup();
-    const content = textContent("members only");
+    const content = createMessageContent({ text: "members only" });
 
     const charlieKp = await setupKeyPackage(context, "charlie");
     const charlieGroup = await createMlsGroup({
@@ -134,7 +161,7 @@ describe("Encrypted message flow", () => {
     });
 
     const aliceAfterUpdate = updateResult.newGroupState;
-    const content = textContent("epoch 2 message");
+    const content = createMessageContent({ text: "epoch 2 message" });
 
     const encResult = await encryptContent({
       context,
@@ -176,5 +203,6 @@ describe("Encrypted message flow", () => {
     expect(drainResult.decrypted[0].id).toBe("msg-1");
     expect(drainResult.decrypted[0].content).toEqual(content);
     expect(drainResult.remaining.messages).toHaveLength(0);
+    expect(drainResult.failed).toHaveLength(0);
   });
 });

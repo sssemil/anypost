@@ -1,4 +1,5 @@
 import { encode, decode } from "cbor-x";
+import { zeroOutUint8Array } from "ts-mls";
 import { encryptMessage, processReceivedMessage } from "./mls-manager.js";
 import type { MlsContext, MlsGroupState } from "./mls-manager.js";
 import type { MlsFramedMessage } from "ts-mls";
@@ -25,6 +26,7 @@ export const encryptContent = async (
     groupState: options.groupState,
     plaintext: contentBytes,
   });
+  zeroOutUint8Array(contentBytes);
 
   return {
     newGroupState: result.newGroupState,
@@ -90,12 +92,18 @@ type DrainBufferOptions = {
   readonly groupState: MlsGroupState;
 };
 
+export type DrainFailure = {
+  readonly id: string;
+  readonly error: unknown;
+};
+
 type DrainBufferResult = {
   readonly decrypted: readonly {
     readonly id: string;
     readonly content: MessageContent;
   }[];
   readonly remaining: MessageBuffer;
+  readonly failed: readonly DrainFailure[];
   readonly newGroupState: MlsGroupState;
 };
 
@@ -106,6 +114,7 @@ export const drainMessageBuffer = async (
   const decrypted: { readonly id: string; readonly content: MessageContent }[] =
     [];
   const remaining: BufferedMessage[] = [];
+  const failed: DrainFailure[] = [];
   let currentState = options.groupState;
 
   for (const buffered of buffer.messages) {
@@ -120,14 +129,31 @@ export const drainMessageBuffer = async (
       if (result.kind === "message") {
         decrypted.push({ id: buffered.id, content: result.content });
       }
-    } catch {
-      remaining.push(buffered);
+    } catch (error: unknown) {
+      if (isDecryptionError(error)) {
+        remaining.push(buffered);
+      } else {
+        failed.push({ id: buffered.id, error });
+      }
     }
   }
 
   return {
     decrypted,
     remaining: { messages: remaining },
+    failed,
     newGroupState: currentState,
   };
+};
+
+const isDecryptionError = (error: unknown): boolean => {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("decrypt") ||
+    message.includes("epoch") ||
+    message.includes("generation") ||
+    message.includes("key not found") ||
+    message.includes("message from a different group")
+  );
 };

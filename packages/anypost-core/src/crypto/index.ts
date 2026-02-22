@@ -64,4 +64,5 @@ export {
 export type {
   BufferedMessage,
   MessageBuffer,
+  DrainFailure,
 } from "./encrypted-message-flow.js";
