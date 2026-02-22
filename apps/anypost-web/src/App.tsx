@@ -38,33 +38,39 @@ export const App = () => {
   let unsubscribe: (() => void) | undefined;
 
   onMount(async () => {
-    const store = await openAccountStore();
     try {
-      const existingKey = await store.getAccountKey();
-      if (existingKey) {
-        const backedUp = await store.isBackedUp();
-        const exported = exportAccountKey(existingKey);
-        setSeedPhrase(exported.seedPhrase);
+      const store = await openAccountStore();
+      try {
+        const existingKey = await store.getAccountKey();
+        if (existingKey) {
+          const backedUp = await store.isBackedUp();
+          const exported = exportAccountKey(existingKey);
+          setSeedPhrase(exported.seedPhrase);
 
-        const persistedSettings = await createPersistedSettingsDocument(existingKey.publicKey);
-        const name = getDisplayName(persistedSettings.doc);
-        if (name) setDisplayNameState(name);
-        await persistedSettings.destroy();
+          const persistedSettings = await createPersistedSettingsDocument(existingKey.publicKey);
+          const name = getDisplayName(persistedSettings.doc);
+          if (name) setDisplayNameState(name);
+          await persistedSettings.destroy();
 
-        setOnboardingState(
-          transition(onboardingState(), {
-            type: "key-found",
-            accountKey: existingKey,
-            backedUp,
-          }),
-        );
-      } else {
-        setOnboardingState(
-          transition(onboardingState(), { type: "no-key-found" }),
-        );
+          setOnboardingState(
+            transition(onboardingState(), {
+              type: "key-found",
+              accountKey: existingKey,
+              backedUp,
+            }),
+          );
+        } else {
+          setOnboardingState(
+            transition(onboardingState(), { type: "no-key-found" }),
+          );
+        }
+      } finally {
+        store.close();
       }
-    } finally {
-      store.close();
+    } catch {
+      setOnboardingState(
+        transition(onboardingState(), { type: "no-key-found" }),
+      );
     }
   });
 
@@ -95,16 +101,8 @@ export const App = () => {
   };
 
   const handleImportAccount = async (phrase: string) => {
-    let accountKey: AccountKey;
     try {
-      accountKey = importAccountKey(phrase);
-    } catch {
-      // importAccountKey throws on invalid seed phrase.
-      // OnboardingScreen surfaces this via its synchronous try/catch.
-      return;
-    }
-
-    try {
+      const accountKey = importAccountKey(phrase);
       setSeedPhrase(phrase);
 
       const store = await openAccountStore();
@@ -121,8 +119,7 @@ export const App = () => {
         }),
       );
     } catch {
-      // IndexedDB storage failure. The user remains on the onboarding screen,
-      // which is the correct recovery: they can retry the import.
+      // IndexedDB storage failure. The user remains on the onboarding screen.
     }
   };
 
@@ -140,28 +137,31 @@ export const App = () => {
       }
 
       setOnboardingState(
-        transition(state, {
+        transition(onboardingState(), {
           type: "display-name-set",
           displayName: name,
         }),
       );
     } catch {
-      // IndexedDB persistence failure. The user remains on the display name prompt,
-      // which is the correct recovery: they can retry.
+      // IndexedDB persistence failure. The user remains on the display name prompt.
     }
   };
 
   const handleBackupConfirmed = async () => {
-    const store = await openAccountStore();
     try {
-      await store.setBackedUp(true);
-    } finally {
-      store.close();
-    }
+      const store = await openAccountStore();
+      try {
+        await store.setBackedUp(true);
+      } finally {
+        store.close();
+      }
 
-    setOnboardingState(
-      transition(onboardingState(), { type: "backup-completed" }),
-    );
+      setOnboardingState(
+        transition(onboardingState(), { type: "backup-completed" }),
+      );
+    } catch {
+      // IndexedDB failure. The banner remains visible so the user can retry.
+    }
   };
 
   const startChat = async (_accountKey: AccountKey) => {

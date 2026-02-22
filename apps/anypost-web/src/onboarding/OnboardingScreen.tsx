@@ -1,4 +1,5 @@
 import { createSignal, Show } from "solid-js";
+import { importAccountKey } from "anypost-core/crypto";
 
 type OnboardingScreenProps = {
   readonly onCreateAccount: () => void;
@@ -17,10 +18,12 @@ export const OnboardingScreen = (props: OnboardingScreenProps) => {
       return;
     }
     try {
-      props.onImportAccount(phrase);
+      importAccountKey(phrase);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Import failed");
+      setError(e instanceof Error ? e.message : "Invalid seed phrase");
+      return;
     }
+    props.onImportAccount(phrase);
   };
 
   return (
