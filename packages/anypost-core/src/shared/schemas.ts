@@ -74,3 +74,41 @@ export const WireMessageSchema = z.discriminatedUnion("type", [
 ]);
 
 export type WireMessage = z.infer<typeof WireMessageSchema>;
+
+export const ChannelTypeSchema = z.enum(["text", "voice"]);
+
+export const ChannelSchema = z.object({
+  id: ChannelIdSchema,
+  name: z.string().min(1),
+  type: ChannelTypeSchema,
+  sortOrder: z.number().int().nonnegative(),
+});
+
+export type Channel = z.infer<typeof ChannelSchema>;
+
+export const MemberRoleSchema = z.enum(["owner", "admin", "member"]);
+
+export const MemberSchema = z.object({
+  accountPublicKey: AccountPublicKeySchema,
+  role: MemberRoleSchema,
+  joinedAt: z.number(),
+});
+
+export type Member = z.infer<typeof MemberSchema>;
+
+export const GroupMetadataSchema = z.object({
+  name: z.string().min(1),
+  description: z.string(),
+  createdAt: z.number(),
+  stewardPeerId: PeerIdSchema,
+});
+
+export type GroupMetadata = z.infer<typeof GroupMetadataSchema>;
+
+export const MessageRefSchema = z.object({
+  id: MessageIdSchema,
+  senderPeerId: PeerIdSchema,
+  timestamp: z.number(),
+});
+
+export type MessageRef = z.infer<typeof MessageRefSchema>;
