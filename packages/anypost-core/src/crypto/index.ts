@@ -92,3 +92,14 @@ export type {
   AddDeviceToGroupsResult,
   RemoveDeviceFromGroupsResult,
 } from "./multi-device.js";
+
+export {
+  STEWARD_HEARTBEAT_TIMEOUT_MS,
+  createStewardFailoverState,
+  recordStewardHeartbeat,
+  isStewardOffline,
+  electNewSteward,
+  updateOnlineMembers,
+  getCurrentSteward,
+  getOnlineMembers,
+} from "./steward-failover.js";
