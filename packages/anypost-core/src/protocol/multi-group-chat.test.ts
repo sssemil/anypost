@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { createMultiGroupChat } from "./multi-group-chat.js";
 import type { MultiGroupChat } from "./multi-group-chat.js";
+import type { RelayPoolState } from "./relay-pool.js";
 
 const waitFor = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -169,6 +170,38 @@ describe("MultiGroupChat", () => {
     const chat = await createMultiGroupChat({
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
       useTransports: "tcp",
+    });
+
+    await chat.stop();
+  });
+
+  it("should accept onRelayPoolStateChange option without error", async () => {
+    const states: RelayPoolState[] = [];
+    const chat = await createMultiGroupChat({
+      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+      useTransports: "tcp",
+      onRelayPoolStateChange: (state) => states.push(state),
+    });
+    instances.push(chat);
+
+    expect(chat.peerId).toMatch(/^12D3KooW/);
+  });
+
+  it("should expose addRelay method", async () => {
+    const chat = await createMultiGroupChat({
+      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+      useTransports: "tcp",
+    });
+    instances.push(chat);
+
+    expect(() => chat.addRelay("/ip4/1.2.3.4/tcp/9090/ws/p2p/12D3KooWTest")).not.toThrow();
+  });
+
+  it("should stop cleanly with onRelayPoolStateChange configured", async () => {
+    const chat = await createMultiGroupChat({
+      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+      useTransports: "tcp",
+      onRelayPoolStateChange: () => {},
     });
 
     await chat.stop();

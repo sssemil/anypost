@@ -9,7 +9,7 @@ import {
   getSeenPeerIds,
   getGroupMembers,
 } from "anypost-core/protocol";
-import type { MultiGroupChat, MultiGroupState, NetworkStatus, NetworkEvent } from "anypost-core/protocol";
+import type { MultiGroupChat, MultiGroupState, NetworkStatus, NetworkEvent, RelayPoolState } from "anypost-core/protocol";
 import {
   generateAccountKey,
   exportAccountKey,
@@ -37,7 +37,6 @@ import { HeaderBar } from "./layout/HeaderBar.js";
 import { GroupSidebar } from "./sidebar/GroupSidebar.js";
 import { MessageList } from "./chat/MessageList.js";
 import { MessageInput } from "./chat/MessageInput.js";
-import { ConnectPanel } from "./connect/ConnectPanel.js";
 import { NetworkPanel } from "./network/NetworkPanel.js";
 import { EventLog } from "./network/EventLog.js";
 import {
@@ -51,16 +50,8 @@ import {
 
 const DEFAULT_GROUP_ID = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11";
 const ENV_RELAY_MULTIADDR = import.meta.env.VITE_RELAY_MULTIADDR as string | undefined;
-const RELAY_STORAGE_KEY = "anypost:relay-multiaddr";
 const GROUPS_STORAGE_KEY = "anypost:groups";
 const MAX_EVENTS = 200;
-
-const loadRelayAddress = (): string =>
-  ENV_RELAY_MULTIADDR ?? localStorage.getItem(RELAY_STORAGE_KEY) ?? "";
-
-const saveRelayAddress = (addr: string): void => {
-  localStorage.setItem(RELAY_STORAGE_KEY, addr);
-};
 
 const loadPersistedGroups = () => {
   const json = localStorage.getItem(GROUPS_STORAGE_KEY);
@@ -78,10 +69,9 @@ export const App = () => {
   const [groupState, setGroupState] = createSignal<MultiGroupState>(createMultiGroupState());
   const [chatStatus, setChatStatus] = createSignal<"connecting" | "connected" | "disconnected">("connecting");
   const [displayName, setDisplayNameState] = createSignal("");
-  const [relayAddr, setRelayAddr] = createSignal(loadRelayAddress());
+  const [relayPoolState, setRelayPoolState] = createSignal<RelayPoolState | null>(null);
   const [networkStatus, setNetworkStatus] = createSignal<NetworkStatus | null>(null);
   const [eventLog, setEventLog] = createSignal<readonly NetworkEvent[]>([]);
-  const [bootstrapAddrs, setBootstrapAddrs] = createSignal<readonly string[]>([]);
   const [latencyMap, setLatencyMap] = createSignal<ReadonlyMap<string, number>>(new Map());
   const [mobileView, setMobileView] = createSignal(createMobileViewState());
 
@@ -280,13 +270,11 @@ export const App = () => {
 
   const startChat = async (_accountKey: AccountKey) => {
     try {
-      const addr = relayAddr().trim();
-      if (addr) saveRelayAddress(addr);
-      const bootstrapPeers = addr ? [addr] : [];
-      setBootstrapAddrs(bootstrapPeers);
+      const bootstrapPeers = ENV_RELAY_MULTIADDR ? [ENV_RELAY_MULTIADDR] : [];
 
       chat = await createMultiGroupChat({
         bootstrapPeers,
+        onRelayPoolStateChange: setRelayPoolState,
       });
 
       setChatStatus("connected");
@@ -339,7 +327,6 @@ export const App = () => {
     const shouldConnect = decideAutoConnect({
       onboardingStatus: onboardingState().status,
       chatStatus: chatStatus(),
-      relayAddress: relayAddr(),
     });
 
     if (shouldConnect && !autoConnectFired) {
@@ -410,8 +397,9 @@ export const App = () => {
     return state.status === "ready" && state.backupPending;
   };
 
-  const showConnectPanel = () =>
-    chatStatus() === "disconnected" || (chatStatus() === "connecting" && !relayAddr().trim());
+  const handleAddRelay = (addr: string) => {
+    chat?.addRelay(addr);
+  };
 
   const activeGroupMemberList = () => {
     const activeId = groupState().activeGroupId;
@@ -458,18 +446,12 @@ export const App = () => {
       </Match>
 
       <Match when={onboardingState().status === "ready"}>
-        <Show when={showConnectPanel()}>
-          <div class="max-w-lg mx-auto mt-10 px-5 font-sans">
-            <h1 class="text-2xl font-bold text-tg-text mb-4">Anypost</h1>
-            <ConnectPanel
-              relayAddr={relayAddr()}
-              onRelayAddrChange={setRelayAddr}
-              onConnect={() => {
-                const key = getCurrentAccountKey();
-                if (key) void startChat(key);
-              }}
-              disabled={!relayAddr().trim()}
-            />
+        <Show when={chatStatus() === "connecting"}>
+          <div class="flex items-center justify-center min-h-screen bg-tg-chat font-sans">
+            <div class="text-center">
+              <div class="w-8 h-8 border-2 border-tg-accent border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+              <p class="text-tg-text-dim text-sm">Connecting to network...</p>
+            </div>
           </div>
         </Show>
 
@@ -532,9 +514,10 @@ export const App = () => {
                 />
                 <NetworkPanel
                   networkStatus={networkStatus()}
-                  bootstrapAddrs={bootstrapAddrs()}
+                  relayPoolState={relayPoolState()}
                   displayName={displayName()}
                   latencyMap={latencyMap()}
+                  onAddRelay={handleAddRelay}
                 />
                 <EventLog
                   events={eventLog()}

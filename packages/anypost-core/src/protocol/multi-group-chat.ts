@@ -21,6 +21,8 @@ import { groupTopic } from "./router.js";
 import { encodeWireMessage, decodeWireMessage } from "./codec.js";
 import { buildCircuitRelayAddresses } from "./peer-id-sharing.js";
 import { createProviderCid, ANYPOST_CHAT_NAMESPACE } from "./dht-config.js";
+import { startRelayPoolManager } from "./relay-discovery.js";
+import type { RelayPoolState } from "./relay-pool.js";
 import { createEncryptedMessage } from "../shared/factories.js";
 import type { WireMessage } from "../shared/schemas.js";
 import { IPFS_BOOTSTRAP_WSS_PEERS } from "../libp2p/bootstrap-peers.js";
@@ -47,6 +49,7 @@ export type MultiGroupChat = {
   readonly connectTo: (addr: Multiaddr) => Promise<void>;
   readonly connectToPeerId: (targetPeerId: string) => Promise<void>;
   readonly pingPeer: (targetPeerId: string) => Promise<number>;
+  readonly addRelay: (addr: string) => void;
   readonly stop: () => Promise<void>;
 };
 
@@ -54,6 +57,7 @@ type CreateMultiGroupChatOptions = {
   readonly listenAddresses?: readonly string[];
   readonly bootstrapPeers?: readonly string[];
   readonly useTransports?: "tcp" | "websocket";
+  readonly onRelayPoolStateChange?: (state: RelayPoolState) => void;
 };
 
 const DEFAULT_CHANNEL_ID = "b1ffbc99-9c0b-4ef8-bb6d-6bb9bd380a22";
@@ -63,15 +67,18 @@ export const createMultiGroupChat = async (
 ): Promise<MultiGroupChat> => {
   const {
     listenAddresses = [],
-    bootstrapPeers = [],
+    bootstrapPeers: initialBootstrapPeers = [],
     useTransports = "websocket",
+    onRelayPoolStateChange,
   } = options;
+
+  const relayPeers = [...initialBootstrapPeers];
 
   const isBrowser = useTransports === "websocket";
 
   const allBootstrapPeers = isBrowser
-    ? [...bootstrapPeers, ...IPFS_BOOTSTRAP_WSS_PEERS]
-    : [...bootstrapPeers];
+    ? [...relayPeers, ...IPFS_BOOTSTRAP_WSS_PEERS]
+    : [...relayPeers];
 
   const peerDiscovery =
     allBootstrapPeers.length > 0
@@ -200,7 +207,7 @@ export const createMultiGroupChat = async (
 
     dialedPeers.add(remotePeerId);
 
-    for (const bp of bootstrapPeers) {
+    for (const bp of relayPeers) {
       const circuitAddr = multiaddr(`${bp}/p2p-circuit/p2p/${remotePeerId}`);
       emit("dial-attempt", `Dialing ${peerId({ toString: () => remotePeerId })}... via circuit relay`);
       node.dial(circuitAddr).then(() => {
@@ -246,6 +253,23 @@ export const createMultiGroupChat = async (
       node.contentRouting.provide(chatCid).catch(() => {});
     }).catch(() => {});
   }
+
+  const relayPoolManager = isBrowser && onRelayPoolStateChange
+    ? startRelayPoolManager({
+        node: {
+          contentRouting: node.contentRouting,
+          dial: (addr) => node.dial(multiaddr(addr as string)),
+        },
+        onStateChange: (poolState) => {
+          for (const relay of poolState.relays) {
+            if (!relayPeers.includes(relay.address)) {
+              relayPeers.push(relay.address);
+            }
+          }
+          onRelayPoolStateChange(poolState);
+        },
+      })
+    : null;
 
   return {
     peerId: node.peerId.toString(),
@@ -351,8 +375,8 @@ export const createMultiGroupChat = async (
         emit("info", `DHT lookup failed for ${targetPeerId.slice(0, 16)}..., trying circuit relay`);
       }
 
-      const relayAddresses = bootstrapPeers.length > 0
-        ? bootstrapPeers
+      const relayAddresses = relayPeers.length > 0
+        ? relayPeers
         : node.getMultiaddrs()
             .map((ma) => ma.toString())
             .filter((a) => a.includes("/p2p/") && !a.includes("/p2p-circuit/"));
@@ -382,7 +406,14 @@ export const createMultiGroupChat = async (
       if (!pingService) throw new Error("Ping service not available");
       return pingService.ping(remotePeer);
     },
+    addRelay: (addr: string) => {
+      if (!relayPeers.includes(addr)) {
+        relayPeers.push(addr);
+        emit("info", `Relay added: ${addr.slice(0, 40)}...`);
+      }
+    },
     stop: async () => {
+      relayPoolManager?.stop();
       pubsub.removeEventListener("message", handlePubsubMessage);
       for (const topic of topicToGroupId.keys()) {
         pubsub.unsubscribe(topic);

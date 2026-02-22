@@ -1,12 +1,13 @@
 import { createSignal, For, Show } from "solid-js";
-import type { NetworkStatus } from "anypost-core/protocol";
+import type { NetworkStatus, RelayPoolState } from "anypost-core/protocol";
 import { TopologyGraph } from "./TopologyGraph.js";
 
 type NetworkPanelProps = {
   readonly networkStatus: NetworkStatus | null;
-  readonly bootstrapAddrs: readonly string[];
+  readonly relayPoolState: RelayPoolState | null;
   readonly displayName: string;
   readonly latencyMap: ReadonlyMap<string, number>;
+  readonly onAddRelay?: (addr: string) => void;
 };
 
 const PEERS_PER_PAGE = 10;
@@ -24,10 +25,36 @@ const latencyBadge = (ms: number) => {
   );
 };
 
+const relayStatusDot = (status: string) => {
+  const color = status === "healthy"
+    ? "bg-tg-success"
+    : status === "degraded"
+      ? "bg-tg-warning"
+      : status === "unhealthy"
+        ? "bg-tg-danger"
+        : "bg-tg-text-dim";
+  return <span class={`inline-block w-2 h-2 rounded-full ${color}`} />;
+};
+
 export const NetworkPanel = (props: NetworkPanelProps) => {
   const [showPanel, setShowPanel] = createSignal(true);
   const [peerSearch, setPeerSearch] = createSignal("");
   const [peerPage, setPeerPage] = createSignal(0);
+  const [manualRelay, setManualRelay] = createSignal("");
+
+  const relayAddresses = () => {
+    const pool = props.relayPoolState;
+    if (!pool) return [];
+    return pool.relays.map((r) => r.address);
+  };
+
+  const handleAddRelay = () => {
+    const addr = manualRelay().trim();
+    if (addr && props.onAddRelay) {
+      props.onAddRelay(addr);
+      setManualRelay("");
+    }
+  };
 
   return (
     <div class="rounded-xl border border-tg-border bg-tg-chat p-4 mb-4">
@@ -56,10 +83,56 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
             <div class="mb-3 pb-3 border-b border-tg-border">
               <TopologyGraph
                 networkStatus={status()}
-                bootstrapAddrs={props.bootstrapAddrs}
+                bootstrapAddrs={relayAddresses()}
                 latencyMap={props.latencyMap}
               />
             </div>
+
+            <Show when={props.relayPoolState}>
+              {(pool) => (
+                <div class="mb-3 pb-3 border-b border-tg-border">
+                  <div class="flex items-center gap-2 mb-1.5">
+                    <span class="text-tg-text-dim">Relay Pool</span>
+                    <span class="text-tg-text">
+                      {pool().relays.length} relay{pool().relays.length !== 1 ? "s" : ""}
+                    </span>
+                    <Show when={pool().discoveryInProgress}>
+                      <span class="text-tg-accent text-[10px]">discovering...</span>
+                    </Show>
+                  </div>
+                  <For each={pool().relays}>
+                    {(relay) => (
+                      <div class="flex items-center gap-2 py-0.5">
+                        {relayStatusDot(relay.status)}
+                        <code class="text-tg-text break-all flex-1">{relay.address}</code>
+                        <Show when={relay.latencyMs !== null}>
+                          {latencyBadge(relay.latencyMs!)}
+                        </Show>
+                      </div>
+                    )}
+                  </For>
+                  <Show when={props.onAddRelay}>
+                    <div class="flex gap-2 mt-2">
+                      <input
+                        type="text"
+                        value={manualRelay()}
+                        onInput={(e) => setManualRelay(e.currentTarget.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") handleAddRelay(); }}
+                        placeholder="/ip4/.../tcp/.../ws/p2p/12D3KooW..."
+                        class="flex-1 px-2 py-1.5 rounded-lg bg-tg-sidebar border border-tg-border text-tg-text font-mono text-xs box-border placeholder:text-tg-text-dim"
+                      />
+                      <button
+                        onClick={handleAddRelay}
+                        disabled={!manualRelay().trim()}
+                        class="px-3 py-1.5 rounded-lg bg-tg-accent text-white text-xs cursor-pointer disabled:opacity-40 hover:bg-tg-accent/80"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </Show>
+                </div>
+              )}
+            </Show>
 
             <div class="mb-3 pb-3 border-b border-tg-border">
               <div class="mb-1">

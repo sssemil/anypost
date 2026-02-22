@@ -115,6 +115,7 @@ export type {
   MultiGroupState,
   MultiGroupEvent,
 } from "./multi-group-state.js";
+export { startRelayPoolManager, discoverRelays } from "./relay-discovery.js";
 export { createMultiGroupChat } from "./multi-group-chat.js";
 export type {
   MultiGroupChat,

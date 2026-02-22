@@ -4,18 +4,16 @@ import { decideAutoConnect } from "./auto-connect.js";
 type AutoConnectInput = {
   readonly onboardingStatus: string;
   readonly chatStatus: "connecting" | "connected" | "disconnected";
-  readonly relayAddress: string;
 };
 
 const createInput = (overrides?: Partial<AutoConnectInput>): AutoConnectInput => ({
   onboardingStatus: "ready",
   chatStatus: "connecting",
-  relayAddress: "/ip4/127.0.0.1/tcp/9090/ws/p2p/12D3KooWTest",
   ...overrides,
 });
 
 describe("decideAutoConnect", () => {
-  it("should return true when onboarding is ready, chat is connecting, and relay address exists", () => {
+  it("should return true when onboarding is ready and chat is connecting", () => {
     const result = decideAutoConnect(createInput());
     expect(result).toBe(true);
   });
@@ -32,16 +30,6 @@ describe("decideAutoConnect", () => {
 
   it("should return false when chat is disconnected", () => {
     const result = decideAutoConnect(createInput({ chatStatus: "disconnected" }));
-    expect(result).toBe(false);
-  });
-
-  it("should return false when relay address is empty", () => {
-    const result = decideAutoConnect(createInput({ relayAddress: "" }));
-    expect(result).toBe(false);
-  });
-
-  it("should return false when relay address is whitespace only", () => {
-    const result = decideAutoConnect(createInput({ relayAddress: "   " }));
     expect(result).toBe(false);
   });
 });
