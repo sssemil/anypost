@@ -1,1 +1,3 @@
 export { encodeWireMessage, decodeWireMessage } from "./codec.js";
+export { createRouter, groupTopic } from "./router.js";
+export type { MessageHandler } from "./router.js";
