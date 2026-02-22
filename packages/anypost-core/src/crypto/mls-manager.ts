@@ -13,6 +13,7 @@ import {
   zeroOutUint8Array,
 } from "ts-mls";
 import type {
+  AuthenticationService,
   CiphersuiteImpl,
   ClientState,
   KeyPackage,
@@ -27,6 +28,7 @@ const DEFAULT_CIPHERSUITE =
 
 export type MlsContext = {
   readonly cipherSuite: CiphersuiteImpl;
+  readonly authService: AuthenticationService;
 };
 
 export type MlsGroupState = {
@@ -38,39 +40,48 @@ export type MlsKeyPackageBundle = {
   readonly privatePackage: PrivateKeyPackage;
 };
 
-type AddMemberResult = {
+export type AddMemberResult = {
   readonly newGroupState: MlsGroupState;
   readonly welcome: Welcome;
   readonly commit: MlsFramedMessage;
 };
 
-type EncryptMessageResult = {
+export type EncryptMessageResult = {
   readonly newGroupState: MlsGroupState;
   readonly ciphertext: MlsFramedMessage;
 };
 
-type ProcessResult =
+export type ProcessResult =
   | { readonly kind: "applicationMessage"; readonly newGroupState: MlsGroupState; readonly plaintext: Uint8Array }
   | { readonly kind: "commit"; readonly newGroupState: MlsGroupState };
 
-type RemoveMemberResult = {
+export type RemoveMemberResult = {
   readonly newGroupState: MlsGroupState;
   readonly commit: MlsFramedMessage;
 };
 
-type UpdateKeysResult = {
+export type UpdateKeysResult = {
   readonly newGroupState: MlsGroupState;
   readonly commit: MlsFramedMessage;
 };
 
 const makeInternalContext = (context: MlsContext) => ({
   cipherSuite: context.cipherSuite,
-  authService: unsafeTestingAuthenticationService,
+  authService: context.authService,
 });
 
-export const initMlsContext = async (): Promise<MlsContext> => {
+type InitMlsContextOptions = {
+  readonly authService?: AuthenticationService;
+};
+
+export const initMlsContext = async (
+  options: InitMlsContextOptions = {},
+): Promise<MlsContext> => {
   const cipherSuite = await getCiphersuiteImpl(DEFAULT_CIPHERSUITE);
-  return { cipherSuite };
+  return {
+    cipherSuite,
+    authService: options.authService ?? unsafeTestingAuthenticationService,
+  };
 };
 
 type CreateKeyPackageOptions = {

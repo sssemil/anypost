@@ -28,4 +28,9 @@ export type {
   MlsContext,
   MlsGroupState,
   MlsKeyPackageBundle,
+  AddMemberResult,
+  EncryptMessageResult,
+  ProcessResult,
+  RemoveMemberResult,
+  UpdateKeysResult,
 } from "./mls-manager.js";
