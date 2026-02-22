@@ -139,6 +139,54 @@ describe("Multi-device MLS leaf nodes", () => {
         getMemberCount(result.results[1].newStewardState.groupState),
       ).toBe(2);
     });
+
+    it("should return empty results when adding to zero groups", async () => {
+      const result = await addDeviceToGroups({
+        groups: [],
+        newDeviceIdentity: deviceMlsIdentity("12D3KooWDevice2"),
+        senderIdentity: deviceMlsIdentity("12D3KooWDevice1"),
+      });
+
+      expect(result.results).toHaveLength(0);
+    });
+
+    it("should reject adding a device that is already a group member", async () => {
+      const context = await setupContext();
+      const { stewardState, identity } = await setupStewardGroup(
+        context,
+        "group-1",
+        "12D3KooWDevice1",
+      );
+
+      const device2Identity = deviceMlsIdentity("12D3KooWDevice2");
+      const device2Kp = await setupKeyPackage(context, device2Identity);
+
+      const addResult = await addDeviceToGroups({
+        groups: [
+          {
+            stewardState,
+            newDeviceKeyPackage: device2Kp.publicPackage,
+          },
+        ],
+        newDeviceIdentity: device2Identity,
+        senderIdentity: identity,
+      });
+
+      const device2KpAgain = await setupKeyPackage(context, device2Identity);
+
+      await expect(
+        addDeviceToGroups({
+          groups: [
+            {
+              stewardState: addResult.results[0].newStewardState,
+              newDeviceKeyPackage: device2KpAgain.publicPackage,
+            },
+          ],
+          newDeviceIdentity: device2Identity,
+          senderIdentity: identity,
+        }),
+      ).rejects.toThrow("already a group member");
+    });
   });
 
   describe("multi-device encrypt and decrypt", () => {
@@ -301,6 +349,16 @@ describe("Multi-device MLS leaf nodes", () => {
       expect(
         getMemberCount(removeResult.results[1].newStewardState.groupState),
       ).toBe(1);
+    });
+
+    it("should return empty results when removing from zero groups", async () => {
+      const result = await removeDeviceFromGroups({
+        groups: [],
+        deviceIdentity: deviceMlsIdentity("12D3KooWDevice2"),
+        senderIdentity: deviceMlsIdentity("12D3KooWDevice1"),
+      });
+
+      expect(result.results).toHaveLength(0);
     });
 
     it("removed device should fail to decrypt new messages", async () => {
