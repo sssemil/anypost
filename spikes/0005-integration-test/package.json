@@ -1,0 +1,20 @@
+{
+  "name": "0005-integration-test",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@noble/curves": "^2.0.1",
+    "@noble/hashes": "^2.0.1",
+    "ts-mls": "^2.0.0-rc.8",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.29"
+  }
+}
