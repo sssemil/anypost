@@ -68,6 +68,39 @@ export const getChannels = (doc: Y.Doc): readonly Channel[] =>
     .filter((result) => result.success)
     .map((result) => result.data);
 
+export const createChannelInGroup = (
+  doc: Y.Doc,
+  options: { readonly name: string; readonly type: "text" | "voice" },
+): Channel => {
+  const channels = getChannels(doc);
+  const sortOrder = channels.length;
+  const channel: Channel = {
+    id: crypto.randomUUID() as ChannelId,
+    name: options.name,
+    type: options.type,
+    sortOrder,
+  };
+  addChannel(doc, channel);
+  return channel;
+};
+
+export const deleteChannel = (doc: Y.Doc, channelId: ChannelId): void => {
+  doc.transact(() => {
+    const channelsArray = doc.getArray<Channel>("channels");
+    for (let i = channelsArray.length - 1; i >= 0; i--) {
+      const channel = channelsArray.get(i);
+      if (channel && (channel as Channel).id === channelId) {
+        channelsArray.delete(i, 1);
+      }
+    }
+
+    const messagesArray = doc.getArray(`messages:${channelId}`);
+    if (messagesArray.length > 0) {
+      messagesArray.delete(0, messagesArray.length);
+    }
+  });
+};
+
 export const appendMessage = (
   doc: Y.Doc,
   channelId: ChannelId,

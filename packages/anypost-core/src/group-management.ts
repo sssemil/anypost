@@ -15,6 +15,7 @@ import {
   setGroupMetadata,
   addMember,
   removeMember,
+  createChannelInGroup,
 } from "./data/group-document.js";
 import type {
   GroupId,
@@ -114,6 +115,7 @@ export const createGroup = async (
     joinedAt: now,
   };
   addMember(groupDoc, ownerMember);
+  createChannelInGroup(groupDoc, { name: "general", type: "text" });
 
   return { groupDoc, stewardState };
 };

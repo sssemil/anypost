@@ -12,7 +12,7 @@ import {
 } from "./crypto/mls-manager.js";
 import type { MlsContext } from "./crypto/mls-manager.js";
 import { deviceMlsIdentity } from "./crypto/multi-device.js";
-import { getGroupMetadata, getMembers } from "./data/group-document.js";
+import { getGroupMetadata, getMembers, getChannels } from "./data/group-document.js";
 import { getStewardMembers } from "./crypto/steward.js";
 
 const setupContext = async (): Promise<MlsContext> => initMlsContext();
@@ -77,6 +77,16 @@ describe("Group management", () => {
       expect(members).toHaveLength(1);
       expect(members[0].accountPublicKey).toBe(creator.accountPublicKey);
       expect(members[0].role).toBe("owner");
+    });
+
+    it("should create a default 'general' text channel", async () => {
+      const { groupDoc } = await setupGroup();
+
+      const channels = getChannels(groupDoc);
+      expect(channels).toHaveLength(1);
+      expect(channels[0].name).toBe("general");
+      expect(channels[0].type).toBe("text");
+      expect(channels[0].sortOrder).toBe(0);
     });
 
     it("should set the owner as initial steward", async () => {

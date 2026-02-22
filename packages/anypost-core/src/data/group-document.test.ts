@@ -11,6 +11,8 @@ import {
   getMembers,
   addChannel,
   getChannels,
+  createChannelInGroup,
+  deleteChannel,
   storePendingWelcome,
   getPendingWelcome,
   removePendingWelcome,
@@ -146,6 +148,51 @@ describe("Group Document", () => {
       expect(channels.length).toBe(2);
       expect(channels[0].id).toBe("c1ffbc99-9c0b-4ef8-bb6d-6bb9bd380a01");
       expect(channels[1].id).toBe("c2ffbc99-9c0b-4ef8-bb6d-6bb9bd380a02");
+    });
+
+    it("should auto-assign sort order when creating a channel", () => {
+      const doc = createGroupDocument(TEST_GROUP_ID);
+
+      createChannelInGroup(doc, { name: "general", type: "text" });
+      createChannelInGroup(doc, { name: "random", type: "text" });
+      createChannelInGroup(doc, { name: "voice-lobby", type: "voice" });
+
+      const channels = getChannels(doc);
+      expect(channels).toHaveLength(3);
+      expect(channels[0].sortOrder).toBe(0);
+      expect(channels[1].sortOrder).toBe(1);
+      expect(channels[2].sortOrder).toBe(2);
+      expect(channels[2].type).toBe("voice");
+    });
+
+    it("should delete a channel and its messages", () => {
+      const doc = createGroupDocument(TEST_GROUP_ID);
+      const channelId = "c1ffbc99-9c0b-4ef8-bb6d-6bb9bd380a01";
+
+      addChannel(doc, createChannel({ id: channelId, name: "to-delete", sortOrder: 0 }));
+      appendMessage(doc, channelId, createMessageRef({ id: "d1ffbc99-9c0b-4ef8-bb6d-6bb9bd380a01" }));
+      appendMessage(doc, channelId, createMessageRef({ id: "d2ffbc99-9c0b-4ef8-bb6d-6bb9bd380a02" }));
+
+      deleteChannel(doc, channelId);
+
+      expect(getChannels(doc)).toHaveLength(0);
+      expect(getChannelMessages(doc, channelId)).toHaveLength(0);
+    });
+
+    it("should only delete the specified channel", () => {
+      const doc = createGroupDocument(TEST_GROUP_ID);
+      const keepId = "c1ffbc99-9c0b-4ef8-bb6d-6bb9bd380a01";
+      const deleteId = "c2ffbc99-9c0b-4ef8-bb6d-6bb9bd380a02";
+
+      addChannel(doc, createChannel({ id: keepId, name: "keep", sortOrder: 0 }));
+      addChannel(doc, createChannel({ id: deleteId, name: "remove", sortOrder: 1 }));
+      appendMessage(doc, keepId, createMessageRef({ id: "d1ffbc99-9c0b-4ef8-bb6d-6bb9bd380a01" }));
+
+      deleteChannel(doc, deleteId);
+
+      expect(getChannels(doc)).toHaveLength(1);
+      expect(getChannels(doc)[0].id).toBe(keepId);
+      expect(getChannelMessages(doc, keepId)).toHaveLength(1);
     });
   });
 

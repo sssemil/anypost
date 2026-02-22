@@ -7,6 +7,8 @@ export {
   getMembers,
   addChannel,
   getChannels,
+  createChannelInGroup,
+  deleteChannel,
   appendMessage,
   getChannelMessages,
   storePendingWelcome,
