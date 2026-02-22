@@ -64,3 +64,25 @@ export {
 } from "./device-registry.js";
 
 export type { RegisteredDevice } from "./device-registry.js";
+
+export {
+  createStoragePersistenceState,
+  recordPersistenceResult,
+  getPersistenceStatus,
+  isPersistenceGranted,
+} from "./storage-persistence.js";
+
+export {
+  createMlsBackupTracker,
+  recordBackup,
+  markGroupNeedsBackup,
+  getGroupsNeedingBackup,
+  getLastBackupTime,
+} from "./mls-state-backup.js";
+
+export {
+  detectStateLoss,
+  createDataLossWarningState,
+  recordWarningShown,
+  hasWarningBeenShown,
+} from "./state-loss-detector.js";
