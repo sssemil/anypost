@@ -48,14 +48,29 @@ describe("recordHealthCheckSuccess", () => {
     expect(getRelayStatus(updated, RELAY_A)).toBe("healthy");
   });
 
-  it("should record latency", () => {
-    const state = createRelayHealthState({
-      relayAddresses: [RELAY_A],
+  it("should record latency and use it for relay selection ordering", () => {
+    let state = createRelayHealthState({
+      relayAddresses: [RELAY_A, RELAY_B],
     });
 
-    const updated = recordHealthCheckSuccess(state, RELAY_A, 42);
+    state = recordHealthCheckSuccess(state, RELAY_A, 42);
+    state = recordHealthCheckSuccess(state, RELAY_B, 100);
 
-    expect(selectBestRelay(updated)).toBe(RELAY_A);
+    expect(selectBestRelay(state)).toBe(RELAY_A);
+  });
+
+  it("should reject non-positive latencyMs", () => {
+    const state = createRelayHealthState({ relayAddresses: [RELAY_A] });
+
+    expect(() => recordHealthCheckSuccess(state, RELAY_A, 0)).toThrow(RangeError);
+    expect(() => recordHealthCheckSuccess(state, RELAY_A, -1)).toThrow(RangeError);
+  });
+
+  it("should reject non-finite latencyMs", () => {
+    const state = createRelayHealthState({ relayAddresses: [RELAY_A] });
+
+    expect(() => recordHealthCheckSuccess(state, RELAY_A, NaN)).toThrow(RangeError);
+    expect(() => recordHealthCheckSuccess(state, RELAY_A, Infinity)).toThrow(RangeError);
   });
 
   it("should recover a previously unhealthy relay", () => {
@@ -186,6 +201,20 @@ describe("selectBestRelay", () => {
     state = recordHealthCheckFailure(state, RELAY_A);
 
     expect(selectBestRelay(state)).toBe(null);
+  });
+
+  it("should fall back to lowest-latency degraded relay when no healthy relays exist", () => {
+    let state = createRelayHealthState({
+      relayAddresses: [RELAY_A, RELAY_B],
+      failureThreshold: 3,
+    });
+
+    state = recordHealthCheckSuccess(state, RELAY_A, 50);
+    state = recordHealthCheckSuccess(state, RELAY_B, 30);
+    state = recordHealthCheckFailure(state, RELAY_A);
+    state = recordHealthCheckFailure(state, RELAY_B);
+
+    expect(selectBestRelay(state)).toBe(RELAY_B);
   });
 
   it("should prefer healthy relay over unknown relay", () => {

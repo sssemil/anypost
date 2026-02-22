@@ -10,6 +10,8 @@ type RelayEntry = {
   readonly latencyMs: number | null;
 };
 
+type RelayWithLatency = RelayEntry & { readonly latencyMs: number };
+
 type RelayHealthState = {
   readonly relays: readonly RelayEntry[];
   readonly failureThreshold: number;
@@ -74,11 +76,19 @@ const findRelayIndex = (
   return index;
 };
 
+const hasLatency = (r: RelayEntry): r is RelayWithLatency =>
+  r.latencyMs !== null;
+
 export const recordHealthCheckSuccess = (
   state: RelayHealthState,
   address: string,
   latencyMs: number,
 ): RelayHealthState => {
+  if (!Number.isFinite(latencyMs) || latencyMs <= 0) {
+    throw new RangeError(
+      `latencyMs must be a positive finite number, got ${latencyMs}`,
+    );
+  }
   const index = findRelayIndex(state, address);
   return {
     ...state,
@@ -114,8 +124,8 @@ export const selectBestRelay = (
   state: RelayHealthState,
 ): string | null => {
   const healthyRelays = state.relays
-    .filter((r) => r.status === "healthy" && r.latencyMs !== null)
-    .sort((a, b) => (a.latencyMs as number) - (b.latencyMs as number));
+    .filter((r): r is RelayWithLatency => r.status === "healthy" && hasLatency(r))
+    .sort((a, b) => a.latencyMs - b.latencyMs);
 
   if (healthyRelays.length > 0) {
     return healthyRelays[0].address;
@@ -124,6 +134,14 @@ export const selectBestRelay = (
   const unknownRelay = state.relays.find((r) => r.status === "unknown");
   if (unknownRelay) {
     return unknownRelay.address;
+  }
+
+  const degradedRelays = state.relays
+    .filter((r): r is RelayWithLatency => r.status === "degraded" && hasLatency(r))
+    .sort((a, b) => a.latencyMs - b.latencyMs);
+
+  if (degradedRelays.length > 0) {
+    return degradedRelays[0].address;
   }
 
   return null;
