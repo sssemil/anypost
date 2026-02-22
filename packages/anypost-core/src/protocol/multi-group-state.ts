@@ -149,6 +149,20 @@ export const getGroupList = (
     .map((id) => state.groups.get(id))
     .filter((g): g is GroupEntry => g !== undefined);
 
+export const getGroupMembers = (
+  state: MultiGroupState,
+  groupId: string,
+): ReadonlyMap<string, string | undefined> => {
+  const group = state.groups.get(groupId);
+  if (!group) return new Map();
+
+  const members = new Map<string, string | undefined>();
+  for (const msg of group.messages) {
+    members.set(msg.senderPeerId, msg.senderDisplayName);
+  }
+  return members;
+};
+
 export const getSeenPeerIds = (
   state: MultiGroupState,
   groupId: string,

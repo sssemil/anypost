@@ -7,6 +7,7 @@ import {
   getActiveMessages,
   getGroupList,
   getSeenPeerIds,
+  getGroupMembers,
   hasGroup,
 } from "./multi-group-state.js";
 
@@ -476,6 +477,86 @@ describe("Multi-group state machine", () => {
       const state = createMultiGroupState();
 
       expect(getSeenPeerIds(state, "nonexistent")).toEqual(new Set());
+    });
+  });
+
+  describe("group members", () => {
+    it("should return empty map for a group with no messages", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, { type: "group-joined", groupId: "group-1" });
+
+      expect(getGroupMembers(state, "group-1")).toEqual(new Map());
+    });
+
+    it("should map peer ID to display name from messages", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, { type: "group-joined", groupId: "group-1" });
+      state = transitionMultiGroup(state, {
+        type: "message-received",
+        groupId: "group-1",
+        message: createTestMessage({ senderPeerId: "peer-alice", senderDisplayName: "Alice" }),
+      });
+
+      const members = getGroupMembers(state, "group-1");
+      expect(members.get("peer-alice")).toBe("Alice");
+    });
+
+    it("should use the latest display name when a peer sends multiple messages", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, { type: "group-joined", groupId: "group-1" });
+      state = transitionMultiGroup(state, {
+        type: "message-received",
+        groupId: "group-1",
+        message: createTestMessage({ senderPeerId: "peer-alice", senderDisplayName: "Alice" }),
+      });
+      state = transitionMultiGroup(state, {
+        type: "message-received",
+        groupId: "group-1",
+        message: createTestMessage({ senderPeerId: "peer-alice", senderDisplayName: "Ali" }),
+      });
+
+      const members = getGroupMembers(state, "group-1");
+      expect(members.get("peer-alice")).toBe("Ali");
+    });
+
+    it("should map peer ID to undefined when no display name provided", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, { type: "group-joined", groupId: "group-1" });
+      state = transitionMultiGroup(state, {
+        type: "message-received",
+        groupId: "group-1",
+        message: createTestMessage({ senderPeerId: "peer-anon" }),
+      });
+
+      const members = getGroupMembers(state, "group-1");
+      expect(members.has("peer-anon")).toBe(true);
+      expect(members.get("peer-anon")).toBeUndefined();
+    });
+
+    it("should track multiple peers", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, { type: "group-joined", groupId: "group-1" });
+      state = transitionMultiGroup(state, {
+        type: "message-received",
+        groupId: "group-1",
+        message: createTestMessage({ senderPeerId: "peer-alice", senderDisplayName: "Alice" }),
+      });
+      state = transitionMultiGroup(state, {
+        type: "message-sent",
+        groupId: "group-1",
+        message: createTestMessage({ senderPeerId: "peer-self", senderDisplayName: "Me" }),
+      });
+
+      const members = getGroupMembers(state, "group-1");
+      expect(members.size).toBe(2);
+      expect(members.get("peer-alice")).toBe("Alice");
+      expect(members.get("peer-self")).toBe("Me");
+    });
+
+    it("should return empty map for unknown group", () => {
+      const state = createMultiGroupState();
+
+      expect(getGroupMembers(state, "nonexistent")).toEqual(new Map());
     });
   });
 

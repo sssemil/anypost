@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import type { ChatMessageEvent } from "anypost-core/protocol";
 import {
   serializeGroups,
   deserializeGroups,
@@ -8,6 +9,16 @@ import {
   createMultiGroupState,
   transitionMultiGroup,
 } from "anypost-core/protocol";
+
+const createTestMessage = (
+  overrides?: Partial<ChatMessageEvent>,
+): ChatMessageEvent => ({
+  id: crypto.randomUUID(),
+  senderPeerId: "12D3KooWTestPeer",
+  text: "hello",
+  timestamp: Date.now(),
+  ...overrides,
+});
 
 describe("Group persistence", () => {
   describe("createDefaultPersistedData", () => {
@@ -75,6 +86,52 @@ describe("Group persistence", () => {
 
       expect(data.joinedGroups).toEqual(["g1"]);
       expect(data.activeGroupId).toBeNull();
+    });
+
+    it("should restore messages per group", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, { type: "group-joined", groupId: "group-1" });
+      const msg = createTestMessage({ text: "persisted msg", senderPeerId: "peer-a" });
+      state = transitionMultiGroup(state, {
+        type: "message-received",
+        groupId: "group-1",
+        message: msg,
+      });
+
+      const json = serializeGroups(state);
+      const data = deserializeGroups(json);
+
+      expect(data.messages["group-1"]).toHaveLength(1);
+      expect(data.messages["group-1"][0].text).toBe("persisted msg");
+      expect(data.messages["group-1"][0].senderPeerId).toBe("peer-a");
+    });
+
+    it("should restore seenPeerIds per group", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, { type: "group-joined", groupId: "group-1" });
+      state = transitionMultiGroup(state, {
+        type: "message-received",
+        groupId: "group-1",
+        message: createTestMessage({ senderPeerId: "peer-alice" }),
+      });
+      state = transitionMultiGroup(state, {
+        type: "message-received",
+        groupId: "group-1",
+        message: createTestMessage({ senderPeerId: "peer-bob" }),
+      });
+
+      const json = serializeGroups(state);
+      const data = deserializeGroups(json);
+
+      expect(data.seenPeerIds["group-1"]).toEqual(["peer-alice", "peer-bob"]);
+    });
+
+    it("should default to empty messages and seenPeerIds for legacy data", () => {
+      const json = JSON.stringify({ joinedGroups: ["g1"], activeGroupId: "g1" });
+      const data = deserializeGroups(json);
+
+      expect(data.messages).toEqual({});
+      expect(data.seenPeerIds).toEqual({});
     });
   });
 });

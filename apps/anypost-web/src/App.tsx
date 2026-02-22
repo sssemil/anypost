@@ -7,6 +7,7 @@ import {
   getActiveMessages,
   getGroupList,
   getSeenPeerIds,
+  getGroupMembers,
 } from "anypost-core/protocol";
 import type { MultiGroupChat, MultiGroupState, NetworkStatus, NetworkEvent } from "anypost-core/protocol";
 import {
@@ -263,6 +264,13 @@ export const App = () => {
     for (const groupId of persisted.joinedGroups) {
       dispatchGroupEvent({ type: "group-joined", groupId });
       chat?.joinGroup(groupId);
+
+      const messages = persisted.messages[groupId];
+      if (messages) {
+        for (const msg of messages) {
+          dispatchGroupEvent({ type: "message-received", groupId, message: msg });
+        }
+      }
     }
 
     if (persisted.activeGroupId) {
@@ -405,6 +413,16 @@ export const App = () => {
   const showConnectPanel = () =>
     chatStatus() === "disconnected" || (chatStatus() === "connecting" && !relayAddr().trim());
 
+  const activeGroupMemberList = () => {
+    const activeId = groupState().activeGroupId;
+    if (!activeId) return [];
+    const members = getGroupMembers(groupState(), activeId);
+    return [...members.entries()].map(([peerId, displayName]) => ({
+      peerId,
+      displayName: displayName ?? undefined,
+    }));
+  };
+
   const sidebarGroups = () =>
     getGroupList(groupState()).map((g) => {
       const lastMsg = g.messages.length > 0 ? g.messages[g.messages.length - 1] : undefined;
@@ -463,6 +481,7 @@ export const App = () => {
                 connectionStatus={chatStatus()}
                 displayName={displayName()}
                 activeGroupId={groupState().activeGroupId}
+                members={activeGroupMemberList()}
                 showBackButton={mobileView().currentView === "chat"}
                 onBackPress={() => dispatchMobileView({ type: "back-pressed" })}
                 onDevDrawerToggle={() => dispatchMobileView({ type: "dev-drawer-toggled" })}

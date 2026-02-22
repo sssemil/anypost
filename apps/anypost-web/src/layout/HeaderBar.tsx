@@ -1,10 +1,17 @@
 import { createSignal, Show } from "solid-js";
+import { formatPeerIdShort } from "anypost-core/protocol";
+
+type MemberInfo = {
+  readonly peerId: string;
+  readonly displayName?: string;
+};
 
 type HeaderBarProps = {
   readonly peerId: string;
   readonly connectionStatus: "connecting" | "connected" | "disconnected";
   readonly displayName: string;
   readonly activeGroupId: string | null;
+  readonly members: readonly MemberInfo[];
   readonly showBackButton: boolean;
   readonly onBackPress: () => void;
   readonly onDevDrawerToggle: () => void;
@@ -66,12 +73,24 @@ export const HeaderBar = (props: HeaderBarProps) => {
           <span class="text-xs text-tg-text-dim">
             {statusLabel(props.connectionStatus)}
           </span>
+          <Show when={props.members.length > 0}>
+            <span class="text-xs text-tg-text-dim ml-1">
+              · {props.members.length} {props.members.length === 1 ? "member" : "members"}
+            </span>
+          </Show>
           <Show when={props.activeGroupId}>
             <span class="text-xs text-tg-text-dim ml-1 font-mono truncate hidden sm:inline">
               {props.activeGroupId}
             </span>
           </Show>
         </div>
+        <Show when={props.members.length > 0}>
+          <div class="text-[11px] text-tg-text-dim truncate">
+            {props.members.map((m) =>
+              m.displayName ?? formatPeerIdShort(m.peerId)
+            ).join(", ")}
+          </div>
+        </Show>
       </div>
 
       <Show when={props.peerId}>
