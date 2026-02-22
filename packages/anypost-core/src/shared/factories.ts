@@ -1,8 +1,20 @@
-import type { EncryptedMessage, MessageContent, WireMessage } from "./schemas.js";
+import type {
+  EncryptedMessage,
+  MessageContent,
+  WireMessage,
+  GroupMetadata,
+  Member,
+  Channel,
+  MessageRef,
+} from "./schemas.js";
 import {
   EncryptedMessageSchema,
   MessageContentSchema,
   WireMessageSchema,
+  GroupMetadataSchema,
+  MemberSchema,
+  ChannelSchema,
+  MessageRefSchema,
 } from "./schemas.js";
 
 const DEFAULT_PEER_ID = "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn";
@@ -40,5 +52,49 @@ export const createWireMessage = (
   WireMessageSchema.parse({
     type: "encrypted_message",
     payload: createEncryptedMessage(),
+    ...overrides,
+  });
+
+const DEFAULT_ACCOUNT_KEY = "ed25519:testkey123";
+
+export const createGroupMetadata = (
+  overrides?: Partial<GroupMetadata>,
+): GroupMetadata =>
+  GroupMetadataSchema.parse({
+    name: "Test Group",
+    description: "A test group",
+    createdAt: DEFAULT_TIMESTAMP,
+    stewardPeerId: DEFAULT_PEER_ID,
+    ...overrides,
+  });
+
+export const createMember = (
+  overrides?: Partial<Member>,
+): Member =>
+  MemberSchema.parse({
+    accountPublicKey: DEFAULT_ACCOUNT_KEY,
+    role: "member",
+    joinedAt: DEFAULT_TIMESTAMP,
+    ...overrides,
+  });
+
+export const createChannel = (
+  overrides?: Partial<Channel>,
+): Channel =>
+  ChannelSchema.parse({
+    id: DEFAULT_CHANNEL_ID,
+    name: "general",
+    type: "text",
+    sortOrder: 0,
+    ...overrides,
+  });
+
+export const createMessageRef = (
+  overrides?: Partial<MessageRef>,
+): MessageRef =>
+  MessageRefSchema.parse({
+    id: DEFAULT_MESSAGE_ID,
+    senderPeerId: DEFAULT_PEER_ID,
+    timestamp: DEFAULT_TIMESTAMP,
     ...overrides,
   });

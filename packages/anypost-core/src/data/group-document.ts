@@ -1,5 +1,10 @@
 import * as Y from "yjs";
-import { GroupMetadataSchema } from "../shared/schemas.js";
+import {
+  GroupMetadataSchema,
+  MemberSchema,
+  ChannelSchema,
+  MessageRefSchema,
+} from "../shared/schemas.js";
 import type {
   GroupId,
   GroupMetadata,
@@ -14,35 +19,26 @@ export const createGroupDocument = (groupId: GroupId): Y.Doc =>
   new Y.Doc({ guid: groupId });
 
 export const setGroupMetadata = (doc: Y.Doc, metadata: GroupMetadata): void => {
-  const metadataMap = doc.getMap("metadata");
-  metadataMap.set("name", metadata.name);
-  metadataMap.set("description", metadata.description);
-  metadataMap.set("createdAt", metadata.createdAt);
-  metadataMap.set("stewardPeerId", metadata.stewardPeerId);
+  doc.transact(() => {
+    const metadataMap = doc.getMap("metadata");
+    for (const [key, value] of Object.entries(metadata)) {
+      metadataMap.set(key, value);
+    }
+  });
 };
 
 export const getGroupMetadata = (doc: Y.Doc): GroupMetadata | null => {
   const metadataMap = doc.getMap("metadata");
   if (metadataMap.size === 0) return null;
 
-  const raw = {
-    name: metadataMap.get("name"),
-    description: metadataMap.get("description"),
-    createdAt: metadataMap.get("createdAt"),
-    stewardPeerId: metadataMap.get("stewardPeerId"),
-  };
-
+  const raw = Object.fromEntries(metadataMap.entries());
   const result = GroupMetadataSchema.safeParse(raw);
   return result.success ? result.data : null;
 };
 
 export const addMember = (doc: Y.Doc, member: Member): void => {
   const membersMap = doc.getMap("members");
-  membersMap.set(member.accountPublicKey, {
-    accountPublicKey: member.accountPublicKey,
-    role: member.role,
-    joinedAt: member.joinedAt,
-  });
+  membersMap.set(member.accountPublicKey, { ...member });
 };
 
 export const removeMember = (
@@ -53,24 +49,24 @@ export const removeMember = (
   membersMap.delete(accountPublicKey);
 };
 
-export const getMembers = (doc: Y.Doc): readonly Member[] => {
-  const membersMap = doc.getMap("members");
-  const members: Member[] = [];
-  membersMap.forEach((value) => {
-    members.push(value as Member);
-  });
-  return members;
-};
+export const getMembers = (doc: Y.Doc): readonly Member[] =>
+  Array.from(doc.getMap("members").values())
+    .map((value) => MemberSchema.safeParse(value))
+    .filter((result) => result.success)
+    .map((result) => result.data);
 
 export const addChannel = (doc: Y.Doc, channel: Channel): void => {
   const channelsArray = doc.getArray<Channel>("channels");
   channelsArray.push([{ ...channel }]);
 };
 
-export const getChannels = (doc: Y.Doc): readonly Channel[] => {
-  const channelsArray = doc.getArray<Channel>("channels");
-  return channelsArray.toArray();
-};
+export const getChannels = (doc: Y.Doc): readonly Channel[] =>
+  doc
+    .getArray("channels")
+    .toArray()
+    .map((value) => ChannelSchema.safeParse(value))
+    .filter((result) => result.success)
+    .map((result) => result.data);
 
 export const appendMessage = (
   doc: Y.Doc,
@@ -84,7 +80,10 @@ export const appendMessage = (
 export const getChannelMessages = (
   doc: Y.Doc,
   channelId: ChannelId,
-): readonly MessageRef[] => {
-  const messagesArray = doc.getArray<MessageRef>(`messages:${channelId}`);
-  return messagesArray.toArray();
-};
+): readonly MessageRef[] =>
+  doc
+    .getArray(`messages:${channelId}`)
+    .toArray()
+    .map((value) => MessageRefSchema.safeParse(value))
+    .filter((result) => result.success)
+    .map((result) => result.data);
