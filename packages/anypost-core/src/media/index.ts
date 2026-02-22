@@ -36,3 +36,12 @@ export {
   isSharing,
   getPreviousCameraEnabled,
 } from "./screen-share.js";
+
+export {
+  SPEAKING_THRESHOLD,
+  isSpeaking,
+} from "./speaking-detection.js";
+
+export { getGridLayout } from "./video-grid-layout.js";
+
+export { getCallControlsState } from "./call-controls.js";
