@@ -131,11 +131,6 @@ export const selectBestRelay = (
     return healthyRelays[0].address;
   }
 
-  const unknownRelay = state.relays.find((r) => r.status === "unknown");
-  if (unknownRelay) {
-    return unknownRelay.address;
-  }
-
   const degradedRelays = state.relays
     .filter((r): r is RelayWithLatency => r.status === "degraded" && hasLatency(r))
     .sort((a, b) => a.latencyMs - b.latencyMs);
@@ -144,7 +139,11 @@ export const selectBestRelay = (
     return degradedRelays[0].address;
   }
 
-  return null;
+  return (
+    state.relays.find((r) => r.status === "unknown")?.address ??
+    state.relays.find((r) => r.status === "degraded")?.address ??
+    null
+  );
 };
 
 export const getRelayStatus = (

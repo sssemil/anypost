@@ -87,6 +87,19 @@ describe("recordHealthCheckSuccess", () => {
     expect(getRelayStatus(state, RELAY_A)).toBe("healthy");
   });
 
+  it("should reset failure count so relay can tolerate failures again after recovery", () => {
+    let state = createRelayHealthState({
+      relayAddresses: [RELAY_A],
+      failureThreshold: 2,
+    });
+
+    state = recordHealthCheckFailure(state, RELAY_A);
+    state = recordHealthCheckSuccess(state, RELAY_A, 50);
+    state = recordHealthCheckFailure(state, RELAY_A);
+
+    expect(getRelayStatus(state, RELAY_A)).toBe("degraded");
+  });
+
   it("should reject unknown relay address", () => {
     const state = createRelayHealthState({
       relayAddresses: [RELAY_A],
@@ -192,7 +205,7 @@ describe("selectBestRelay", () => {
     expect(selectBestRelay(state)).toBe(RELAY_B);
   });
 
-  it("should return null when no healthy relays exist", () => {
+  it("should return null when all relays are unhealthy", () => {
     let state = createRelayHealthState({
       relayAddresses: [RELAY_A],
       failureThreshold: 1,
@@ -201,6 +214,18 @@ describe("selectBestRelay", () => {
     state = recordHealthCheckFailure(state, RELAY_A);
 
     expect(selectBestRelay(state)).toBe(null);
+  });
+
+  it("should prefer degraded relay with latency over unknown relay", () => {
+    let state = createRelayHealthState({
+      relayAddresses: [RELAY_A, RELAY_B],
+      failureThreshold: 3,
+    });
+
+    state = recordHealthCheckSuccess(state, RELAY_A, 50);
+    state = recordHealthCheckFailure(state, RELAY_A);
+
+    expect(selectBestRelay(state)).toBe(RELAY_A);
   });
 
   it("should fall back to lowest-latency degraded relay when no healthy relays exist", () => {
