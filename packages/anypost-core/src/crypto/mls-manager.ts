@@ -207,20 +207,14 @@ export const processReceivedMessage = async (
     message: options.message,
   });
 
+  result.consumed.forEach(zeroOutUint8Array);
+  const newGroupState: MlsGroupState = { clientState: result.newState };
+
   if (result.kind === "applicationMessage") {
-    result.consumed.forEach(zeroOutUint8Array);
-    return {
-      kind: "applicationMessage",
-      newGroupState: { clientState: result.newState },
-      plaintext: result.message,
-    };
+    return { kind: "applicationMessage", newGroupState, plaintext: result.message };
   }
 
-  result.consumed.forEach(zeroOutUint8Array);
-  return {
-    kind: "commit",
-    newGroupState: { clientState: result.newState },
-  };
+  return { kind: "commit", newGroupState };
 };
 
 type RemoveMemberOptions = {
