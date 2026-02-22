@@ -104,3 +104,14 @@ export {
   getCurrentSteward,
   getOnlineMembers,
 } from "./steward-failover.js";
+
+export {
+  DEFAULT_ROTATION_INTERVAL_MS,
+  DEFAULT_ROTATION_MESSAGE_THRESHOLD,
+  createRotationScheduler,
+  recordRotation,
+  recordMessage,
+  isRotationDue,
+  getMessagesSinceRotation,
+  getTimeSinceRotation,
+} from "./key-rotation-scheduler.js";
