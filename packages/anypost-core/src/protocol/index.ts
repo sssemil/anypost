@@ -97,5 +97,24 @@ export {
   isValidPeerId,
   formatPeerIdShort,
   formatPeerIdForDisplay,
+  formatSenderDisplay,
   buildCircuitRelayAddresses,
 } from "./peer-id-sharing.js";
+export {
+  createMultiGroupState,
+  transitionMultiGroup,
+  getActiveGroup,
+  getActiveMessages,
+  getGroupList,
+  hasGroup,
+} from "./multi-group-state.js";
+export type {
+  GroupEntry,
+  MultiGroupState,
+  MultiGroupEvent,
+} from "./multi-group-state.js";
+export { createMultiGroupChat } from "./multi-group-chat.js";
+export type {
+  MultiGroupChat,
+  MultiGroupChatMessageEvent,
+} from "./multi-group-chat.js";

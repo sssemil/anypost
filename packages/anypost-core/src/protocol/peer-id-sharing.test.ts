@@ -3,6 +3,7 @@ import {
   isValidPeerId,
   formatPeerIdShort,
   formatPeerIdForDisplay,
+  formatSenderDisplay,
   buildCircuitRelayAddresses,
 } from "./peer-id-sharing.js";
 
@@ -58,6 +59,26 @@ describe("formatPeerIdForDisplay", () => {
 
   it("should return full peer ID if 16 chars or shorter", () => {
     expect(formatPeerIdForDisplay("short")).toBe("short");
+  });
+});
+
+describe("formatSenderDisplay", () => {
+  it("should show display name with last 4 chars of peer ID", () => {
+    expect(formatSenderDisplay("Alice", VALID_ED25519_PEER_ID)).toBe(
+      "Alice | 3pnQ",
+    );
+  });
+
+  it("should fall back to formatted peer ID when display name is undefined", () => {
+    expect(formatSenderDisplay(undefined, VALID_ED25519_PEER_ID)).toBe(
+      formatPeerIdForDisplay(VALID_ED25519_PEER_ID),
+    );
+  });
+
+  it("should fall back to formatted peer ID when display name is empty string", () => {
+    expect(formatSenderDisplay("", VALID_ED25519_PEER_ID)).toBe(
+      formatPeerIdForDisplay(VALID_ED25519_PEER_ID),
+    );
   });
 });
 

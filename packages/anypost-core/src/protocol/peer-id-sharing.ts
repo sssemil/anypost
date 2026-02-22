@@ -20,6 +20,15 @@ export const formatPeerIdForDisplay = (peerId: string): string =>
     ? `${ED25519_PREFIX}...${peerId.slice(-DISPLAY_SUFFIX_LENGTH)}`
     : peerId;
 
+export const formatSenderDisplay = (
+  displayName: string | undefined,
+  peerId: string,
+): string => {
+  if (!displayName) return formatPeerIdForDisplay(peerId);
+  const suffix = peerId.slice(-DISPLAY_SUFFIX_LENGTH);
+  return `${displayName} | ${suffix}`;
+};
+
 type BuildCircuitRelayAddressesRequest = {
   readonly targetPeerId: string;
   readonly relayAddresses: readonly string[];

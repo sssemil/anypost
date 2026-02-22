@@ -4,6 +4,7 @@ import {
   classifyTransport,
   classifyNodeType,
   buildTopologyGraph,
+  latencyToDistance,
   type GraphNode,
   type GraphEdge,
   type TopologyGraph,
@@ -68,6 +69,36 @@ describe("classifyNodeType", () => {
   });
 });
 
+describe("latencyToDistance", () => {
+  it("should return default distance for null latency", () => {
+    expect(latencyToDistance(null)).toBe(100);
+  });
+
+  it("should map low latency to short distance", () => {
+    const distance = latencyToDistance(10);
+    expect(distance).toBe(60);
+  });
+
+  it("should map high latency to long distance", () => {
+    const distance = latencyToDistance(2000);
+    expect(distance).toBe(250);
+  });
+
+  it("should clamp below minimum latency", () => {
+    expect(latencyToDistance(1)).toBe(60);
+  });
+
+  it("should clamp above maximum latency", () => {
+    expect(latencyToDistance(10000)).toBe(250);
+  });
+
+  it("should produce intermediate distance for mid-range latency", () => {
+    const distance = latencyToDistance(100);
+    expect(distance).toBeGreaterThan(60);
+    expect(distance).toBeLessThan(250);
+  });
+});
+
 describe("buildTopologyGraph", () => {
   it("should create a self node with no peers", () => {
     const status = createNetworkStatus();
@@ -97,6 +128,7 @@ describe("buildTopologyGraph", () => {
       target: "12D3KooWPeerABC",
       transport: "websocket",
       direction: "outbound",
+      latencyMs: null,
     });
   });
 
@@ -139,6 +171,41 @@ describe("buildTopologyGraph", () => {
 
     const bsNode = graph.nodes.find((n) => n.id === bootstrapPeerId);
     expect(bsNode?.nodeType).toBe("bootstrap");
+  });
+
+  it("should populate latencyMs from latencyMap", () => {
+    const peer = createPeerInfo({
+      peerId: "12D3KooWPeerABC",
+      addrs: ["/ip4/1.2.3.4/tcp/9090/ws/p2p/12D3KooWPeerABC"],
+    });
+    const status = createNetworkStatus({ peers: [peer] });
+    const latencyMap = new Map([["12D3KooWPeerABC", 42]]);
+    const graph = buildTopologyGraph(status, [], latencyMap);
+
+    expect(graph.edges[0].latencyMs).toBe(42);
+  });
+
+  it("should set latencyMs to null when peer is missing from latencyMap", () => {
+    const peer = createPeerInfo({
+      peerId: "12D3KooWPeerABC",
+      addrs: ["/ip4/1.2.3.4/tcp/9090/ws/p2p/12D3KooWPeerABC"],
+    });
+    const status = createNetworkStatus({ peers: [peer] });
+    const latencyMap = new Map([["differentPeer", 100]]);
+    const graph = buildTopologyGraph(status, [], latencyMap);
+
+    expect(graph.edges[0].latencyMs).toBeNull();
+  });
+
+  it("should set latencyMs to null when no latencyMap provided", () => {
+    const peer = createPeerInfo({
+      peerId: "12D3KooWPeerABC",
+      addrs: ["/ip4/1.2.3.4/tcp/9090/ws/p2p/12D3KooWPeerABC"],
+    });
+    const status = createNetworkStatus({ peers: [peer] });
+    const graph = buildTopologyGraph(status, []);
+
+    expect(graph.edges[0].latencyMs).toBeNull();
   });
 
   it("should deduplicate peers with the same peerId", () => {

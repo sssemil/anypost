@@ -1,6 +1,13 @@
-import { createSignal, createEffect, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
-import { createPlaintextChat } from "anypost-core/protocol";
-import type { PlaintextChat, ChatMessageEvent, NetworkStatus, NetworkEvent } from "anypost-core/protocol";
+import { createSignal, createEffect, Match, onCleanup, onMount, Show, Switch } from "solid-js";
+import {
+  createMultiGroupChat,
+  createMultiGroupState,
+  transitionMultiGroup,
+  getActiveGroup,
+  getActiveMessages,
+  getGroupList,
+} from "anypost-core/protocol";
+import type { MultiGroupChat, MultiGroupState, NetworkStatus, NetworkEvent } from "anypost-core/protocol";
 import {
   generateAccountKey,
   exportAccountKey,
@@ -22,57 +29,93 @@ import { OnboardingScreen } from "./onboarding/OnboardingScreen.js";
 import { DisplayNamePrompt } from "./onboarding/DisplayNamePrompt.js";
 import { BackupBanner } from "./onboarding/BackupBanner.js";
 import { decideAutoConnect } from "./auto-connect.js";
-import { TopologyGraph } from "./network/TopologyGraph.js";
 import { PeerSharingPanel } from "./PeerSharingPanel.js";
+import { ChatLayout } from "./layout/ChatLayout.js";
+import { HeaderBar } from "./layout/HeaderBar.js";
+import { GroupSidebar } from "./sidebar/GroupSidebar.js";
+import { MessageList } from "./chat/MessageList.js";
+import { MessageInput } from "./chat/MessageInput.js";
+import { ConnectPanel } from "./connect/ConnectPanel.js";
+import { NetworkPanel } from "./network/NetworkPanel.js";
+import { EventLog } from "./network/EventLog.js";
+import {
+  serializeGroups,
+  deserializeGroups,
+} from "./group-persistence.js";
 
 const DEFAULT_GROUP_ID = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11";
 const ENV_RELAY_MULTIADDR = import.meta.env.VITE_RELAY_MULTIADDR as string | undefined;
-const STORAGE_KEY = "anypost:relay-multiaddr";
+const RELAY_STORAGE_KEY = "anypost:relay-multiaddr";
+const GROUPS_STORAGE_KEY = "anypost:groups";
+const MAX_EVENTS = 200;
 
 const loadRelayAddress = (): string =>
-  ENV_RELAY_MULTIADDR ?? localStorage.getItem(STORAGE_KEY) ?? "";
+  ENV_RELAY_MULTIADDR ?? localStorage.getItem(RELAY_STORAGE_KEY) ?? "";
 
 const saveRelayAddress = (addr: string): void => {
-  localStorage.setItem(STORAGE_KEY, addr);
+  localStorage.setItem(RELAY_STORAGE_KEY, addr);
 };
 
-const mono = { "font-family": "monospace", "font-size": "0.82em" } as const;
-const dimText = { color: "#888", "font-size": "0.8em" } as const;
-const panelStyle = {
-  border: "1px solid #ddd",
-  "border-radius": "8px",
-  padding: "12px",
-  "margin-bottom": "12px",
-  "background-color": "#f9f9f9",
-} as const;
+const loadPersistedGroups = () => {
+  const json = localStorage.getItem(GROUPS_STORAGE_KEY);
+  return json ? deserializeGroups(json) : null;
+};
+
+const savePersistedGroups = (state: MultiGroupState) => {
+  localStorage.setItem(GROUPS_STORAGE_KEY, serializeGroups(state));
+};
 
 export const App = () => {
   const [onboardingState, setOnboardingState] = createSignal<OnboardingState>(createInitialState());
   const [seedPhrase, setSeedPhrase] = createSignal("");
 
-  const [messages, setMessages] = createSignal<readonly ChatMessageEvent[]>([]);
-  const [inputText, setInputText] = createSignal("");
+  const [groupState, setGroupState] = createSignal<MultiGroupState>(createMultiGroupState());
   const [chatStatus, setChatStatus] = createSignal<"connecting" | "connected" | "disconnected">("connecting");
   const [displayName, setDisplayNameState] = createSignal("");
   const [relayAddr, setRelayAddr] = createSignal(loadRelayAddress());
   const [networkStatus, setNetworkStatus] = createSignal<NetworkStatus | null>(null);
-  const [showNetworkPanel, setShowNetworkPanel] = createSignal(true);
   const [eventLog, setEventLog] = createSignal<readonly NetworkEvent[]>([]);
-  const [showEventLog, setShowEventLog] = createSignal(true);
   const [bootstrapAddrs, setBootstrapAddrs] = createSignal<readonly string[]>([]);
-  const [peerSearch, setPeerSearch] = createSignal("");
-  const [peerPage, setPeerPage] = createSignal(0);
+  const [latencyMap, setLatencyMap] = createSignal<ReadonlyMap<string, number>>(new Map());
 
-  const PEERS_PER_PAGE = 10;
-  const MAX_EVENTS = 200;
-
-  let chat: PlaintextChat | undefined;
-  let unsubscribe: (() => void) | undefined;
+  let chat: MultiGroupChat | undefined;
+  let unsubscribeMessage: (() => void) | undefined;
   let unsubscribeEvents: (() => void) | undefined;
   let statusInterval: ReturnType<typeof setInterval> | undefined;
+  let pingInterval: ReturnType<typeof setInterval> | undefined;
 
   const refreshNetworkStatus = () => {
     if (chat) setNetworkStatus(chat.getNetworkStatus());
+  };
+
+  const PING_SWEEP_INTERVAL = 15_000;
+
+  const runPingSweep = async () => {
+    const currentChat = chat;
+    if (!currentChat) return;
+
+    const status = currentChat.getNetworkStatus();
+    const results = new Map<string, number>();
+
+    for (const peer of status.peers) {
+      if (results.has(peer.peerId)) continue;
+      try {
+        const rtt = await currentChat.pingPeer(peer.peerId);
+        results.set(peer.peerId, rtt);
+      } catch {
+        // Ping failed — omit this peer from the map
+      }
+    }
+
+    setLatencyMap(results);
+  };
+
+  const dispatchGroupEvent = (event: Parameters<typeof transitionMultiGroup>[1]) => {
+    setGroupState((s) => {
+      const next = transitionMultiGroup(s, event);
+      savePersistedGroups(next);
+      return next;
+    });
   };
 
   onMount(async () => {
@@ -200,18 +243,43 @@ export const App = () => {
     }
   };
 
+  const restorePersistedGroups = () => {
+    const persisted = loadPersistedGroups();
+    if (!persisted || persisted.joinedGroups.length === 0) {
+      dispatchGroupEvent({ type: "group-joined", groupId: DEFAULT_GROUP_ID });
+      return;
+    }
+
+    for (const groupId of persisted.joinedGroups) {
+      dispatchGroupEvent({ type: "group-joined", groupId });
+      chat?.joinGroup(groupId);
+    }
+
+    if (persisted.activeGroupId) {
+      dispatchGroupEvent({ type: "group-selected", groupId: persisted.activeGroupId });
+    }
+  };
+
   const startChat = async (_accountKey: AccountKey) => {
     try {
       const addr = relayAddr().trim();
       if (addr) saveRelayAddress(addr);
       const bootstrapPeers = addr ? [addr] : [];
       setBootstrapAddrs(bootstrapPeers);
-      chat = await createPlaintextChat({
-        groupId: DEFAULT_GROUP_ID,
+
+      chat = await createMultiGroupChat({
         bootstrapPeers,
       });
 
       setChatStatus("connected");
+
+      restorePersistedGroups();
+
+      const currentJoined = chat.getJoinedGroups();
+      if (currentJoined.length === 0) {
+        chat.joinGroup(DEFAULT_GROUP_ID);
+      }
+
       refreshNetworkStatus();
 
       chat.onPeerChange(() => {
@@ -220,12 +288,19 @@ export const App = () => {
 
       statusInterval = setInterval(refreshNetworkStatus, 3000);
 
+      void runPingSweep();
+      pingInterval = setInterval(() => void runPingSweep(), PING_SWEEP_INTERVAL);
+
       unsubscribeEvents = chat.onEvent((evt) => {
         setEventLog((prev) => [...prev.slice(-(MAX_EVENTS - 1)), evt]);
       });
 
-      unsubscribe = chat.onMessage((msg) => {
-        setMessages((prev) => [...prev, msg]);
+      unsubscribeMessage = chat.onMessage((msg) => {
+        dispatchGroupEvent({
+          type: "message-received",
+          groupId: msg.groupId,
+          message: msg,
+        });
       });
     } catch {
       setChatStatus("disconnected");
@@ -233,9 +308,10 @@ export const App = () => {
   };
 
   onCleanup(() => {
-    unsubscribe?.();
+    unsubscribeMessage?.();
     unsubscribeEvents?.();
     if (statusInterval) clearInterval(statusInterval);
+    if (pingInterval) clearInterval(pingInterval);
     chat?.stop();
   });
 
@@ -255,35 +331,50 @@ export const App = () => {
     }
   });
 
-  const sendMessage = async () => {
-    const text = inputText().trim();
+  const handleSendMessage = (text: string) => {
     const currentChat = chat;
-    if (!text || !currentChat) return;
+    const activeGroup = getActiveGroup(groupState());
+    if (!currentChat || !activeGroup) return;
 
-    try {
-      await currentChat.sendMessage(text);
+    const groupId = activeGroup.groupId;
 
-      setMessages((prev) => [
-        ...prev,
-        {
+    const name = displayName() || undefined;
+    currentChat.sendMessage(groupId, text, name).then(() => {
+      dispatchGroupEvent({
+        type: "message-sent",
+        groupId,
+        message: {
           id: crypto.randomUUID(),
           senderPeerId: currentChat.peerId,
+          senderDisplayName: name,
           text,
           timestamp: Date.now(),
         },
-      ]);
-
-      setInputText("");
-    } catch {
+      });
+    }).catch(() => {
       setChatStatus("disconnected");
-    }
+    });
   };
 
-  const handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      void sendMessage();
-    }
+  const handleJoinGroup = (groupId: string) => {
+    chat?.joinGroup(groupId);
+    dispatchGroupEvent({ type: "group-joined", groupId });
+  };
+
+  const handleCreateGroup = () => {
+    const groupId = crypto.randomUUID();
+    chat?.joinGroup(groupId);
+    dispatchGroupEvent({ type: "group-joined", groupId });
+    dispatchGroupEvent({ type: "group-selected", groupId });
+  };
+
+  const handleLeaveGroup = (groupId: string) => {
+    chat?.leaveGroup(groupId);
+    dispatchGroupEvent({ type: "group-left", groupId });
+  };
+
+  const handleSelectGroup = (groupId: string) => {
+    dispatchGroupEvent({ type: "group-selected", groupId });
   };
 
   const getCurrentAccountKey = (): AccountKey | null => {
@@ -298,6 +389,9 @@ export const App = () => {
     const state = onboardingState();
     return state.status === "ready" && state.backupPending;
   };
+
+  const showConnectPanel = () =>
+    chatStatus() === "disconnected" || (chatStatus() === "connecting" && !relayAddr().trim());
 
   return (
     <Switch>
@@ -321,371 +415,82 @@ export const App = () => {
       </Match>
 
       <Match when={onboardingState().status === "ready"}>
-        <div style={{ "max-width": "700px", margin: "0 auto", padding: "20px", "font-family": "system-ui" }}>
-          <h1 style={{ "margin-bottom": "8px" }}>Anypost</h1>
+        <Show when={backupPending()}>
+          <BackupBanner
+            seedPhrase={seedPhrase()}
+            onBackupConfirmed={() => void handleBackupConfirmed()}
+          />
+        </Show>
 
-          <Show when={backupPending()}>
-            <BackupBanner
-              seedPhrase={seedPhrase()}
-              onBackupConfirmed={() => void handleBackupConfirmed()}
-            />
-          </Show>
-
-          {/* Connect panel — shown when no relay or disconnected */}
-          <Show when={chatStatus() === "disconnected" || (chatStatus() === "connecting" && !relayAddr().trim())}>
-            <div style={panelStyle}>
-              <label style={{ display: "block", "margin-bottom": "6px", "font-weight": "bold", "font-size": "0.9em" }}>
-                Relay address
-              </label>
-              <input
-                type="text"
-                value={relayAddr()}
-                onInput={(e) => setRelayAddr(e.currentTarget.value)}
-                placeholder="/ip4/127.0.0.1/tcp/9090/ws/p2p/12D3KooW..."
-                style={{ width: "100%", padding: "8px", "border-radius": "4px", border: "1px solid #ccc", ...mono, "box-sizing": "border-box", "margin-bottom": "8px" }}
-              />
-              <p style={{ margin: "0 0 8px", ...dimText }}>
-                Paste the <code>/ws/</code> multiaddr from the relay terminal.
-              </p>
-              <button
-                onClick={() => {
-                  const key = getCurrentAccountKey();
-                  if (key) void startChat(key);
-                }}
-                disabled={!relayAddr().trim()}
-                style={{ padding: "10px 20px", "border-radius": "4px", cursor: "pointer", "background-color": "#2196F3", color: "white", border: "none" }}
-              >
-                Connect
-              </button>
-            </div>
-          </Show>
-
-          {/* Messages */}
-          <div style={{
-            border: "1px solid #ccc",
-            "border-radius": "8px",
-            height: "350px",
-            "overflow-y": "auto",
-            padding: "12px",
-            "margin-bottom": "12px",
-          }}>
-            <For each={messages()} fallback={
-              <div style={{ ...dimText, "text-align": "center", padding: "40px 0" }}>
-                No messages yet. Send something!
-              </div>
-            }>
-              {(msg) => {
-                const isMe = () => chat?.peerId === msg.senderPeerId;
-                return (
-                  <div style={{ "margin-bottom": "8px" }}>
-                    <strong style={{ color: isMe() ? "#1565c0" : "#333" }}>
-                      {isMe() ? "You" : `${msg.senderPeerId.slice(0, 12)}...`}
-                    </strong>{" "}
-                    <span style={dimText}>
-                      {new Date(msg.timestamp).toLocaleTimeString()}
-                    </span>
-                    <div>{msg.text}</div>
-                  </div>
-                );
+        <Show when={showConnectPanel()}>
+          <div style={{ "max-width": "500px", margin: "40px auto", padding: "20px", "font-family": "system-ui" }}>
+            <h1 style={{ "margin-bottom": "16px" }}>Anypost</h1>
+            <ConnectPanel
+              relayAddr={relayAddr()}
+              onRelayAddrChange={setRelayAddr}
+              onConnect={() => {
+                const key = getCurrentAccountKey();
+                if (key) void startChat(key);
               }}
-            </For>
-          </div>
-
-          {/* Input */}
-          <div style={{ display: "flex", gap: "8px", "margin-bottom": "16px" }}>
-            <input
-              type="text"
-              value={inputText()}
-              onInput={(e) => setInputText(e.currentTarget.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Type a message..."
-              disabled={chatStatus() !== "connected"}
-              style={{ flex: 1, padding: "8px", "border-radius": "4px", border: "1px solid #ccc" }}
+              disabled={!relayAddr().trim()}
             />
-            <button
-              onClick={() => void sendMessage()}
-              disabled={chatStatus() !== "connected" || !inputText().trim()}
-              style={{ padding: "8px 16px", "border-radius": "4px", cursor: "pointer" }}
-            >
-              Send
-            </button>
           </div>
+        </Show>
 
-          {/* Peer sharing panel */}
-          <Show when={chatStatus() === "connected" ? chat : undefined}>
-            {(currentChat) => (
-              <PeerSharingPanel
-                ownPeerId={currentChat().peerId}
-                onConnect={(targetPeerId) => currentChat().connectToPeerId(targetPeerId)}
+        <Show when={chatStatus() === "connected" && chat}>
+          <ChatLayout
+            header={
+              <HeaderBar
+                peerId={chat!.peerId}
+                connectionStatus={chatStatus()}
+                displayName={displayName()}
               />
-            )}
-          </Show>
-
-          {/* Network status panel */}
-          <Show when={chatStatus() === "connected"}>
-            <div style={{ ...panelStyle, "margin-bottom": "12px" }}>
-              <div style={{ display: "flex", "justify-content": "space-between", "align-items": "center", "margin-bottom": "8px" }}>
-                <strong style={{ "font-size": "0.9em" }}>
-                  Network
-                  {networkStatus() && (
-                    <span style={{ "font-weight": "normal", ...dimText, "margin-left": "8px" }}>
-                      {networkStatus()!.peers.length} peer{networkStatus()!.peers.length !== 1 ? "s" : ""}
-                      {" / "}
-                      {networkStatus()!.subscriberCount} subscriber{networkStatus()!.subscriberCount !== 1 ? "s" : ""}
-                    </span>
-                  )}
-                </strong>
-                <button
-                  onClick={() => setShowNetworkPanel(!showNetworkPanel())}
-                  style={{ background: "none", border: "none", cursor: "pointer", ...dimText }}
-                >
-                  {showNetworkPanel() ? "hide" : "show"}
-                </button>
-              </div>
-
-              <Show when={showNetworkPanel() && networkStatus()}>
-                {(status) => (
-                  <div style={{ ...mono }}>
-                    {/* Topology graph */}
-                    <div style={{ "margin-bottom": "10px", "padding-bottom": "10px", "border-bottom": "1px solid #e0e0e0" }}>
-                      <TopologyGraph
-                        networkStatus={status()}
-                        bootstrapAddrs={bootstrapAddrs()}
-                      />
-                    </div>
-
-                    {/* Self info */}
-                    <div style={{ "margin-bottom": "10px", "padding-bottom": "10px", "border-bottom": "1px solid #e0e0e0" }}>
-                      <div style={{ "margin-bottom": "4px" }}>
-                        <span style={dimText}>PeerId </span>
-                        <code>{status().peerId}</code>
-                      </div>
-                      <div style={{ "margin-bottom": "4px" }}>
-                        <span style={dimText}>Topic </span>
-                        <code>{status().topic}</code>
-                      </div>
-                      {displayName() && (
-                        <div>
-                          <span style={dimText}>Name </span>
-                          {displayName()}
-                        </div>
-                      )}
-                      <Show when={status().multiaddrs.length > 0}>
-                        <details style={{ "margin-top": "4px" }}>
-                          <summary style={{ cursor: "pointer", ...dimText }}>
-                            My addresses ({status().multiaddrs.length})
-                          </summary>
-                          <For each={status().multiaddrs}>
-                            {(addr) => (
-                              <div style={{ "padding-left": "12px", "word-break": "break-all", "margin-top": "2px" }}>
-                                {addr}
-                              </div>
-                            )}
-                          </For>
-                        </details>
-                      </Show>
-                    </div>
-
-                    {/* Connected peers */}
-                    <details style={{ "margin-top": "4px" }}>
-                      <summary style={{ cursor: "pointer", ...dimText }}>
-                        Connected peers ({status().peers.length})
-                      </summary>
-                      <Show
-                        when={status().peers.length > 0}
-                        fallback={
-                          <div style={{ ...dimText, "text-align": "center", padding: "8px" }}>
-                            No peers connected. Waiting for connections...
-                          </div>
-                        }
-                      >
-                        <div style={{ "margin-top": "6px", "margin-bottom": "6px" }}>
-                          <input
-                            type="text"
-                            value={peerSearch()}
-                            onInput={(e) => { setPeerSearch(e.currentTarget.value); setPeerPage(0); }}
-                            placeholder="Search by peer ID or address..."
-                            style={{ width: "100%", padding: "6px 8px", "border-radius": "4px", border: "1px solid #ddd", ...mono, "font-size": "0.85em", "box-sizing": "border-box" }}
-                          />
-                        </div>
-                        {(() => {
-                          const query = peerSearch().toLowerCase();
-                          const filtered = query
-                            ? status().peers.filter((p) =>
-                                p.peerId.toLowerCase().includes(query) ||
-                                p.addrs.some((a) => a.toLowerCase().includes(query))
-                              )
-                            : status().peers;
-                          const totalPages = Math.max(1, Math.ceil(filtered.length / PEERS_PER_PAGE));
-                          const page = Math.min(peerPage(), totalPages - 1);
-                          const paged = filtered.slice(page * PEERS_PER_PAGE, (page + 1) * PEERS_PER_PAGE);
-                          return (
-                            <>
-                              <For each={paged}>
-                                {(peer) => (
-                                  <div style={{
-                                    padding: "8px",
-                                    "margin-bottom": "6px",
-                                    "background-color": "#fff",
-                                    "border-radius": "6px",
-                                    border: "1px solid #e8e8e8",
-                                  }}>
-                                    <div style={{ display: "flex", "justify-content": "space-between", "align-items": "center" }}>
-                                      <code style={{ "font-weight": "bold" }}>{peer.peerId.slice(0, 20)}...</code>
-                                      <span style={{
-                                        padding: "2px 8px",
-                                        "border-radius": "10px",
-                                        "font-size": "0.75em",
-                                        "background-color": peer.direction === "outbound" ? "#e3f2fd" : "#f3e5f5",
-                                        color: peer.direction === "outbound" ? "#1565c0" : "#7b1fa2",
-                                      }}>
-                                        {peer.direction}
-                                      </span>
-                                    </div>
-                                    <For each={peer.addrs}>
-                                      {(addr) => (
-                                        <div style={{ ...dimText, "word-break": "break-all", "margin-top": "4px" }}>
-                                          {addr}
-                                        </div>
-                                      )}
-                                    </For>
-                                    <div style={{ ...dimText, "margin-top": "2px" }}>
-                                      muxer: {peer.protocol}
-                                    </div>
-                                  </div>
-                                )}
-                              </For>
-                              <Show when={totalPages > 1}>
-                                <div style={{ display: "flex", "justify-content": "center", "align-items": "center", gap: "8px", "margin-top": "8px" }}>
-                                  <button
-                                    onClick={() => setPeerPage(Math.max(0, page - 1))}
-                                    disabled={page === 0}
-                                    style={{ background: "none", border: "1px solid #ddd", "border-radius": "4px", padding: "2px 8px", cursor: page === 0 ? "default" : "pointer", ...dimText }}
-                                  >
-                                    prev
-                                  </button>
-                                  <span style={dimText}>
-                                    {page + 1} / {totalPages}
-                                    {query && ` (${filtered.length} match${filtered.length !== 1 ? "es" : ""})`}
-                                  </span>
-                                  <button
-                                    onClick={() => setPeerPage(Math.min(totalPages - 1, page + 1))}
-                                    disabled={page >= totalPages - 1}
-                                    style={{ background: "none", border: "1px solid #ddd", "border-radius": "4px", padding: "2px 8px", cursor: page >= totalPages - 1 ? "default" : "pointer", ...dimText }}
-                                  >
-                                    next
-                                  </button>
-                                </div>
-                              </Show>
-                              <Show when={query && filtered.length === 0}>
-                                <div style={{ ...dimText, "text-align": "center", padding: "8px" }}>
-                                  No peers matching "{peerSearch()}"
-                                </div>
-                              </Show>
-                            </>
-                          );
-                        })()}
-                      </Show>
-                    </details>
-                  </div>
-                )}
-              </Show>
-            </div>
-          </Show>
-
-          {/* Event log */}
-          <Show when={chatStatus() === "connected"}>
-            <div style={{ ...panelStyle, "margin-bottom": "12px" }}>
-              <div style={{ display: "flex", "justify-content": "space-between", "align-items": "center", "margin-bottom": "4px" }}>
-                <strong style={{ "font-size": "0.9em" }}>
-                  Events
-                  <span style={{ "font-weight": "normal", ...dimText, "margin-left": "8px" }}>
-                    {eventLog().length} entries
-                  </span>
-                </strong>
-                <div style={{ display: "flex", gap: "8px" }}>
-                  <button
-                    onClick={() => setEventLog([])}
-                    style={{ background: "none", border: "none", cursor: "pointer", ...dimText }}
-                  >
-                    clear
-                  </button>
-                  <button
-                    onClick={() => setShowEventLog(!showEventLog())}
-                    style={{ background: "none", border: "none", cursor: "pointer", ...dimText }}
-                  >
-                    {showEventLog() ? "hide" : "show"}
-                  </button>
-                </div>
-              </div>
-              <Show when={showEventLog()}>
-                <div
-                  ref={(el) => {
-                    const observer = new MutationObserver(() => {
-                      el.scrollTop = el.scrollHeight;
-                    });
-                    observer.observe(el, { childList: true });
-                    onCleanup(() => observer.disconnect());
-                  }}
-                  style={{
-                    ...mono,
-                    height: "180px",
-                    "overflow-y": "auto",
-                    "background-color": "#1a1a2e",
-                    color: "#e0e0e0",
-                    "border-radius": "4px",
-                    padding: "8px",
-                    "font-size": "0.75em",
-                    "line-height": "1.5",
-                  }}
-                >
-                  <For each={eventLog()}>
-                    {(evt) => {
-                      const color = (): string => {
-                        switch (evt.type) {
-                          case "peer-connect": return "#4caf50";
-                          case "peer-disconnect": return "#f44336";
-                          case "dial-attempt": return "#ff9800";
-                          case "dial-success": return "#4caf50";
-                          case "dial-failure": return "#f44336";
-                          case "subscription-change": return "#9c27b0";
-                          case "pubsub-message": return "#2196f3";
-                          case "relay-reservation": return "#00bcd4";
-                          case "address-change": return "#607d8b";
-                          case "gossipsub-mesh": return "#795548";
-                          case "info": return "#888";
-                          default: return "#e0e0e0";
-                        }
-                      };
-                      return (
-                        <div style={{ "white-space": "pre-wrap", "word-break": "break-all" }}>
-                          <span style={{ color: "#666" }}>
-                            {new Date(evt.timestamp).toLocaleTimeString()}{" "}
-                          </span>
-                          <span style={{
-                            color: "#1a1a2e",
-                            "background-color": color(),
-                            padding: "0 4px",
-                            "border-radius": "2px",
-                            "font-size": "0.9em",
-                          }}>
-                            {evt.type}
-                          </span>{" "}
-                          <span>{evt.detail}</span>
-                        </div>
-                      );
-                    }}
-                  </For>
-                  <Show when={eventLog().length === 0}>
-                    <div style={{ color: "#666", "text-align": "center", padding: "20px 0" }}>
-                      Waiting for events...
-                    </div>
-                  </Show>
-                </div>
-              </Show>
-            </div>
-          </Show>
-        </div>
+            }
+            sidebar={
+              <GroupSidebar
+                groups={getGroupList(groupState()).map((g) => ({
+                  groupId: g.groupId,
+                  unreadCount: g.unreadCount,
+                }))}
+                activeGroupId={groupState().activeGroupId}
+                onSelectGroup={handleSelectGroup}
+                onJoinGroup={handleJoinGroup}
+                onCreateGroup={handleCreateGroup}
+                onLeaveGroup={handleLeaveGroup}
+              />
+            }
+            messageList={
+              <MessageList
+                messages={getActiveMessages(groupState())}
+                ownPeerId={chat!.peerId}
+              />
+            }
+            messageInput={
+              <MessageInput
+                onSend={handleSendMessage}
+                disabled={chatStatus() !== "connected" || getActiveGroup(groupState()) === null}
+              />
+            }
+            bottomPanels={
+              <>
+                <PeerSharingPanel
+                  ownPeerId={chat!.peerId}
+                  onConnect={(targetPeerId) => chat!.connectToPeerId(targetPeerId)}
+                />
+                <NetworkPanel
+                  networkStatus={networkStatus()}
+                  bootstrapAddrs={bootstrapAddrs()}
+                  displayName={displayName()}
+                  latencyMap={latencyMap()}
+                />
+                <EventLog
+                  events={eventLog()}
+                  onClear={() => setEventLog([])}
+                />
+              </>
+            }
+          />
+        </Show>
       </Match>
     </Switch>
   );

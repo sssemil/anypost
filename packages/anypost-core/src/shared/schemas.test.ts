@@ -120,6 +120,79 @@ describe("EncryptedMessageSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("should accept messages with a display name", () => {
+    const message = {
+      id: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+      groupId: "b1ffbc99-9c0b-4ef8-bb6d-6bb9bd380a22",
+      channelId: "c2ffbc99-9c0b-4ef8-bb6d-6bb9bd380a33",
+      senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
+      epoch: 0,
+      ciphertext: new Uint8Array([1, 2, 3, 4]),
+      timestamp: Date.now(),
+      senderDisplayName: "Alice",
+    };
+
+    const result = EncryptedMessageSchema.safeParse(message);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.senderDisplayName).toBe("Alice");
+    }
+  });
+
+  it("should accept messages without a display name for backward compatibility", () => {
+    const message = {
+      id: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+      groupId: "b1ffbc99-9c0b-4ef8-bb6d-6bb9bd380a22",
+      channelId: "c2ffbc99-9c0b-4ef8-bb6d-6bb9bd380a33",
+      senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
+      epoch: 0,
+      ciphertext: new Uint8Array([1, 2, 3, 4]),
+      timestamp: Date.now(),
+    };
+
+    const result = EncryptedMessageSchema.safeParse(message);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.senderDisplayName).toBeUndefined();
+    }
+  });
+
+  it("should reject empty string display names", () => {
+    const message = {
+      id: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+      groupId: "b1ffbc99-9c0b-4ef8-bb6d-6bb9bd380a22",
+      channelId: "c2ffbc99-9c0b-4ef8-bb6d-6bb9bd380a33",
+      senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
+      epoch: 0,
+      ciphertext: new Uint8Array([1, 2, 3, 4]),
+      timestamp: Date.now(),
+      senderDisplayName: "",
+    };
+
+    const result = EncryptedMessageSchema.safeParse(message);
+
+    expect(result.success).toBe(false);
+  });
+
+  it("should reject display names exceeding 100 characters", () => {
+    const message = {
+      id: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+      groupId: "b1ffbc99-9c0b-4ef8-bb6d-6bb9bd380a22",
+      channelId: "c2ffbc99-9c0b-4ef8-bb6d-6bb9bd380a33",
+      senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
+      epoch: 0,
+      ciphertext: new Uint8Array([1, 2, 3, 4]),
+      timestamp: Date.now(),
+      senderDisplayName: "A".repeat(101),
+    };
+
+    const result = EncryptedMessageSchema.safeParse(message);
+
+    expect(result.success).toBe(false);
+  });
+
   it("should reject messages with invalid epoch", () => {
     const message = {
       id: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",

@@ -23,6 +23,7 @@ export const EncryptedMessageSchema = z.object({
   groupId: GroupIdSchema,
   channelId: ChannelIdSchema,
   senderPeerId: PeerIdSchema,
+  senderDisplayName: z.string().min(1).max(100).optional(),
   epoch: z.number().int().nonnegative(),
   ciphertext: Uint8ArraySchema,
   timestamp: z.number(),

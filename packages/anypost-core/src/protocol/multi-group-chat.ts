@@ -12,6 +12,7 @@ import { identify } from "@libp2p/identify";
 import { dcutr } from "@libp2p/dcutr";
 import { kadDHT } from "@libp2p/kad-dht";
 import { ping } from "@libp2p/ping";
+import type { Ping as PingService } from "@libp2p/ping";
 import { bootstrap } from "@libp2p/bootstrap";
 import { peerIdFromString } from "@libp2p/peer-id";
 import { multiaddr } from "@multiformats/multiaddr";
@@ -21,60 +22,35 @@ import { encodeWireMessage, decodeWireMessage } from "./codec.js";
 import { buildCircuitRelayAddresses } from "./peer-id-sharing.js";
 import { createProviderCid, ANYPOST_CHAT_NAMESPACE } from "./dht-config.js";
 import { createEncryptedMessage } from "../shared/factories.js";
-import type { GroupId, WireMessage } from "../shared/schemas.js";
+import type { WireMessage } from "../shared/schemas.js";
 import { IPFS_BOOTSTRAP_WSS_PEERS } from "../libp2p/bootstrap-peers.js";
+import type { ChatMessageEvent, PeerInfo, NetworkStatus, NetworkEvent } from "./plaintext-chat.js";
 
-export type ChatMessageEvent = {
-  readonly senderPeerId: string;
-  readonly senderDisplayName?: string;
-  readonly text: string;
-  readonly timestamp: number;
-  readonly id: string;
+export type MultiGroupChatMessageEvent = ChatMessageEvent & {
+  readonly groupId: string;
 };
 
-type MessageListener = (message: ChatMessageEvent) => void;
-
-export type PeerInfo = {
-  readonly peerId: string;
-  readonly addrs: readonly string[];
-  readonly direction: "inbound" | "outbound";
-  readonly protocol: string;
-};
-
-export type NetworkStatus = {
-  readonly peerId: string;
-  readonly multiaddrs: readonly string[];
-  readonly topic: string;
-  readonly peers: readonly PeerInfo[];
-  readonly subscriberCount: number;
-};
-
-export type NetworkEvent = {
-  readonly timestamp: number;
-  readonly type: "peer-connect" | "peer-disconnect" | "subscription-change"
-    | "pubsub-message" | "dial-attempt" | "dial-success" | "dial-failure"
-    | "relay-reservation" | "address-change" | "gossipsub-mesh" | "info";
-  readonly detail: string;
-};
-
+type MessageListener = (message: MultiGroupChatMessageEvent) => void;
 type EventListener = (event: NetworkEvent) => void;
 
-export type PlaintextChat = {
+export type MultiGroupChat = {
   readonly peerId: string;
   readonly multiaddrs: readonly Multiaddr[];
-  readonly peerCount: () => number;
-  readonly getNetworkStatus: () => NetworkStatus;
-  readonly connectTo: (addr: Multiaddr) => Promise<void>;
-  readonly connectToPeerId: (targetPeerId: string) => Promise<void>;
-  readonly sendMessage: (text: string, displayName?: string) => Promise<void>;
+  readonly joinGroup: (groupId: string) => void;
+  readonly leaveGroup: (groupId: string) => void;
+  readonly getJoinedGroups: () => readonly string[];
+  readonly sendMessage: (groupId: string, text: string, displayName?: string) => Promise<void>;
   readonly onMessage: (listener: MessageListener) => () => void;
   readonly onPeerChange: (listener: (count: number) => void) => () => void;
   readonly onEvent: (listener: EventListener) => () => void;
+  readonly getNetworkStatus: () => NetworkStatus;
+  readonly connectTo: (addr: Multiaddr) => Promise<void>;
+  readonly connectToPeerId: (targetPeerId: string) => Promise<void>;
+  readonly pingPeer: (targetPeerId: string) => Promise<number>;
   readonly stop: () => Promise<void>;
 };
 
-type CreatePlaintextChatOptions = {
-  readonly groupId: GroupId;
+type CreateMultiGroupChatOptions = {
   readonly listenAddresses?: readonly string[];
   readonly bootstrapPeers?: readonly string[];
   readonly useTransports?: "tcp" | "websocket";
@@ -82,11 +58,10 @@ type CreatePlaintextChatOptions = {
 
 const DEFAULT_CHANNEL_ID = "b1ffbc99-9c0b-4ef8-bb6d-6bb9bd380a22";
 
-export const createPlaintextChat = async (
-  options: CreatePlaintextChatOptions,
-): Promise<PlaintextChat> => {
+export const createMultiGroupChat = async (
+  options: CreateMultiGroupChatOptions = {},
+): Promise<MultiGroupChat> => {
   const {
-    groupId,
     listenAddresses = [],
     bootstrapPeers = [],
     useTransports = "websocket",
@@ -147,9 +122,10 @@ export const createPlaintextChat = async (
         },
       });
 
-  const topic = groupTopic(groupId);
   const pubsub = node.services.pubsub as PubSub;
-  const listeners: MessageListener[] = [];
+  const topicToGroupId = new Map<string, string>();
+  const joinedGroups: string[] = [];
+  const messageListeners: MessageListener[] = [];
   const peerChangeListeners: Array<(count: number) => void> = [];
   const eventListeners: EventListener[] = [];
 
@@ -214,7 +190,6 @@ export const createPlaintextChat = async (
   });
 
   emit("info", `Node started: ${node.peerId.toString()}`);
-  emit("info", `Topic: ${topic}`);
 
   const dialedPeers = new Set<string>();
 
@@ -239,7 +214,8 @@ export const createPlaintextChat = async (
 
   const handlePubsubMessage = (event: CustomEvent) => {
     const detail = event.detail as { topic: string; data: Uint8Array };
-    if (detail.topic !== topic) return;
+    const matchedGroupId = topicToGroupId.get(detail.topic);
+    if (matchedGroupId === undefined) return;
 
     const result = decodeWireMessage(detail.data);
     if (!result.success) return;
@@ -248,21 +224,21 @@ export const createPlaintextChat = async (
     if (wireMessage.type !== "encrypted_message") return;
 
     const payload = wireMessage.payload;
-    const chatMessage: ChatMessageEvent = {
+    const chatMessage: MultiGroupChatMessageEvent = {
       id: payload.id,
       senderPeerId: payload.senderPeerId,
       senderDisplayName: payload.senderDisplayName,
       text: new TextDecoder().decode(payload.ciphertext),
       timestamp: payload.timestamp,
+      groupId: matchedGroupId,
     };
 
-    emit("pubsub-message", `Message from ${peerId({ toString: () => payload.senderPeerId })}... (${new TextDecoder().decode(payload.ciphertext).slice(0, 40)})`);
+    emit("pubsub-message", `Message from ${peerId({ toString: () => payload.senderPeerId })}... in group ${matchedGroupId.slice(0, 8)}...`);
     attemptDirectConnect(payload.senderPeerId);
 
-    listeners.forEach((listener) => listener(chatMessage));
+    messageListeners.forEach((listener) => listener(chatMessage));
   };
 
-  pubsub.subscribe(topic);
   pubsub.addEventListener("message", handlePubsubMessage);
 
   if (isBrowser) {
@@ -276,7 +252,65 @@ export const createPlaintextChat = async (
     get multiaddrs() {
       return node.getMultiaddrs();
     },
-    peerCount: () => node.getPeers().length,
+    joinGroup: (groupId: string) => {
+      if (joinedGroups.includes(groupId)) return;
+      const topic = groupTopic(groupId);
+      topicToGroupId.set(topic, groupId);
+      joinedGroups.push(groupId);
+      pubsub.subscribe(topic);
+      emit("info", `Joined group ${groupId.slice(0, 8)}... (topic: ${topic})`);
+    },
+    leaveGroup: (groupId: string) => {
+      const idx = joinedGroups.indexOf(groupId);
+      if (idx === -1) return;
+      const topic = groupTopic(groupId);
+      pubsub.unsubscribe(topic);
+      topicToGroupId.delete(topic);
+      joinedGroups.splice(idx, 1);
+      emit("info", `Left group ${groupId.slice(0, 8)}...`);
+    },
+    getJoinedGroups: () => [...joinedGroups],
+    sendMessage: async (groupId: string, text: string, displayName?: string) => {
+      const topic = groupTopic(groupId);
+      const payload = createEncryptedMessage({
+        id: crypto.randomUUID(),
+        groupId,
+        channelId: DEFAULT_CHANNEL_ID,
+        senderPeerId: node.peerId.toString(),
+        senderDisplayName: displayName,
+        epoch: 0,
+        ciphertext: new TextEncoder().encode(text),
+        timestamp: Date.now(),
+      });
+
+      const wireMessage: WireMessage = {
+        type: "encrypted_message",
+        payload,
+      };
+
+      await pubsub.publish(topic, encodeWireMessage(wireMessage));
+    },
+    onMessage: (listener: MessageListener) => {
+      messageListeners.push(listener);
+      return () => {
+        const index = messageListeners.indexOf(listener);
+        if (index !== -1) messageListeners.splice(index, 1);
+      };
+    },
+    onPeerChange: (listener: (count: number) => void) => {
+      peerChangeListeners.push(listener);
+      return () => {
+        const index = peerChangeListeners.indexOf(listener);
+        if (index !== -1) peerChangeListeners.splice(index, 1);
+      };
+    },
+    onEvent: (listener: EventListener) => {
+      eventListeners.push(listener);
+      return () => {
+        const index = eventListeners.indexOf(listener);
+        if (index !== -1) eventListeners.splice(index, 1);
+      };
+    },
     getNetworkStatus: () => {
       const connections = node.getConnections();
       const peers: PeerInfo[] = connections.map((conn) => ({
@@ -285,13 +319,17 @@ export const createPlaintextChat = async (
         direction: conn.direction,
         protocol: conn.multiplexer ?? "unknown",
       }));
-      const subscribers = pubsub.getSubscribers(topic);
+      const allTopics = [...topicToGroupId.keys()];
+      const totalSubscribers = allTopics.reduce(
+        (sum, t) => sum + pubsub.getSubscribers(t).length,
+        0,
+      );
       return {
         peerId: node.peerId.toString(),
         multiaddrs: node.getMultiaddrs().map((ma) => ma.toString()),
-        topic,
+        topic: allTopics.join(", "),
         peers,
-        subscriberCount: subscribers.length,
+        subscriberCount: totalSubscribers,
       };
     },
     connectTo: async (addr: Multiaddr) => {
@@ -337,56 +375,21 @@ export const createPlaintextChat = async (
 
       throw new Error(`Could not connect to peer ${targetPeerId}`);
     },
-    sendMessage: async (text: string, displayName?: string) => {
-      const payload = createEncryptedMessage({
-        id: crypto.randomUUID(),
-        groupId,
-        channelId: DEFAULT_CHANNEL_ID,
-        senderPeerId: node.peerId.toString(),
-        senderDisplayName: displayName,
-        epoch: 0,
-        ciphertext: new TextEncoder().encode(text),
-        timestamp: Date.now(),
-      });
-
-      const wireMessage: WireMessage = {
-        type: "encrypted_message",
-        payload,
-      };
-
-      await pubsub.publish(topic, encodeWireMessage(wireMessage));
-    },
-    onMessage: (listener: MessageListener) => {
-      listeners.push(listener);
-      return () => {
-        const index = listeners.indexOf(listener);
-        if (index !== -1) {
-          listeners.splice(index, 1);
-        }
-      };
-    },
-    onPeerChange: (listener: (count: number) => void) => {
-      peerChangeListeners.push(listener);
-      return () => {
-        const index = peerChangeListeners.indexOf(listener);
-        if (index !== -1) {
-          peerChangeListeners.splice(index, 1);
-        }
-      };
-    },
-    onEvent: (listener: EventListener) => {
-      eventListeners.push(listener);
-      return () => {
-        const index = eventListeners.indexOf(listener);
-        if (index !== -1) {
-          eventListeners.splice(index, 1);
-        }
-      };
+    pingPeer: async (targetPeerId: string) => {
+      const remotePeer = peerIdFromString(targetPeerId);
+      const services = node.services as Record<string, unknown>;
+      const pingService = services.ping as PingService | undefined;
+      if (!pingService) throw new Error("Ping service not available");
+      return pingService.ping(remotePeer);
     },
     stop: async () => {
       pubsub.removeEventListener("message", handlePubsubMessage);
-      pubsub.unsubscribe(topic);
-      listeners.length = 0;
+      for (const topic of topicToGroupId.keys()) {
+        pubsub.unsubscribe(topic);
+      }
+      topicToGroupId.clear();
+      joinedGroups.length = 0;
+      messageListeners.length = 0;
       peerChangeListeners.length = 0;
       eventListeners.length = 0;
       await node.stop();

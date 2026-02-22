@@ -14,6 +14,7 @@ export type GraphEdge = {
   readonly target: string;
   readonly transport: TransportType;
   readonly direction: "inbound" | "outbound";
+  readonly latencyMs: number | null;
 };
 
 export type TopologyGraph = {
@@ -22,6 +23,21 @@ export type TopologyGraph = {
 };
 
 const SHORT_ID_LENGTH = 16;
+
+const MIN_LATENCY = 10;
+const MAX_LATENCY = 2000;
+const MIN_DISTANCE = 60;
+const MAX_DISTANCE = 250;
+const DEFAULT_DISTANCE = 100;
+
+export const latencyToDistance = (ms: number | null): number => {
+  if (ms === null) return DEFAULT_DISTANCE;
+  const clamped = Math.max(MIN_LATENCY, Math.min(MAX_LATENCY, ms));
+  const logMin = Math.log(MIN_LATENCY);
+  const logMax = Math.log(MAX_LATENCY);
+  const ratio = (Math.log(clamped) - logMin) / (logMax - logMin);
+  return Math.round(MIN_DISTANCE + ratio * (MAX_DISTANCE - MIN_DISTANCE));
+};
 
 export const classifyTransport = (addr: string): TransportType => {
   if (addr.includes("/webrtc")) return "webrtc";
@@ -74,6 +90,7 @@ export const classifyNodeType = (
 export const buildTopologyGraph = (
   status: NetworkStatus,
   bootstrapAddrs: readonly string[],
+  latencyMap?: ReadonlyMap<string, number>,
 ): TopologyGraph => {
   const selfNode: GraphNode = {
     id: status.peerId,
@@ -110,6 +127,7 @@ export const buildTopologyGraph = (
       target: peer.peerId,
       transport: classifyTransport(primaryAddr),
       direction: peer.direction,
+      latencyMs: latencyMap?.get(peer.peerId) ?? null,
     });
   }
 
