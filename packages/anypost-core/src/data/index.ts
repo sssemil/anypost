@@ -31,6 +31,10 @@ export type {
   MessageContentStore,
 } from "./persistence.js";
 
+export { openAccountStore } from "./account-store.js";
+
+export type { AccountStore } from "./account-store.js";
+
 export { createYjsSyncProvider } from "./yjs-sync-provider.js";
 
 export type {
