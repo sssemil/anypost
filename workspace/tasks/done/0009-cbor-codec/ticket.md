@@ -10,13 +10,13 @@ Implement CBOR encode/decode codec in `anypost-core/src/protocol/codec.ts` using
 
 ## Acceptance Criteria
 
-- [ ] `encodeWireMessage` produces a `Uint8Array` from a typed message
-- [ ] `decodeWireMessage` reconstructs the original typed message from bytes
-- [ ] Round-trip encode/decode preserves data for every `WireMessageType`
-- [ ] Malformed input returns error `Result` (not throws)
-- [ ] `Uint8Array` payloads (encrypted message content) handled correctly
-- [ ] Zod validation applied at decode boundary
-- [ ] All tests pass via TDD
+- [x] `encodeWireMessage` produces a `Uint8Array` from a typed message
+- [x] `decodeWireMessage` reconstructs the original typed message from bytes
+- [x] Round-trip encode/decode preserves data for every `WireMessageType`
+- [x] Malformed input returns error `Result` (not throws)
+- [x] `Uint8Array` payloads (encrypted message content) handled correctly
+- [x] Zod validation applied at decode boundary
+- [x] All tests pass via TDD
 
 ## Implementation Notes
 
@@ -39,3 +39,5 @@ Implement CBOR encode/decode codec in `anypost-core/src/protocol/codec.ts` using
 ## History
 
 - 2026-02-22 Created from brutal-plan PLAN-0001
+- 2026-02-22 08:36 Started work on this task
+- 2026-02-22 08:38 Task completed. CBOR codec with Zod validation, 8 tests, 21 lines. Final review passed with 0 CRITICAL, 0 MAJOR findings.

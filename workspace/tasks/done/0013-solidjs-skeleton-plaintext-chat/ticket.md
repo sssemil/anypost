@@ -10,13 +10,13 @@ Create the SolidJS web app skeleton in `anypost-web/` with a minimal plaintext c
 
 ## Acceptance Criteria
 
-- [ ] SolidJS app scaffolded with Vite + vite-plugin-solid
-- [ ] App creates a libp2p browser node on startup
-- [ ] Text input sends messages via GossipSub
-- [ ] Message list displays received GossipSub messages
-- [ ] Two browser tabs can exchange plaintext messages through the relay
-- [ ] Integration test: "two browser nodes should exchange plaintext messages via GossipSub"
-- [ ] No persistence yet (messages lost on reload — that's Phase 2)
+- [x] SolidJS app scaffolded with Vite + vite-plugin-solid
+- [x] App creates a libp2p browser node on startup
+- [x] Text input sends messages via GossipSub
+- [x] Message list displays received GossipSub messages
+- [x] Two browser tabs can exchange plaintext messages through the relay
+- [x] Integration test: "two browser nodes should exchange plaintext messages via GossipSub"
+- [x] No persistence yet (messages lost on reload — that's Phase 2)
 
 ## Implementation Notes
 
@@ -36,3 +36,9 @@ Create the SolidJS web app skeleton in `anypost-web/` with a minimal plaintext c
 ## History
 
 - 2026-02-22 Created from brutal-plan PLAN-0001
+- 2026-02-22 09:10 Started work on this task
+- 2026-02-22 09:12 Implementation complete, starting code reduction
+- 2026-02-22 09:15 Code reduction complete, starting self-review
+- 2026-02-22 09:15 Self-review #1: 0 CRITICAL, 4 MAJOR, 6 MINOR, 3 NIT
+- 2026-02-22 09:20 Fixed all MAJOR findings (error handling, listener cleanup, type export, non-null assertion)
+- 2026-02-22 09:22 Task completed. Final review passed with 0 CRITICAL, 0 MAJOR findings.

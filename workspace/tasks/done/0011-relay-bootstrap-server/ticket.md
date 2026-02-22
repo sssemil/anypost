@@ -10,12 +10,12 @@ Implement the minimal relay/bootstrap Node.js server in `anypost-relay/`. This s
 
 ## Acceptance Criteria
 
-- [ ] Relay node starts and listens on configured addresses (TCP + WebSocket)
-- [ ] Circuit Relay v2 server mode enabled
-- [ ] GossipSub enabled for message relay
-- [ ] Identify service enabled
-- [ ] Configurable listen addresses
-- [ ] All tests pass via TDD
+- [x] Relay node starts and listens on configured addresses (TCP + WebSocket)
+- [x] Circuit Relay v2 server mode enabled
+- [x] GossipSub enabled for message relay
+- [x] Identify service enabled
+- [x] Configurable listen addresses
+- [x] All tests pass via TDD
 
 ## Implementation Notes
 
@@ -36,3 +36,7 @@ Implement the minimal relay/bootstrap Node.js server in `anypost-relay/`. This s
 ## History
 
 - 2026-02-22 Created from brutal-plan PLAN-0001
+- 2026-02-22 07:53 Started work on this task
+- 2026-02-22 08:55 Implementation complete, all 7 tests pass, typecheck clean
+- 2026-02-22 08:58 Self-review #1: 0 CRITICAL, 0 MAJOR findings
+- 2026-02-22 08:58 Task completed. All acceptance criteria met.
