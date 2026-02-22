@@ -40,6 +40,7 @@ export {
   recordSuccess,
   getNextDelay,
   getAttemptCount,
+  applyJitter,
 } from "./reconnect-backoff.js";
 export {
   createSubscriptionTracker,

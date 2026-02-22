@@ -14,11 +14,23 @@ type CreateBackoffOptions = {
 
 export const createBackoffState = (
   options?: CreateBackoffOptions,
-): BackoffState => ({
-  attempts: 0,
-  baseDelayMs: options?.baseDelayMs ?? DEFAULT_BASE_DELAY_MS,
-  maxDelayMs: options?.maxDelayMs ?? DEFAULT_MAX_DELAY_MS,
-});
+): BackoffState => {
+  const baseDelayMs = options?.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
+  const maxDelayMs = options?.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
+
+  if (!Number.isFinite(baseDelayMs) || baseDelayMs <= 0) {
+    throw new RangeError(
+      `baseDelayMs must be a positive finite number, got ${baseDelayMs}`,
+    );
+  }
+  if (!Number.isFinite(maxDelayMs) || maxDelayMs <= 0) {
+    throw new RangeError(
+      `maxDelayMs must be a positive finite number, got ${maxDelayMs}`,
+    );
+  }
+
+  return { attempts: 0, baseDelayMs, maxDelayMs };
+};
 
 export const recordFailure = (state: BackoffState): BackoffState => ({
   ...state,
@@ -37,3 +49,8 @@ export const getNextDelay = (state: BackoffState): number =>
   );
 
 export const getAttemptCount = (state: BackoffState): number => state.attempts;
+
+export const applyJitter = (
+  delayMs: number,
+  rng: () => number,
+): number => delayMs * (0.5 + 0.5 * rng());
