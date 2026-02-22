@@ -60,7 +60,10 @@ export const App = () => {
   const [eventLog, setEventLog] = createSignal<readonly NetworkEvent[]>([]);
   const [showEventLog, setShowEventLog] = createSignal(true);
   const [bootstrapAddrs, setBootstrapAddrs] = createSignal<readonly string[]>([]);
+  const [peerSearch, setPeerSearch] = createSignal("");
+  const [peerPage, setPeerPage] = createSignal(0);
 
+  const PEERS_PER_PAGE = 10;
   const MAX_EVENTS = 200;
 
   let chat: PlaintextChat | undefined;
@@ -484,49 +487,106 @@ export const App = () => {
                     </div>
 
                     {/* Connected peers */}
-                    <Show
-                      when={status().peers.length > 0}
-                      fallback={
-                        <div style={{ ...dimText, "text-align": "center", padding: "8px" }}>
-                          No peers connected. Waiting for connections...
-                        </div>
-                      }
-                    >
-                      <For each={status().peers}>
-                        {(peer) => (
-                          <div style={{
-                            padding: "8px",
-                            "margin-bottom": "6px",
-                            "background-color": "#fff",
-                            "border-radius": "6px",
-                            border: "1px solid #e8e8e8",
-                          }}>
-                            <div style={{ display: "flex", "justify-content": "space-between", "align-items": "center" }}>
-                              <code style={{ "font-weight": "bold" }}>{peer.peerId.slice(0, 20)}...</code>
-                              <span style={{
-                                padding: "2px 8px",
-                                "border-radius": "10px",
-                                "font-size": "0.75em",
-                                "background-color": peer.direction === "outbound" ? "#e3f2fd" : "#f3e5f5",
-                                color: peer.direction === "outbound" ? "#1565c0" : "#7b1fa2",
-                              }}>
-                                {peer.direction}
-                              </span>
-                            </div>
-                            <For each={peer.addrs}>
-                              {(addr) => (
-                                <div style={{ ...dimText, "word-break": "break-all", "margin-top": "4px" }}>
-                                  {addr}
-                                </div>
-                              )}
-                            </For>
-                            <div style={{ ...dimText, "margin-top": "2px" }}>
-                              muxer: {peer.protocol}
-                            </div>
+                    <details style={{ "margin-top": "4px" }}>
+                      <summary style={{ cursor: "pointer", ...dimText }}>
+                        Connected peers ({status().peers.length})
+                      </summary>
+                      <Show
+                        when={status().peers.length > 0}
+                        fallback={
+                          <div style={{ ...dimText, "text-align": "center", padding: "8px" }}>
+                            No peers connected. Waiting for connections...
                           </div>
-                        )}
-                      </For>
-                    </Show>
+                        }
+                      >
+                        <div style={{ "margin-top": "6px", "margin-bottom": "6px" }}>
+                          <input
+                            type="text"
+                            value={peerSearch()}
+                            onInput={(e) => { setPeerSearch(e.currentTarget.value); setPeerPage(0); }}
+                            placeholder="Search by peer ID or address..."
+                            style={{ width: "100%", padding: "6px 8px", "border-radius": "4px", border: "1px solid #ddd", ...mono, "font-size": "0.85em", "box-sizing": "border-box" }}
+                          />
+                        </div>
+                        {(() => {
+                          const query = peerSearch().toLowerCase();
+                          const filtered = query
+                            ? status().peers.filter((p) =>
+                                p.peerId.toLowerCase().includes(query) ||
+                                p.addrs.some((a) => a.toLowerCase().includes(query))
+                              )
+                            : status().peers;
+                          const totalPages = Math.max(1, Math.ceil(filtered.length / PEERS_PER_PAGE));
+                          const page = Math.min(peerPage(), totalPages - 1);
+                          const paged = filtered.slice(page * PEERS_PER_PAGE, (page + 1) * PEERS_PER_PAGE);
+                          return (
+                            <>
+                              <For each={paged}>
+                                {(peer) => (
+                                  <div style={{
+                                    padding: "8px",
+                                    "margin-bottom": "6px",
+                                    "background-color": "#fff",
+                                    "border-radius": "6px",
+                                    border: "1px solid #e8e8e8",
+                                  }}>
+                                    <div style={{ display: "flex", "justify-content": "space-between", "align-items": "center" }}>
+                                      <code style={{ "font-weight": "bold" }}>{peer.peerId.slice(0, 20)}...</code>
+                                      <span style={{
+                                        padding: "2px 8px",
+                                        "border-radius": "10px",
+                                        "font-size": "0.75em",
+                                        "background-color": peer.direction === "outbound" ? "#e3f2fd" : "#f3e5f5",
+                                        color: peer.direction === "outbound" ? "#1565c0" : "#7b1fa2",
+                                      }}>
+                                        {peer.direction}
+                                      </span>
+                                    </div>
+                                    <For each={peer.addrs}>
+                                      {(addr) => (
+                                        <div style={{ ...dimText, "word-break": "break-all", "margin-top": "4px" }}>
+                                          {addr}
+                                        </div>
+                                      )}
+                                    </For>
+                                    <div style={{ ...dimText, "margin-top": "2px" }}>
+                                      muxer: {peer.protocol}
+                                    </div>
+                                  </div>
+                                )}
+                              </For>
+                              <Show when={totalPages > 1}>
+                                <div style={{ display: "flex", "justify-content": "center", "align-items": "center", gap: "8px", "margin-top": "8px" }}>
+                                  <button
+                                    onClick={() => setPeerPage(Math.max(0, page - 1))}
+                                    disabled={page === 0}
+                                    style={{ background: "none", border: "1px solid #ddd", "border-radius": "4px", padding: "2px 8px", cursor: page === 0 ? "default" : "pointer", ...dimText }}
+                                  >
+                                    prev
+                                  </button>
+                                  <span style={dimText}>
+                                    {page + 1} / {totalPages}
+                                    {query && ` (${filtered.length} match${filtered.length !== 1 ? "es" : ""})`}
+                                  </span>
+                                  <button
+                                    onClick={() => setPeerPage(Math.min(totalPages - 1, page + 1))}
+                                    disabled={page >= totalPages - 1}
+                                    style={{ background: "none", border: "1px solid #ddd", "border-radius": "4px", padding: "2px 8px", cursor: page >= totalPages - 1 ? "default" : "pointer", ...dimText }}
+                                  >
+                                    next
+                                  </button>
+                                </div>
+                              </Show>
+                              <Show when={query && filtered.length === 0}>
+                                <div style={{ ...dimText, "text-align": "center", padding: "8px" }}>
+                                  No peers matching "{peerSearch()}"
+                                </div>
+                              </Show>
+                            </>
+                          );
+                        })()}
+                      </Show>
+                    </details>
                   </div>
                 )}
               </Show>
