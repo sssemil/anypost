@@ -129,13 +129,13 @@ Investigate DMLS (Distributed MLS) extensions for decentralized commit ordering:
 ### Confirmed Assumptions
 - At least 3 public relay/bootstrap nodes for redundancy
 - Custom Yjs-over-libp2p sync provider is required (existing library abandoned)
-- ts-mls version decided during spike phase
-- DMLS feasibility determined during spike/Phase 3
+- ts-mls v2.0.0-rc.8 chosen (spike 0001 validated, v1.6.1 has critical serialization bug)
+- DMLS deferred to v2+ (spike 0004: no TS implementation exists, requires ts-mls fork)
 - Video mesh limited to 4 peers (not 8) for bandwidth reasons
 - GossipSub sufficient for dev/small networks; DHT/rendezvous needed for production
 
 ### Open Questions (Deferred)
-- Exact DMLS implementation approach (pending spike investigation)
+- ~~DMLS implementation approach~~ → RESOLVED: Steward model for v1 (see spikes/GO-NO-GO.md)
 - TURN-like relay fallback for media streams (if WebRTC hole-punching fails)
 - Message archival/compaction strategy for long-lived groups
 
@@ -233,8 +233,8 @@ Split into sub-phases:
 |----------|--------|-----------|
 | Language | TypeScript strict mode | Aligns with dev guidelines, browser-native |
 | P2P | js-libp2p | Only option for browser P2P with WebRTC |
-| Encryption | MLS (RFC 9420) + DMLS investigation | Gold standard for group E2E; DMLS for decentralized ordering |
-| MLS library | ts-mls (version decided in spike) | Pure TS, immutable API, browser-native |
+| Encryption | MLS (RFC 9420) + steward model | Gold standard for group E2E; DMLS deferred — steward model for v1 |
+| MLS library | ts-mls v2.0.0-rc.8 | Pure TS, immutable API, browser-native. v1.6.1 has critical serialization bug. |
 | CRDT | Yjs | Proven sync, IndexedDB persistence |
 | UI | SolidJS | Fine-grained reactivity, small bundle |
 | Wire format | CBOR (cbor-x) | Compact binary, browser-compatible |
@@ -269,7 +269,7 @@ Split into sub-phases:
 
 ## Acceptance Criteria
 
-- [ ] Phase 0 spike produces go/no-go decisions for ts-mls, libp2p WebRTC, Yjs-over-libp2p, DMLS
+- [x] Phase 0 spike produces go/no-go decisions for ts-mls, libp2p WebRTC, Yjs-over-libp2p, DMLS (see spikes/GO-NO-GO.md)
 - [ ] Two browser peers exchange E2E encrypted text messages through a relay
 - [ ] Messages persist in IndexedDB and sync when offline peer reconnects
 - [ ] Groups with multiple text channels and member management work

@@ -17,12 +17,12 @@ Decisions to make:
 
 ## Acceptance Criteria
 
-- [ ] Go/no-go decision documented for each dependency (ts-mls, libp2p, Yjs, DMLS)
-- [ ] ts-mls version chosen with rationale
-- [ ] DMLS approach decided (full DMLS vs steward model vs hybrid)
-- [ ] Any plan adjustments documented (scope changes, alternative libraries, etc.)
-- [ ] Risk register updated based on spike findings
-- [ ] Green light to proceed to Phase 1 (or documented blockers)
+- [x] Go/no-go decision documented for each dependency (ts-mls GO, libp2p CONDITIONAL GO, Yjs GO, DMLS DEFER)
+- [x] ts-mls version chosen with rationale (v2.0.0-rc.8 — critical bug in v1.6.1, better API)
+- [x] DMLS approach decided (steward model for v1, DMLS deferred — no TS implementation exists)
+- [x] Any plan adjustments documented (6 adjustments: MLS version, steward model, testing env, wire serialization, GossipSub config, version pinning)
+- [x] Risk register updated based on spike findings (3 new risks: GossipSub version incompatibility, MLS wire serialization, libp2p v3.x stream API)
+- [x] Green light to proceed to Phase 1 (GREEN LIGHT — all dependencies validated)
 
 ## Implementation Notes
 
@@ -39,3 +39,5 @@ Decisions to make:
 ## History
 
 - 2026-02-22 Created from brutal-plan PLAN-0001
+- 2026-02-22 07:14 Started work on this task
+- 2026-02-22 Go/no-go decisions documented in spikes/GO-NO-GO.md. All dependencies validated. GREEN LIGHT for Phase 1.
