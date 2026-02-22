@@ -73,13 +73,15 @@ export const createChannelInGroup = (
   options: { readonly name: string; readonly type: "text" | "voice" },
 ): Channel => {
   const channels = getChannels(doc);
-  const sortOrder = channels.length;
-  const channel: Channel = {
-    id: crypto.randomUUID() as ChannelId,
+  const sortOrder = channels.length === 0
+    ? 0
+    : Math.max(...channels.map((c) => c.sortOrder)) + 1;
+  const channel = ChannelSchema.parse({
+    id: crypto.randomUUID(),
     name: options.name,
     type: options.type,
     sortOrder,
-  };
+  });
   addChannel(doc, channel);
   return channel;
 };
@@ -87,11 +89,9 @@ export const createChannelInGroup = (
 export const deleteChannel = (doc: Y.Doc, channelId: ChannelId): void => {
   doc.transact(() => {
     const channelsArray = doc.getArray<Channel>("channels");
-    for (let i = channelsArray.length - 1; i >= 0; i--) {
-      const channel = channelsArray.get(i);
-      if (channel && (channel as Channel).id === channelId) {
-        channelsArray.delete(i, 1);
-      }
+    const index = channelsArray.toArray().findIndex((ch) => ch.id === channelId);
+    if (index !== -1) {
+      channelsArray.delete(index, 1);
     }
 
     const messagesArray = doc.getArray(`messages:${channelId}`);

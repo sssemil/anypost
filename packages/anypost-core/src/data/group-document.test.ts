@@ -165,6 +165,22 @@ describe("Group Document", () => {
       expect(channels[2].type).toBe("voice");
     });
 
+    it("should assign non-colliding sort order after a channel is deleted", () => {
+      const doc = createGroupDocument(TEST_GROUP_ID);
+
+      createChannelInGroup(doc, { name: "general", type: "text" });
+      createChannelInGroup(doc, { name: "random", type: "text" });
+      const before = getChannels(doc);
+      deleteChannel(doc, before[0].id);
+
+      createChannelInGroup(doc, { name: "announcements", type: "text" });
+
+      const channels = getChannels(doc);
+      const sortOrders = channels.map((ch) => ch.sortOrder);
+      const uniqueSortOrders = new Set(sortOrders);
+      expect(uniqueSortOrders.size).toBe(sortOrders.length);
+    });
+
     it("should delete a channel and its messages", () => {
       const doc = createGroupDocument(TEST_GROUP_ID);
       const channelId = "c1ffbc99-9c0b-4ef8-bb6d-6bb9bd380a01";
