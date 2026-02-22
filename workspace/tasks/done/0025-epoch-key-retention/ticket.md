@@ -10,13 +10,13 @@ Implement bounded epoch key retention for MLS. Keys are retained for a configura
 
 ## Acceptance Criteria
 
-- [ ] Epoch keys retained within configured window
-- [ ] Keys beyond retention window deleted automatically
-- [ ] Messages from retained epochs still decryptable
-- [ ] Messages from deleted epochs cannot be decrypted (forward secrecy)
-- [ ] Retention window configurable (time-based and epoch-count-based)
-- [ ] Message buffer for out-of-order epoch key arrival
-- [ ] All tests pass via TDD
+- [x] Epoch keys retained within configured window
+- [x] Keys beyond retention window deleted automatically
+- [x] Messages from retained epochs still decryptable
+- [x] Messages from deleted epochs cannot be decrypted (forward secrecy)
+- [x] Retention window configurable (time-based and epoch-count-based)
+- [x] Message buffer for out-of-order epoch key arrival (done in 0024)
+- [x] All tests pass via TDD
 
 ## Implementation Notes
 
@@ -35,3 +35,10 @@ Implement bounded epoch key retention for MLS. Keys are retained for a configura
 ## History
 
 - 2026-02-22 Created from brutal-plan PLAN-0001
+- 2026-02-22 11:57 Started work on this task
+- 2026-02-22 12:30 Implementation complete, started code reduction
+- 2026-02-22 12:35 Code reduction complete, started self-review
+- 2026-02-22 13:10 Self-review #1: 1 CRITICAL, 2 MAJOR, 1 MINOR — NEEDS_FIXES
+- 2026-02-22 13:20 Fixed all findings: key zeroing, bigint sort, config validation, outer spread
+- 2026-02-22 13:25 Self-review #2: 0 CRITICAL, 1 MAJOR (SecretTree zeroing — fixed) — APPROVED
+- 2026-02-22 13:30 Task completed. Final review passed with 0 CRITICAL, 0 MAJOR findings.
