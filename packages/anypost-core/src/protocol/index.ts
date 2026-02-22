@@ -63,3 +63,13 @@ export {
   DEFAULT_MAX_MESSAGE_SIZE_BYTES,
   validateMessageSize,
 } from "./message-validation.js";
+export {
+  DEFAULT_HEALTH_CHECK_INTERVAL_MS,
+  DEFAULT_FAILURE_THRESHOLD,
+  createRelayHealthState,
+  recordHealthCheckSuccess,
+  recordHealthCheckFailure,
+  selectBestRelay,
+  getRelayStatus,
+  getHealthyRelayCount,
+} from "./relay-health.js";
