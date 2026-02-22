@@ -83,6 +83,7 @@ type LeaveGroupResult = {
 export const createGroup = async (
   options: CreateGroupOptions,
 ): Promise<CreateGroupResult> => {
+  const now = Date.now();
   const groupIdBytes = new TextEncoder().encode(options.groupId);
 
   const mlsGroupState = await createMlsGroup({
@@ -102,7 +103,7 @@ export const createGroup = async (
   const metadata: GroupMetadata = {
     name: options.groupName,
     description: "",
-    createdAt: Date.now(),
+    createdAt: now,
     stewardPeerId: options.creatorPeerId,
   };
   setGroupMetadata(groupDoc, metadata);
@@ -110,7 +111,7 @@ export const createGroup = async (
   const ownerMember: Member = {
     accountPublicKey: options.creatorAccountPublicKey,
     role: "owner",
-    joinedAt: Date.now(),
+    joinedAt: now,
   };
   addMember(groupDoc, ownerMember);
 

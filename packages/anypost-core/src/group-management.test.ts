@@ -26,70 +26,67 @@ const setupIdentity = (peerId: string) => ({
 const setupKeyPackage = async (context: MlsContext, identity: Uint8Array) =>
   createMlsKeyPackage({ context, identity });
 
+const setupGroup = async () => {
+  const context = await setupContext();
+  const creator = setupIdentity("12D3KooWCreator1");
+  const creatorKp = await setupKeyPackage(context, creator.identity);
+
+  const result = await createGroup({
+    context,
+    groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+    groupName: "Test Group",
+    creatorKeyPackage: creatorKp,
+    creatorIdentity: creator.identity,
+    creatorAccountPublicKey: creator.accountPublicKey,
+    creatorPeerId: creator.peerId,
+  });
+
+  return { context, creator, creatorKp, ...result };
+};
+
+const setupGroupWithInvitee = async () => {
+  const group = await setupGroup();
+  const invitee = setupIdentity("12D3KooWInvitee1");
+  const inviteeKp = await setupKeyPackage(group.context, invitee.identity);
+
+  const inviteResult = await inviteMember({
+    stewardState: group.stewardState,
+    groupDoc: group.groupDoc,
+    inviteeKeyPackage: inviteeKp.publicPackage,
+    inviteeIdentity: invitee.identity,
+    inviteeAccountPublicKey: invitee.accountPublicKey,
+    senderIdentity: group.creator.identity,
+  });
+
+  return { ...group, invitee, inviteeKp, inviteResult };
+};
+
 describe("Group management", () => {
   describe("createGroup", () => {
     it("should create an MLS group and a Yjs doc", async () => {
-      const context = await setupContext();
-      const creator = setupIdentity("12D3KooWCreator1");
-      const creatorKp = await setupKeyPackage(context, creator.identity);
+      const { stewardState, groupDoc } = await setupGroup();
 
-      const result = await createGroup({
-        context,
-        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
-        groupName: "Test Group",
-        creatorKeyPackage: creatorKp,
-        creatorIdentity: creator.identity,
-        creatorAccountPublicKey: creator.accountPublicKey,
-        creatorPeerId: creator.peerId,
-      });
-
-      expect(getMemberCount(result.stewardState.groupState)).toBe(1);
-      expect(result.groupDoc.guid).toBe(
-        "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
-      );
+      expect(getMemberCount(stewardState.groupState)).toBe(1);
+      expect(groupDoc.guid).toBe("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11");
     });
 
     it("should set the group creator as owner role", async () => {
-      const context = await setupContext();
-      const creator = setupIdentity("12D3KooWCreator1");
-      const creatorKp = await setupKeyPackage(context, creator.identity);
+      const { groupDoc, creator } = await setupGroup();
 
-      const result = await createGroup({
-        context,
-        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
-        groupName: "Test Group",
-        creatorKeyPackage: creatorKp,
-        creatorIdentity: creator.identity,
-        creatorAccountPublicKey: creator.accountPublicKey,
-        creatorPeerId: creator.peerId,
-      });
-
-      const members = getMembers(result.groupDoc);
+      const members = getMembers(groupDoc);
       expect(members).toHaveLength(1);
       expect(members[0].accountPublicKey).toBe(creator.accountPublicKey);
       expect(members[0].role).toBe("owner");
     });
 
     it("should set the owner as initial steward", async () => {
-      const context = await setupContext();
-      const creator = setupIdentity("12D3KooWCreator1");
-      const creatorKp = await setupKeyPackage(context, creator.identity);
+      const { groupDoc, stewardState, creator } = await setupGroup();
 
-      const result = await createGroup({
-        context,
-        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
-        groupName: "Test Group",
-        creatorKeyPackage: creatorKp,
-        creatorIdentity: creator.identity,
-        creatorAccountPublicKey: creator.accountPublicKey,
-        creatorPeerId: creator.peerId,
-      });
-
-      const metadata = getGroupMetadata(result.groupDoc);
+      const metadata = getGroupMetadata(groupDoc);
       expect(metadata).not.toBeNull();
       expect(metadata!.stewardPeerId).toBe(creator.peerId);
 
-      const stewardMembers = getStewardMembers(result.stewardState);
+      const stewardMembers = getStewardMembers(stewardState);
       expect(stewardMembers).toHaveLength(1);
       expect(stewardMembers[0].identity).toEqual(creator.identity);
     });
@@ -97,30 +94,8 @@ describe("Group management", () => {
 
   describe("inviteMember", () => {
     it("should add member to MLS group and Yjs doc", async () => {
-      const context = await setupContext();
-      const creator = setupIdentity("12D3KooWCreator1");
-      const invitee = setupIdentity("12D3KooWInvitee1");
-      const creatorKp = await setupKeyPackage(context, creator.identity);
-      const inviteeKp = await setupKeyPackage(context, invitee.identity);
-
-      const group = await createGroup({
-        context,
-        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
-        groupName: "Test Group",
-        creatorKeyPackage: creatorKp,
-        creatorIdentity: creator.identity,
-        creatorAccountPublicKey: creator.accountPublicKey,
-        creatorPeerId: creator.peerId,
-      });
-
-      const inviteResult = await inviteMember({
-        stewardState: group.stewardState,
-        groupDoc: group.groupDoc,
-        inviteeKeyPackage: inviteeKp.publicPackage,
-        inviteeIdentity: invitee.identity,
-        inviteeAccountPublicKey: invitee.accountPublicKey,
-        senderIdentity: creator.identity,
-      });
+      const { groupDoc, invitee, inviteResult } =
+        await setupGroupWithInvitee();
 
       expect(
         getMemberCount(inviteResult.newStewardState.groupState),
@@ -128,7 +103,7 @@ describe("Group management", () => {
       expect(inviteResult.welcome).toBeDefined();
       expect(inviteResult.commit).toBeDefined();
 
-      const yjsMembers = getMembers(group.groupDoc);
+      const yjsMembers = getMembers(groupDoc);
       expect(yjsMembers).toHaveLength(2);
       const inviteeEntry = yjsMembers.find(
         (m) => m.accountPublicKey === invitee.accountPublicKey,
@@ -136,34 +111,52 @@ describe("Group management", () => {
       expect(inviteeEntry).toBeDefined();
       expect(inviteeEntry!.role).toBe("member");
     });
+
+    it("should reject inviting a member already in the group", async () => {
+      const { groupDoc, invitee, inviteResult, context } =
+        await setupGroupWithInvitee();
+
+      const duplicateKp = await setupKeyPackage(context, invitee.identity);
+
+      await expect(
+        inviteMember({
+          stewardState: inviteResult.newStewardState,
+          groupDoc,
+          inviteeKeyPackage: duplicateKp.publicPackage,
+          inviteeIdentity: invitee.identity,
+          inviteeAccountPublicKey: invitee.accountPublicKey,
+          senderIdentity: invitee.identity,
+        }),
+      ).rejects.toThrow("already a group member");
+
+      expect(getMembers(groupDoc)).toHaveLength(2);
+    });
+
+    it("should reject invite from non-member sender", async () => {
+      const { stewardState, groupDoc, context } = await setupGroup();
+      const outsider = setupIdentity("12D3KooWOutsider1");
+      const invitee = setupIdentity("12D3KooWInvitee1");
+      const inviteeKp = await setupKeyPackage(context, invitee.identity);
+
+      await expect(
+        inviteMember({
+          stewardState,
+          groupDoc,
+          inviteeKeyPackage: inviteeKp.publicPackage,
+          inviteeIdentity: invitee.identity,
+          inviteeAccountPublicKey: invitee.accountPublicKey,
+          senderIdentity: outsider.identity,
+        }),
+      ).rejects.toThrow("not a group member");
+
+      expect(getMembers(groupDoc)).toHaveLength(1);
+    });
   });
 
   describe("acceptInvite", () => {
     it("should join MLS group and create Yjs doc", async () => {
-      const context = await setupContext();
-      const creator = setupIdentity("12D3KooWCreator1");
-      const invitee = setupIdentity("12D3KooWInvitee1");
-      const creatorKp = await setupKeyPackage(context, creator.identity);
-      const inviteeKp = await setupKeyPackage(context, invitee.identity);
-
-      const group = await createGroup({
-        context,
-        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
-        groupName: "Test Group",
-        creatorKeyPackage: creatorKp,
-        creatorIdentity: creator.identity,
-        creatorAccountPublicKey: creator.accountPublicKey,
-        creatorPeerId: creator.peerId,
-      });
-
-      const inviteResult = await inviteMember({
-        stewardState: group.stewardState,
-        groupDoc: group.groupDoc,
-        inviteeKeyPackage: inviteeKp.publicPackage,
-        inviteeIdentity: invitee.identity,
-        inviteeAccountPublicKey: invitee.accountPublicKey,
-        senderIdentity: creator.identity,
-      });
+      const { context, inviteeKp, inviteResult } =
+        await setupGroupWithInvitee();
 
       const acceptResult = await acceptInvite({
         context,
@@ -181,34 +174,12 @@ describe("Group management", () => {
 
   describe("leaveGroup", () => {
     it("should remove member from MLS group and Yjs doc", async () => {
-      const context = await setupContext();
-      const creator = setupIdentity("12D3KooWCreator1");
-      const invitee = setupIdentity("12D3KooWInvitee1");
-      const creatorKp = await setupKeyPackage(context, creator.identity);
-      const inviteeKp = await setupKeyPackage(context, invitee.identity);
-
-      const group = await createGroup({
-        context,
-        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
-        groupName: "Test Group",
-        creatorKeyPackage: creatorKp,
-        creatorIdentity: creator.identity,
-        creatorAccountPublicKey: creator.accountPublicKey,
-        creatorPeerId: creator.peerId,
-      });
-
-      const inviteResult = await inviteMember({
-        stewardState: group.stewardState,
-        groupDoc: group.groupDoc,
-        inviteeKeyPackage: inviteeKp.publicPackage,
-        inviteeIdentity: invitee.identity,
-        inviteeAccountPublicKey: invitee.accountPublicKey,
-        senderIdentity: creator.identity,
-      });
+      const { groupDoc, creator, invitee, inviteResult } =
+        await setupGroupWithInvitee();
 
       const leaveResult = await leaveGroup({
         stewardState: inviteResult.newStewardState,
-        groupDoc: group.groupDoc,
+        groupDoc,
         memberIdentity: invitee.identity,
         memberAccountPublicKey: invitee.accountPublicKey,
         senderIdentity: creator.identity,
@@ -219,9 +190,26 @@ describe("Group management", () => {
       ).toBe(1);
       expect(leaveResult.commit).toBeDefined();
 
-      const yjsMembers = getMembers(group.groupDoc);
+      const yjsMembers = getMembers(groupDoc);
       expect(yjsMembers).toHaveLength(1);
       expect(yjsMembers[0].accountPublicKey).toBe(creator.accountPublicKey);
+    });
+
+    it("should reject removing a non-member", async () => {
+      const { stewardState, groupDoc, creator } = await setupGroup();
+      const unknown = setupIdentity("12D3KooWUnknown1");
+
+      await expect(
+        leaveGroup({
+          stewardState,
+          groupDoc,
+          memberIdentity: unknown.identity,
+          memberAccountPublicKey: unknown.accountPublicKey,
+          senderIdentity: creator.identity,
+        }),
+      ).rejects.toThrow("not a group member");
+
+      expect(getMembers(groupDoc)).toHaveLength(1);
     });
   });
 });
