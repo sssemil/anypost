@@ -2,7 +2,6 @@ import {
   addMember,
   removeMember,
   updateKeys,
-  getMemberCount,
 } from "./mls-manager.js";
 import type { MlsContext, MlsGroupState } from "./mls-manager.js";
 import type { KeyPackage, MlsFramedMessage, Welcome } from "ts-mls";
@@ -16,7 +15,7 @@ export type StewardProposal =
   | { readonly kind: "remove"; readonly identity: Uint8Array }
   | { readonly kind: "update" };
 
-type MemberRecord = {
+export type MemberRecord = {
   readonly identity: Uint8Array;
   readonly memberIndex: number;
 };
@@ -64,7 +63,11 @@ export const createStewardState = (
 
 const identitiesMatch = (a: Uint8Array, b: Uint8Array): boolean => {
   if (a.length !== b.length) return false;
-  return a.every((byte, i) => byte === b[i]);
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a[i] ^ b[i];
+  }
+  return result === 0;
 };
 
 const findMemberByIdentity = (
@@ -107,17 +110,19 @@ const processAddProposal = async (
   state: StewardState,
   proposal: AddProposal,
 ): Promise<ProcessProposalResult> => {
+  if (isMember(state.members, proposal.identity)) {
+    throw new Error("Cannot add: identity is already a group member");
+  }
+
   const result = await addMember({
     context: state.context,
     groupState: state.groupState,
     newMemberKeyPackage: proposal.keyPackage,
   });
 
-  const newMemberIndex = getMemberCount(result.newGroupState) - 1;
-
   const newMembers = [
     ...state.members,
-    { identity: proposal.identity, memberIndex: newMemberIndex },
+    { identity: proposal.identity, memberIndex: result.newMemberLeafIndex },
   ];
 
   return {

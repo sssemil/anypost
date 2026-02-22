@@ -50,4 +50,5 @@ export type {
   StewardState,
   ProcessProposalResult,
   ProposalQueue,
+  MemberRecord,
 } from "./steward.js";

@@ -45,6 +45,7 @@ export type AddMemberResult = {
   readonly newGroupState: MlsGroupState;
   readonly welcome: Welcome;
   readonly commit: MlsFramedMessage;
+  readonly newMemberLeafIndex: number;
 };
 
 export type EncryptMessageResult = {
@@ -134,6 +135,26 @@ type AddMemberOptions = {
   readonly newMemberKeyPackage: KeyPackage;
 };
 
+const findNewLeafIndex = (
+  oldClientState: ClientState,
+  newClientState: ClientState,
+): number => {
+  const oldTree = oldClientState.ratchetTree;
+  const newTree = newClientState.ratchetTree;
+
+  for (let nodeIndex = 0; nodeIndex < newTree.length; nodeIndex += 2) {
+    const wasBlank =
+      nodeIndex >= oldTree.length || oldTree[nodeIndex] === undefined;
+    const isNowOccupied = newTree[nodeIndex] !== undefined;
+
+    if (wasBlank && isNowOccupied) {
+      return nodeIndex / 2;
+    }
+  }
+
+  throw new Error("Could not determine new member leaf index");
+};
+
 export const addMember = async (
   options: AddMemberOptions,
 ): Promise<AddMemberResult> => {
@@ -155,10 +176,16 @@ export const addMember = async (
     throw new Error("addMember did not produce a Welcome message");
   }
 
+  const newMemberLeafIndex = findNewLeafIndex(
+    options.groupState.clientState,
+    result.newState,
+  );
+
   return {
     newGroupState: { clientState: result.newState },
     welcome: result.welcome.welcome,
     commit: result.commit,
+    newMemberLeafIndex,
   };
 };
 

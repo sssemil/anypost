@@ -170,21 +170,141 @@ describe("Steward Commit Ordering", () => {
     const queue = createProposalQueue();
 
     const queue1 = enqueueProposal(queue, {
-      kind: "add",
-      keyPackage: new Uint8Array(0) as never,
-      identity: makeIdentity("bob"),
+      kind: "update",
     });
 
     const queue2 = enqueueProposal(queue1, {
-      kind: "update",
+      kind: "remove",
+      identity: makeIdentity("bob"),
     });
 
     const { proposals, emptyQueue } = drainProposalQueue(queue2);
 
     expect(proposals).toHaveLength(2);
-    expect(proposals[0].kind).toBe("add");
-    expect(proposals[1].kind).toBe("update");
+    expect(proposals[0].kind).toBe("update");
+    expect(proposals[1].kind).toBe("remove");
     expect(drainProposalQueue(emptyQueue).proposals).toHaveLength(0);
+  });
+
+  it("update proposal should advance epoch without changing membership", async () => {
+    const { state } = await setupSteward();
+
+    const result = await processStewardProposal({
+      state,
+      proposal: { kind: "update" },
+      senderIdentity: makeIdentity("steward"),
+    });
+
+    expect(getEpoch(result.newState.groupState)).toBe(1n);
+    expect(getStewardMembers(result.newState)).toHaveLength(1);
+    expect(result.welcomeMessage).toBeUndefined();
+    expect(result.commitBroadcast.commit).toBeDefined();
+  });
+
+  it("should reject adding a member who is already in the group", async () => {
+    const { context, state } = await setupSteward();
+    const bobKp = await setupKeyPackage(context, "bob");
+
+    const addResult = await processStewardProposal({
+      state,
+      proposal: {
+        kind: "add",
+        keyPackage: bobKp.publicPackage,
+        identity: makeIdentity("bob"),
+      },
+      senderIdentity: makeIdentity("steward"),
+    });
+
+    const bobKp2 = await setupKeyPackage(context, "bob");
+
+    await expect(
+      processStewardProposal({
+        state: addResult.newState,
+        proposal: {
+          kind: "add",
+          keyPackage: bobKp2.publicPackage,
+          identity: makeIdentity("bob"),
+        },
+        senderIdentity: makeIdentity("steward"),
+      }),
+    ).rejects.toThrow("already a group member");
+  });
+
+  it("should correctly track member index after remove and re-add", async () => {
+    const { context, state } = await setupSteward();
+    const bobKp = await setupKeyPackage(context, "bob");
+    const charlieKp = await setupKeyPackage(context, "charlie");
+
+    const addBob = await processStewardProposal({
+      state,
+      proposal: {
+        kind: "add",
+        keyPackage: bobKp.publicPackage,
+        identity: makeIdentity("bob"),
+      },
+      senderIdentity: makeIdentity("steward"),
+    });
+
+    const addCharlie = await processStewardProposal({
+      state: addBob.newState,
+      proposal: {
+        kind: "add",
+        keyPackage: charlieKp.publicPackage,
+        identity: makeIdentity("charlie"),
+      },
+      senderIdentity: makeIdentity("steward"),
+    });
+
+    const removeBob = await processStewardProposal({
+      state: addCharlie.newState,
+      proposal: {
+        kind: "remove",
+        identity: makeIdentity("bob"),
+      },
+      senderIdentity: makeIdentity("steward"),
+    });
+
+    const daveKp = await setupKeyPackage(context, "dave");
+    const addDave = await processStewardProposal({
+      state: removeBob.newState,
+      proposal: {
+        kind: "add",
+        keyPackage: daveKp.publicPackage,
+        identity: makeIdentity("dave"),
+      },
+      senderIdentity: makeIdentity("steward"),
+    });
+
+    expect(getMemberCount(addDave.newState.groupState)).toBe(3);
+
+    const removeDave = await processStewardProposal({
+      state: addDave.newState,
+      proposal: {
+        kind: "remove",
+        identity: makeIdentity("dave"),
+      },
+      senderIdentity: makeIdentity("steward"),
+    });
+
+    expect(getMemberCount(removeDave.newState.groupState)).toBe(2);
+    expect(getStewardMembers(removeDave.newState)).toHaveLength(2);
+
+    const remainingMembers = getStewardMembers(removeDave.newState);
+    const remainingIdentities = remainingMembers.map((m) => m.identity);
+    expect(remainingIdentities).toContainEqual(makeIdentity("steward"));
+    expect(remainingIdentities).toContainEqual(makeIdentity("charlie"));
+
+    const removeCharlie = await processStewardProposal({
+      state: removeDave.newState,
+      proposal: {
+        kind: "remove",
+        identity: makeIdentity("charlie"),
+      },
+      senderIdentity: makeIdentity("steward"),
+    });
+
+    expect(getMemberCount(removeCharlie.newState.groupState)).toBe(1);
+    expect(getStewardMembers(removeCharlie.newState)).toHaveLength(1);
   });
 
   it("remove proposal should not produce a welcome message", async () => {
