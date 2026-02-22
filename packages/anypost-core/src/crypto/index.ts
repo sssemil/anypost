@@ -35,3 +35,19 @@ export type {
   RemoveMemberResult,
   UpdateKeysResult,
 } from "./mls-manager.js";
+
+export {
+  createStewardState,
+  processStewardProposal,
+  getStewardMembers,
+  createProposalQueue,
+  enqueueProposal,
+  drainProposalQueue,
+} from "./steward.js";
+
+export type {
+  StewardProposal,
+  StewardState,
+  ProcessProposalResult,
+  ProposalQueue,
+} from "./steward.js";
