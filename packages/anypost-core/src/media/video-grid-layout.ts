@@ -4,7 +4,8 @@ type GridLayout = {
 };
 
 export const getGridLayout = (participantCount: number): GridLayout => {
-  if (participantCount <= 0) return { columns: 0, rows: 0 };
+  if (!Number.isFinite(participantCount) || participantCount <= 0)
+    return { columns: 0, rows: 0 };
   if (participantCount === 1) return { columns: 1, rows: 1 };
   if (participantCount === 2) return { columns: 2, rows: 1 };
 

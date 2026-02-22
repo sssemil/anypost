@@ -37,4 +37,16 @@ describe("Video Grid Layout", () => {
   it("should return 3x3 grid for 8 participants", () => {
     expect(getGridLayout(8)).toEqual({ columns: 3, rows: 3 });
   });
+
+  it("should return 0x0 for negative participant count", () => {
+    expect(getGridLayout(-1)).toEqual({ columns: 0, rows: 0 });
+  });
+
+  it("should return 0x0 for NaN participant count", () => {
+    expect(getGridLayout(NaN)).toEqual({ columns: 0, rows: 0 });
+  });
+
+  it("should return 0x0 for Infinity participant count", () => {
+    expect(getGridLayout(Infinity)).toEqual({ columns: 0, rows: 0 });
+  });
 });
