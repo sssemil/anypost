@@ -120,6 +120,26 @@ export const UserProfileSchema = z.object({
 
 export type UserProfile = z.infer<typeof UserProfileSchema>;
 
+export const NotificationPreferenceKeySchema = z.enum([
+  "messages",
+  "mentions",
+  "sounds",
+]);
+
+export type NotificationPreferenceKey = z.infer<
+  typeof NotificationPreferenceKeySchema
+>;
+
+export const NotificationPreferencesSchema = z.object({
+  messages: z.boolean(),
+  mentions: z.boolean(),
+  sounds: z.boolean(),
+});
+
+export type NotificationPreferences = z.infer<
+  typeof NotificationPreferencesSchema
+>;
+
 export const DeviceCertificateSchema = z.object({
   devicePeerId: PeerIdSchema,
   accountPublicKey: Uint8ArraySchema,

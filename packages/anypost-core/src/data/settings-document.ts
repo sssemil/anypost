@@ -1,6 +1,11 @@
 import * as Y from "yjs";
 import { bytesToHex } from "@noble/hashes/utils.js";
-import { UserProfileSchema } from "../shared/schemas.js";
+import {
+  UserProfileSchema,
+  NotificationPreferencesSchema,
+  type NotificationPreferenceKey,
+  type NotificationPreferences,
+} from "../shared/schemas.js";
 
 export const createSettingsDocument = (
   accountPublicKey: Uint8Array,
@@ -27,14 +32,6 @@ export const getDisplayName = (doc: Y.Doc): string | null => {
   return result.success ? result.data.displayName : null;
 };
 
-type NotificationPreferenceKey = "messages" | "mentions" | "sounds";
-
-type NotificationPreferences = {
-  readonly messages: boolean;
-  readonly mentions: boolean;
-  readonly sounds: boolean;
-};
-
 const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
   messages: true,
   mentions: true,
@@ -52,23 +49,17 @@ export const setNotificationPreference = (
   });
 };
 
-const readBooleanPref = (
-  notificationsMap: Y.Map<unknown>,
-  key: NotificationPreferenceKey,
-): boolean => {
-  const raw = notificationsMap.get(key);
-  return typeof raw === "boolean" ? raw : DEFAULT_NOTIFICATION_PREFERENCES[key];
-};
-
 export const getNotificationPreferences = (
   doc: Y.Doc,
 ): NotificationPreferences => {
   const notificationsMap = doc.getMap("notifications");
-  return {
-    messages: readBooleanPref(notificationsMap, "messages"),
-    mentions: readBooleanPref(notificationsMap, "mentions"),
-    sounds: readBooleanPref(notificationsMap, "sounds"),
-  };
+  if (notificationsMap.size === 0) return DEFAULT_NOTIFICATION_PREFERENCES;
+  const raw = Object.fromEntries(notificationsMap.entries());
+  const result = NotificationPreferencesSchema.safeParse({
+    ...DEFAULT_NOTIFICATION_PREFERENCES,
+    ...raw,
+  });
+  return result.success ? result.data : DEFAULT_NOTIFICATION_PREFERENCES;
 };
 
 export const formatUserDisplay = (

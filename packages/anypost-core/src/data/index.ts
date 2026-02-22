@@ -25,6 +25,11 @@ export {
   getNotificationPreferences,
 } from "./settings-document.js";
 
+export type {
+  NotificationPreferenceKey,
+  NotificationPreferences,
+} from "../shared/schemas.js";
+
 export {
   createPersistedGroupDocument,
   createPersistedSettingsDocument,
