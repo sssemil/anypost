@@ -8,6 +8,7 @@
     "./crypto": "./src/crypto/index.ts",
     "./data": "./src/data/index.ts",
     "./protocol": "./src/protocol/index.ts",
+    "./group-management": "./src/group-management.ts",
     "./media": "./src/media/index.ts",
     "./libp2p": "./src/libp2p/index.ts"
   },
