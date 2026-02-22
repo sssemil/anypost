@@ -86,3 +86,14 @@ export {
   recordWarningShown,
   hasWarningBeenShown,
 } from "./state-loss-detector.js";
+
+export {
+  DEFAULT_MESSAGE_THRESHOLD,
+  DEFAULT_RETAINED_MESSAGE_COUNT,
+  createCompactionPolicy,
+  isCompactionNeeded,
+  calculateRetainedWindow,
+  recordCompaction,
+  getLastCompactionTime,
+  getCompactionCount,
+} from "./compaction-policy.js";
