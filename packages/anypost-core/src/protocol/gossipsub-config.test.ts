@@ -11,36 +11,36 @@ import {
 } from "./gossipsub-config.js";
 
 describe("Opaque topic names", () => {
-  it("should produce a hex string for a group topic", () => {
-    const topic = createOpaqueTopicName("group", "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "salt123");
+  it("should produce a hex string for a group topic", async () => {
+    const topic = await createOpaqueTopicName("group", "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "salt123");
 
     expect(topic).toMatch(/^[a-f0-9]{64}$/);
   });
 
-  it("should produce different topics for different group IDs", () => {
-    const topic1 = createOpaqueTopicName("group", "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "salt");
-    const topic2 = createOpaqueTopicName("group", "b1ffbc99-9c0b-4ef8-bb6d-6bb9bd380a22", "salt");
+  it("should produce different topics for different group IDs", async () => {
+    const topic1 = await createOpaqueTopicName("group", "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "salt");
+    const topic2 = await createOpaqueTopicName("group", "b1ffbc99-9c0b-4ef8-bb6d-6bb9bd380a22", "salt");
 
     expect(topic1).not.toBe(topic2);
   });
 
-  it("should produce different topics for different salts", () => {
-    const topic1 = createOpaqueTopicName("group", "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "salt1");
-    const topic2 = createOpaqueTopicName("group", "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "salt2");
+  it("should produce different topics for different salts", async () => {
+    const topic1 = await createOpaqueTopicName("group", "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "salt1");
+    const topic2 = await createOpaqueTopicName("group", "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "salt2");
 
     expect(topic1).not.toBe(topic2);
   });
 
-  it("should produce different topics for different purposes", () => {
-    const groupTopic = createOpaqueTopicName("group", "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "salt");
-    const deviceTopic = createOpaqueTopicName("device", "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "salt");
+  it("should produce different topics for different purposes", async () => {
+    const groupTopic = await createOpaqueTopicName("group", "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "salt");
+    const deviceTopic = await createOpaqueTopicName("device", "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "salt");
 
     expect(groupTopic).not.toBe(deviceTopic);
   });
 
-  it("should be deterministic for same inputs", () => {
-    const topic1 = createOpaqueTopicName("group", "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "salt");
-    const topic2 = createOpaqueTopicName("group", "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "salt");
+  it("should be deterministic for same inputs", async () => {
+    const topic1 = await createOpaqueTopicName("group", "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "salt");
+    const topic2 = await createOpaqueTopicName("group", "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "salt");
 
     expect(topic1).toBe(topic2);
   });

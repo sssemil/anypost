@@ -10,11 +10,11 @@ Implement Yjs document compaction to manage memory and storage growth in long-li
 
 ## Acceptance Criteria
 
-- [ ] Document compaction reduces Yjs doc size for groups with many messages
-- [ ] Compaction preserves recent messages and all metadata
-- [ ] Archived messages still accessible from IndexedDB (not from CRDT)
-- [ ] Compaction threshold configurable (e.g., >10000 messages)
-- [ ] All tests pass via TDD
+- [x] Document compaction reduces Yjs doc size for groups with many messages
+- [x] Compaction preserves recent messages and all metadata
+- [x] Archived messages still accessible from IndexedDB (not from CRDT)
+- [x] Compaction threshold configurable (e.g., >10000 messages)
+- [x] All tests pass via TDD
 
 ## Implementation Notes
 
@@ -33,3 +33,9 @@ Implement Yjs document compaction to manage memory and storage growth in long-li
 ## History
 
 - 2026-02-22 Created from brutal-plan PLAN-0001
+- 2026-02-22 16:40 Started work on this task
+- 2026-02-22 16:45 Implementation complete, starting code reduction
+- 2026-02-22 16:45 Code reduction complete, starting self-review
+- 2026-02-22 16:47 Self-review #1: 0 CRITICAL, 3 MAJOR, 0 MINOR, 0 NIT — fixed integer validation, negative guard, strengthened tests
+- 2026-02-22 16:49 Self-review #2: 0 CRITICAL, 1 MAJOR, 2 MINOR, 0 NIT — fixed no-op compaction (retainedMessageCount == messageThreshold)
+- 2026-02-22 16:50 Task completed. Final review passed with 0 CRITICAL, 0 MAJOR findings.

@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 export const DEFAULT_MESH_D = 6;
 export const DEFAULT_MESH_D_LOW = 4;
 export const DEFAULT_MESH_D_HIGH = 12;
@@ -27,12 +25,16 @@ type CreateGossipSubParamsOptions = {
   readonly Dlazy?: number;
 };
 
-export const createOpaqueTopicName = (
+export const createOpaqueTopicName = async (
   purpose: string,
   id: string,
   salt: string,
-): string =>
-  createHash("sha256").update(`${purpose}:${id}:${salt}`).digest("hex");
+): Promise<string> => {
+  const data = new TextEncoder().encode(`${purpose}:${id}:${salt}`);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = new Uint8Array(hashBuffer);
+  return Array.from(hashArray, (b) => b.toString(16).padStart(2, "0")).join("");
+};
 
 export const shouldUseFloodSub = (peerCount: number): boolean =>
   peerCount < FLOODSUB_PEER_THRESHOLD;
