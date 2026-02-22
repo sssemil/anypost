@@ -1,3 +1,4 @@
+import { zeroOutUint8Array } from "ts-mls";
 import type { MlsGroupState } from "./mls-manager.js";
 
 const DEFAULT_MAX_AGE_DAYS = 30;
@@ -21,10 +22,19 @@ export type EpochTracker = {
 
 export const createRetentionConfig = (
   overrides?: Partial<RetentionConfig>,
-): RetentionConfig => ({
-  maxAgeDays: overrides?.maxAgeDays ?? DEFAULT_MAX_AGE_DAYS,
-  maxEpochCount: overrides?.maxEpochCount ?? DEFAULT_MAX_EPOCH_COUNT,
-});
+): RetentionConfig => {
+  const maxAgeDays = overrides?.maxAgeDays ?? DEFAULT_MAX_AGE_DAYS;
+  const maxEpochCount = overrides?.maxEpochCount ?? DEFAULT_MAX_EPOCH_COUNT;
+
+  if (!Number.isFinite(maxAgeDays) || maxAgeDays <= 0) {
+    throw new RangeError(`maxAgeDays must be a positive finite number, got ${maxAgeDays}`);
+  }
+  if (!Number.isInteger(maxEpochCount) || maxEpochCount < 1) {
+    throw new RangeError(`maxEpochCount must be a positive integer, got ${maxEpochCount}`);
+  }
+
+  return { maxAgeDays, maxEpochCount };
+};
 
 export const createEpochTracker = (groupId: string): EpochTracker => ({
   groupId,
@@ -53,9 +63,11 @@ export const getExpiredEpochs = (
   if (tracker.epochs.length === 0) return [];
 
   const maxAgeMs = config.maxAgeDays * MS_PER_DAY;
-  const sortedByEpoch = [...tracker.epochs].sort(
-    (a, b) => Number(b.epoch - a.epoch),
-  );
+  const sortedByEpoch = [...tracker.epochs].sort((a, b) => {
+    if (b.epoch > a.epoch) return 1;
+    if (b.epoch < a.epoch) return -1;
+    return 0;
+  });
   const latestN = new Set(
     sortedByEpoch.slice(0, config.maxEpochCount).map((r) => r.epoch),
   );
@@ -91,11 +103,18 @@ export const pruneGroupState = (
 ): MlsGroupState => {
   const expiredSet = new Set(options.expiredEpochs);
   const oldData = options.groupState.clientState.historicalReceiverData;
-  const newData = new Map(
-    [...oldData].filter(([epoch]) => !expiredSet.has(epoch)),
-  );
+  const newData = new Map(oldData);
+
+  for (const [epoch, data] of oldData) {
+    if (expiredSet.has(epoch)) {
+      zeroOutUint8Array(data.resumptionPsk);
+      zeroOutUint8Array(data.senderDataSecret);
+      newData.delete(epoch);
+    }
+  }
 
   return {
+    ...options.groupState,
     clientState: {
       ...options.groupState.clientState,
       historicalReceiverData: newData,

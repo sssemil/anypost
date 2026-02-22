@@ -80,6 +80,18 @@ describe("Epoch key retention", () => {
       expect(config.maxAgeDays).toBe(7);
       expect(config.maxEpochCount).toBe(50);
     });
+
+    it("should reject zero maxAgeDays", () => {
+      expect(() => createRetentionConfig({ maxAgeDays: 0 })).toThrow(RangeError);
+    });
+
+    it("should reject negative maxEpochCount", () => {
+      expect(() => createRetentionConfig({ maxEpochCount: -1 })).toThrow(RangeError);
+    });
+
+    it("should reject non-finite maxAgeDays", () => {
+      expect(() => createRetentionConfig({ maxAgeDays: Infinity })).toThrow(RangeError);
+    });
   });
 
   describe("epoch tracking", () => {
@@ -287,6 +299,33 @@ describe("Epoch key retention", () => {
           new TextEncoder().encode("epoch 1 message"),
         );
       }
+    });
+
+    it("should zero key material in pruned epoch receiver data", async () => {
+      const { context, aliceState, bobState } = await setupTwoMemberGroup();
+
+      const update1 = await updateKeys({ context, groupState: aliceState });
+      const bob1 = await processReceivedMessage({
+        context,
+        groupState: bobState,
+        message: update1.commit,
+      });
+
+      const epochData = bob1.newGroupState.clientState.historicalReceiverData.get(1n);
+      expect(epochData).toBeDefined();
+
+      const pskBefore = new Uint8Array(epochData!.resumptionPsk);
+      const senderSecretBefore = new Uint8Array(epochData!.senderDataSecret);
+      expect(pskBefore.some((b) => b !== 0)).toBe(true);
+      expect(senderSecretBefore.some((b) => b !== 0)).toBe(true);
+
+      pruneGroupState({
+        groupState: bob1.newGroupState,
+        expiredEpochs: [1n],
+      });
+
+      expect(epochData!.resumptionPsk.every((b) => b === 0)).toBe(true);
+      expect(epochData!.senderDataSecret.every((b) => b === 0)).toBe(true);
     });
 
     it("messages from pruned epochs should not be decryptable (forward secrecy)", async () => {
