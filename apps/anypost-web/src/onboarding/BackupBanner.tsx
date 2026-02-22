@@ -10,42 +10,40 @@ export const BackupBanner = (props: BackupBannerProps) => {
   const [confirmed, setConfirmed] = createSignal(false);
 
   return (
-    <div class="bg-tg-warning/15 border border-tg-warning/30 rounded-xl px-4 py-3 mb-4 font-sans">
-      <div class="flex items-center justify-between">
-        <strong class="text-tg-warning">
-          Back up your account
-        </strong>
+    <div class="bg-tg-warning/15 border-b border-tg-warning/30 px-3 py-2.5">
+      <div class="flex items-center justify-between mb-1">
+        <strong class="text-tg-warning text-xs">Back up your account</strong>
         <button
           onClick={() => setShowSeedPhrase(!showSeedPhrase())}
-          class="py-1.5 px-3 rounded-lg border border-tg-warning/50 text-tg-warning text-sm cursor-pointer hover:bg-tg-warning/10"
+          class="text-[10px] text-tg-warning/80 hover:text-tg-warning cursor-pointer underline"
         >
-          {showSeedPhrase() ? "Hide" : "Show Seed Phrase"}
+          {showSeedPhrase() ? "Hide" : "Show"}
         </button>
       </div>
 
-      <p class="text-tg-warning/80 text-sm mb-2">
-        Save your seed phrase to recover your account on another device. Without it, your identity is lost if this device fails.
+      <p class="text-tg-warning/70 text-[11px] leading-tight">
+        Save your seed phrase or lose access if this device fails.
       </p>
 
       <Show when={showSeedPhrase()}>
-        <div class="bg-tg-chat border border-tg-border rounded-lg p-3 mb-3 font-mono text-sm text-tg-text break-words select-all">
+        <div class="bg-tg-chat border border-tg-border rounded-lg p-2 mt-2 mb-2 font-mono text-[11px] text-tg-text break-words select-all leading-relaxed">
           {props.seedPhrase}
         </div>
 
-        <label class="flex items-center gap-2 mb-2 cursor-pointer text-tg-warning text-sm">
+        <label class="flex items-center gap-1.5 mb-2 cursor-pointer text-tg-warning text-[11px]">
           <input
             type="checkbox"
             checked={confirmed()}
             onChange={(e) => setConfirmed(e.currentTarget.checked)}
             class="accent-tg-success"
           />
-          I have saved my seed phrase in a safe place
+          I've saved my seed phrase
         </label>
 
         <button
           onClick={props.onBackupConfirmed}
           disabled={!confirmed()}
-          class="py-2 px-4 rounded-xl bg-tg-success text-white cursor-pointer disabled:opacity-40 hover:bg-tg-success/80"
+          class="w-full py-1.5 rounded-lg bg-tg-success text-white text-xs cursor-pointer disabled:opacity-40 hover:bg-tg-success/80"
         >
           Confirm Backup
         </button>

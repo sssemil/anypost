@@ -438,13 +438,6 @@ export const App = () => {
       </Match>
 
       <Match when={onboardingState().status === "ready"}>
-        <Show when={backupPending()}>
-          <BackupBanner
-            seedPhrase={seedPhrase()}
-            onBackupConfirmed={() => void handleBackupConfirmed()}
-          />
-        </Show>
-
         <Show when={showConnectPanel()}>
           <div class="max-w-lg mx-auto mt-10 px-5 font-sans">
             <h1 class="text-2xl font-bold text-tg-text mb-4">Anypost</h1>
@@ -477,6 +470,21 @@ export const App = () => {
               <GroupSidebar
                 groups={sidebarGroups()}
                 activeGroupId={groupState().activeGroupId}
+                topBanners={
+                  <>
+                    <div class="bg-tg-accent/10 border-b border-tg-accent/20 px-3 py-2">
+                      <p class="text-tg-accent text-[11px] leading-tight">
+                        Beta software. Messages are <strong>not encrypted</strong> and may be lost.
+                      </p>
+                    </div>
+                    <Show when={backupPending()}>
+                      <BackupBanner
+                        seedPhrase={seedPhrase()}
+                        onBackupConfirmed={() => void handleBackupConfirmed()}
+                      />
+                    </Show>
+                  </>
+                }
                 onSelectGroup={handleSelectGroup}
                 onJoinGroup={handleJoinGroup}
                 onCreateGroup={handleCreateGroup}

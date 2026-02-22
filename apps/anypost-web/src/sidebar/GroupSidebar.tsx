@@ -1,3 +1,4 @@
+import type { JSX } from "solid-js";
 import { createSignal, For, Show } from "solid-js";
 import {
   createSidebarState,
@@ -14,6 +15,7 @@ type GroupItem = {
 type GroupSidebarProps = {
   readonly groups: readonly GroupItem[];
   readonly activeGroupId: string | null;
+  readonly topBanners?: JSX.Element;
   readonly onSelectGroup: (groupId: string) => void;
   readonly onJoinGroup: (groupId: string) => void;
   readonly onCreateGroup: () => void;
@@ -71,6 +73,8 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
 
   return (
     <div class="flex flex-col h-full bg-tg-sidebar">
+      {props.topBanners}
+
       <div class="p-3 border-b border-tg-border flex gap-2">
         <button
           onClick={() => dispatch({ type: "join-form-opened" })}
