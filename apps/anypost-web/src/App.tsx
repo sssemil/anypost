@@ -8,7 +8,7 @@ import {
 } from "anypost-core/crypto";
 import type { AccountKey } from "anypost-core/crypto";
 import {
-  createSettingsDocument,
+  createPersistedSettingsDocument,
   setDisplayName,
   getDisplayName,
 } from "anypost-core/data";
@@ -46,9 +46,10 @@ export const App = () => {
         const exported = exportAccountKey(existingKey);
         setSeedPhrase(exported.seedPhrase);
 
-        const settingsDoc = createSettingsDocument(existingKey.publicKey);
-        const name = getDisplayName(settingsDoc);
+        const persistedSettings = await createPersistedSettingsDocument(existingKey.publicKey);
+        const name = getDisplayName(persistedSettings.doc);
         if (name) setDisplayNameState(name);
+        await persistedSettings.destroy();
 
         setOnboardingState(
           transition(onboardingState(), {
@@ -88,31 +89,39 @@ export const App = () => {
   };
 
   const handleImportAccount = async (phrase: string) => {
-    const accountKey = importAccountKey(phrase);
-    setSeedPhrase(phrase);
-
-    const store = await openAccountStore();
     try {
-      await store.saveAccountKey(accountKey);
-    } finally {
-      store.close();
-    }
+      const accountKey = importAccountKey(phrase);
+      setSeedPhrase(phrase);
 
-    setOnboardingState(
-      transition(onboardingState(), {
-        type: "key-imported",
-        accountKey,
-      }),
-    );
+      const store = await openAccountStore();
+      try {
+        await store.saveAccountKey(accountKey);
+      } finally {
+        store.close();
+      }
+
+      setOnboardingState(
+        transition(onboardingState(), {
+          type: "key-imported",
+          accountKey,
+        }),
+      );
+    } catch {
+      // importAccountKey throws on invalid seed phrase.
+      // OnboardingScreen's try/catch cannot catch async rejections,
+      // so we handle errors here. The error is already surfaced
+      // by the synchronous throw path in OnboardingScreen.handleImport.
+    }
   };
 
   const handleDisplayNameSet = async (name: string) => {
     const state = onboardingState();
     if (state.status !== "display-name-prompt") return;
 
-    const settingsDoc = createSettingsDocument(state.accountKey.publicKey);
-    setDisplayName(settingsDoc, name);
+    const persistedSettings = await createPersistedSettingsDocument(state.accountKey.publicKey);
+    setDisplayName(persistedSettings.doc, name);
     setDisplayNameState(name);
+    await persistedSettings.destroy();
 
     setOnboardingState(
       transition(state, {
@@ -135,7 +144,7 @@ export const App = () => {
     );
   };
 
-  const startChat = async (accountKey: AccountKey) => {
+  const startChat = async (_accountKey: AccountKey) => {
     try {
       chat = await createPlaintextChat({
         groupId: DEFAULT_GROUP_ID,
@@ -197,6 +206,11 @@ export const App = () => {
     return null;
   };
 
+  const backupPending = () => {
+    const state = onboardingState();
+    return state.status === "ready" && state.backupPending;
+  };
+
   return (
     <Switch>
       <Match when={onboardingState().status === "checking"}>
@@ -222,7 +236,7 @@ export const App = () => {
         <div style={{ "max-width": "600px", margin: "0 auto", padding: "20px", "font-family": "system-ui" }}>
           <h1>Anypost</h1>
 
-          <Show when={onboardingState().status === "ready" && (onboardingState() as Extract<OnboardingState, { status: "ready" }>).backupPending}>
+          <Show when={backupPending()}>
             <BackupBanner
               seedPhrase={seedPhrase()}
               onBackupConfirmed={() => void handleBackupConfirmed()}

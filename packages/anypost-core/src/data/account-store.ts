@@ -37,26 +37,32 @@ export const openAccountStore = async (): Promise<AccountStore> => {
     getAccountKey: async () => {
       const publicKey = await db.get("account", "publicKey");
       const privateKey = await db.get("account", "privateKey");
-      if (!publicKey || !privateKey) return null;
-      return {
-        publicKey: publicKey as Uint8Array,
-        privateKey: privateKey as Uint8Array,
-      };
+      if (!(publicKey instanceof Uint8Array) || !(privateKey instanceof Uint8Array)) {
+        return null;
+      }
+      return { publicKey, privateKey };
     },
 
     saveAccountKey: async (key: AccountKey) => {
-      await db.put("account", new Uint8Array(key.publicKey), "publicKey");
-      await db.put("account", new Uint8Array(key.privateKey), "privateKey");
+      const tx = db.transaction("account", "readwrite");
+      const store = tx.objectStore("account");
+      store.put(new Uint8Array(key.publicKey), "publicKey");
+      store.put(new Uint8Array(key.privateKey), "privateKey");
+      await tx.done;
     },
 
     hasAccountKey: async () => {
       const publicKey = await db.get("account", "publicKey");
-      return publicKey !== undefined;
+      const privateKey = await db.get("account", "privateKey");
+      return publicKey instanceof Uint8Array && privateKey instanceof Uint8Array;
     },
 
     deleteAccountKey: async () => {
-      await db.delete("account", "publicKey");
-      await db.delete("account", "privateKey");
+      const tx = db.transaction("account", "readwrite");
+      const store = tx.objectStore("account");
+      store.delete("publicKey");
+      store.delete("privateKey");
+      await tx.done;
     },
 
     isBackedUp: async () => {
