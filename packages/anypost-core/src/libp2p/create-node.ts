@@ -1,6 +1,8 @@
 import { createLibp2p } from "libp2p";
 import type { Libp2p } from "libp2p";
 import { webSockets } from "@libp2p/websockets";
+import * as wsFilters from "@libp2p/websockets/filters";
+import { webRTC } from "@libp2p/webrtc";
 import { circuitRelayTransport } from "@libp2p/circuit-relay-v2";
 import { noise } from "@chainsafe/libp2p-noise";
 import { yamux } from "@chainsafe/libp2p-yamux";
@@ -24,13 +26,32 @@ export const createBrowserNode = async (
       : [];
 
   return createLibp2p({
-    transports: [webSockets(), circuitRelayTransport()],
+    addresses: {
+      listen: ["/p2p-circuit", "/webrtc"],
+    },
+    transports: [
+      webSockets({ filter: wsFilters.all }),
+      webRTC({
+        rtcConfiguration: {
+          iceServers: [
+            { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+          ],
+        },
+      }),
+      circuitRelayTransport({ discoverRelays: 1 }),
+    ],
     connectionEncrypters: [noise()],
     streamMuxers: [yamux()],
+    connectionGater: {
+      denyDialMultiaddr: async () => false,
+    },
     peerDiscovery,
     services: {
       identify: identify(),
-      pubsub: gossipsub(),
+      pubsub: gossipsub({
+        allowPublishToZeroTopicPeers: true,
+        runOnLimitedConnection: true,
+      }),
       dcutr: dcutr(),
     },
   });

@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+usage() {
+  cat <<EOF
+Usage: ./run <command>
+
+Commands:
+  relay          Build and start the relay node
+  web            Start the web app dev server
+  dev            Start both relay and web app (Ctrl+C stops both)
+  build          Build all packages
+  test           Run all tests
+  typecheck      Type-check all packages
+EOF
+}
+
+cmd_relay() {
+  echo "Building relay..."
+  pnpm --filter anypost-relay build
+  echo "Starting relay..."
+  pnpm --filter anypost-relay start
+}
+
+cmd_web() {
+  echo "Starting web dev server..."
+  pnpm --filter anypost-web dev
+}
+
+cmd_dev() {
+  trap 'kill 0; wait' EXIT INT TERM
+
+  echo "Building relay..."
+  pnpm --filter anypost-relay build
+
+  echo "Starting relay..."
+  pnpm --filter anypost-relay start &
+  RELAY_PID=$!
+
+  # Give the relay a moment to print its multiaddr
+  sleep 2
+
+  echo ""
+  echo "Starting web dev server..."
+  pnpm --filter anypost-web dev &
+  WEB_PID=$!
+
+  wait
+}
+
+cmd_build() {
+  pnpm run build
+}
+
+cmd_test() {
+  pnpm run test
+}
+
+cmd_typecheck() {
+  pnpm run typecheck
+}
+
+if [[ $# -eq 0 ]]; then
+  usage
+  exit 1
+fi
+
+case "$1" in
+  relay)     cmd_relay ;;
+  web)       cmd_web ;;
+  dev)       cmd_dev ;;
+  build)     cmd_build ;;
+  test)      cmd_test ;;
+  typecheck) cmd_typecheck ;;
+  *)
+    echo "Unknown command: $1"
+    usage
+    exit 1
+    ;;
+esac
