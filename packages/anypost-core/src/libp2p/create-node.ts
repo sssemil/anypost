@@ -10,6 +10,7 @@ import { gossipsub } from "@chainsafe/libp2p-gossipsub";
 import { identify } from "@libp2p/identify";
 import { dcutr } from "@libp2p/dcutr";
 import { bootstrap } from "@libp2p/bootstrap";
+import { IPFS_BOOTSTRAP_WSS_PEERS } from "./bootstrap-peers.js";
 
 type CreateBrowserNodeOptions = {
   readonly bootstrapPeers?: readonly string[];
@@ -20,9 +21,11 @@ export const createBrowserNode = async (
 ): Promise<Libp2p> => {
   const { bootstrapPeers = [] } = options;
 
+  const allBootstrapPeers = [...bootstrapPeers, ...IPFS_BOOTSTRAP_WSS_PEERS];
+
   const peerDiscovery =
-    bootstrapPeers.length > 0
-      ? [bootstrap({ list: [...bootstrapPeers] })]
+    allBootstrapPeers.length > 0
+      ? [bootstrap({ list: allBootstrapPeers })]
       : [];
 
   return createLibp2p({
@@ -38,7 +41,7 @@ export const createBrowserNode = async (
           ],
         },
       }),
-      circuitRelayTransport({ discoverRelays: 1 }),
+      circuitRelayTransport(),
     ],
     connectionEncrypters: [noise()],
     streamMuxers: [yamux()],

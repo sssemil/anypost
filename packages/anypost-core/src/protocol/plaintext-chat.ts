@@ -17,6 +17,7 @@ import { groupTopic } from "./router.js";
 import { encodeWireMessage, decodeWireMessage } from "./codec.js";
 import { createEncryptedMessage } from "../shared/factories.js";
 import type { GroupId, WireMessage } from "../shared/schemas.js";
+import { IPFS_BOOTSTRAP_WSS_PEERS } from "../libp2p/bootstrap-peers.js";
 
 export type ChatMessageEvent = {
   readonly senderPeerId: string;
@@ -84,10 +85,21 @@ export const createPlaintextChat = async (
     useTransports = "websocket",
   } = options;
 
-  const transports =
-    useTransports === "tcp"
-      ? [tcp()]
-      : [
+  const isBrowser = useTransports === "websocket";
+
+  const allBootstrapPeers = isBrowser
+    ? [...bootstrapPeers, ...IPFS_BOOTSTRAP_WSS_PEERS]
+    : [...bootstrapPeers];
+
+  const peerDiscovery =
+    allBootstrapPeers.length > 0
+      ? [bootstrap({ list: allBootstrapPeers })]
+      : [];
+
+  const node = isBrowser
+    ? await createLibp2p({
+        addresses: { listen: [...listenAddresses, "/p2p-circuit", "/webrtc"] },
+        transports: [
           webSockets({ filter: wsFilters.all }),
           webRTC({
             rtcConfiguration: {
@@ -96,37 +108,35 @@ export const createPlaintextChat = async (
               ],
             },
           }),
-          circuitRelayTransport({ discoverRelays: 1 }),
-        ];
-
-  const listenAddrs =
-    useTransports === "tcp"
-      ? [...listenAddresses]
-      : [...listenAddresses, "/p2p-circuit", "/webrtc"];
-
-  const peerDiscovery =
-    bootstrapPeers.length > 0
-      ? [bootstrap({ list: [...bootstrapPeers] })]
-      : [];
-
-  const node = await createLibp2p({
-    addresses: { listen: listenAddrs },
-    transports,
-    connectionEncrypters: [noise()],
-    streamMuxers: [yamux()],
-    connectionGater: useTransports === "websocket"
-      ? { denyDialMultiaddr: async () => false }
-      : undefined,
-    peerDiscovery,
-    services: {
-      identify: identify(),
-      pubsub: gossipsub({
-        allowPublishToZeroTopicPeers: true,
-        runOnLimitedConnection: true,
-      }),
-      ...(useTransports === "websocket" ? { dcutr: dcutr() } : {}),
-    },
-  });
+          circuitRelayTransport(),
+        ],
+        connectionEncrypters: [noise()],
+        streamMuxers: [yamux()],
+        connectionGater: { denyDialMultiaddr: async () => false },
+        peerDiscovery,
+        services: {
+          identify: identify(),
+          pubsub: gossipsub({
+            allowPublishToZeroTopicPeers: true,
+            runOnLimitedConnection: true,
+          }),
+          dcutr: dcutr(),
+        },
+      })
+    : await createLibp2p({
+        addresses: { listen: [...listenAddresses] },
+        transports: [tcp()],
+        connectionEncrypters: [noise()],
+        streamMuxers: [yamux()],
+        peerDiscovery,
+        services: {
+          identify: identify(),
+          pubsub: gossipsub({
+            allowPublishToZeroTopicPeers: true,
+            runOnLimitedConnection: true,
+          }),
+        },
+      });
 
   const topic = groupTopic(groupId);
   const pubsub = node.services.pubsub as PubSub;
