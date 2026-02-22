@@ -21,3 +21,10 @@ export type {
   PersistedGroupDocument,
   MessageContentStore,
 } from "./persistence.js";
+
+export { createYjsSyncProvider } from "./yjs-sync-provider.js";
+
+export type {
+  YjsSyncProvider,
+  YjsSyncProviderOptions,
+} from "./yjs-sync-provider.js";

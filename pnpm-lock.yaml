@@ -105,12 +105,21 @@ importers:
       idb:
         specifier: ^8.0.3
         version: 8.0.3
+      it-length-prefixed-stream:
+        specifier: ^2.0.4
+        version: 2.0.4
+      lib0:
+        specifier: ^0.2.117
+        version: 0.2.117
       libp2p:
         specifier: ^2.10.0
         version: 2.10.0
       y-indexeddb:
         specifier: ^9.0.12
         version: 9.0.12(yjs@13.6.29)
+      y-protocols:
+        specifier: ^1.0.7
+        version: 1.0.7(yjs@13.6.29)
       yjs:
         specifier: ^13.6.29
         version: 13.6.29
@@ -1376,6 +1385,12 @@ packages:
 
   y-indexeddb@9.0.12:
     resolution: {integrity: sha512-9oCFRSPPzBK7/w5vOkJBaVCQZKHXB/v6SIT+WYhnJxlEC61juqG0hBrAf+y3gmSMLFLwICNH9nQ53uscuse6Hg==}
+    engines: {node: '>=16.0.0', npm: '>=8.0.0'}
+    peerDependencies:
+      yjs: ^13.0.0
+
+  y-protocols@1.0.7:
+    resolution: {integrity: sha512-YSVsLoXxO67J6eE/nV4AtFtT3QEotZf5sK5BHxFBXso7VDUT3Tx07IfA6hsu5Q5OmBdMkQVmFZ9QOA7fikWvnw==}
     engines: {node: '>=16.0.0', npm: '>=8.0.0'}
     peerDependencies:
       yjs: ^13.0.0
@@ -2818,6 +2833,11 @@ snapshots:
   ws@8.19.0: {}
 
   y-indexeddb@9.0.12(yjs@13.6.29):
+    dependencies:
+      lib0: 0.2.117
+      yjs: 13.6.29
+
+  y-protocols@1.0.7(yjs@13.6.29):
     dependencies:
       lib0: 0.2.117
       yjs: 13.6.29
