@@ -141,6 +141,12 @@ describe("Reconnect backoff", () => {
     it("should reject negative maxDelayMs", () => {
       expect(() => createBackoffState({ maxDelayMs: -5 })).toThrow(RangeError);
     });
+
+    it("should reject maxDelayMs less than baseDelayMs", () => {
+      expect(() =>
+        createBackoffState({ baseDelayMs: 5000, maxDelayMs: 1000 }),
+      ).toThrow(RangeError);
+    });
   });
 
   describe("applyJitter", () => {

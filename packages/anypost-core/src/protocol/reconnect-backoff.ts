@@ -28,6 +28,11 @@ export const createBackoffState = (
       `maxDelayMs must be a positive finite number, got ${maxDelayMs}`,
     );
   }
+  if (maxDelayMs < baseDelayMs) {
+    throw new RangeError(
+      `maxDelayMs (${maxDelayMs}) must be >= baseDelayMs (${baseDelayMs})`,
+    );
+  }
 
   return { attempts: 0, baseDelayMs, maxDelayMs };
 };
