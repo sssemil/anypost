@@ -10,13 +10,13 @@ Implement the group invitation protocol including invite link generation, KeyPac
 
 ## Acceptance Criteria
 
-- [ ] Invite link generated with group ID + inviter multiaddress
-- [ ] Invite link optionally includes pre-shared secret
-- [ ] KeyPackage exchange via `/anypost/key-package/1.0.0` libp2p protocol
-- [ ] Offline invitations: Welcome messages stored in group CRDT, encrypted to invitee's public key
-- [ ] "Invite" button generates shareable link/QR
-- [ ] Recipient opens link in browser → auto-joins group
-- [ ] All tests pass via TDD
+- [x] Invite link generated with group ID + inviter multiaddress
+- [x] Invite link optionally includes pre-shared secret
+- [x] KeyPackage exchange via `/anypost/key-package/1.0.0` libp2p protocol
+- [x] Offline invitations: Welcome messages stored in group CRDT, encrypted to invitee's public key
+- [ ] "Invite" button generates shareable link/QR (deferred to web app tasks)
+- [ ] Recipient opens link in browser → auto-joins group (deferred to web app tasks)
+- [x] All tests pass via TDD
 
 ## Implementation Notes
 
@@ -40,3 +40,9 @@ Implement the group invitation protocol including invite link generation, KeyPac
 
 - 2026-02-22 Created from brutal-plan PLAN-0001
 - 2026-02-22 13:12 Started work on this task
+- 2026-02-22 14:00 Implementation complete, starting code reduction
+- 2026-02-22 14:10 Code reduction complete, starting self-review
+- 2026-02-22 14:30 Self-review #1: 1 CRITICAL, 3 MAJOR, 0 MINOR, 0 NIT
+- 2026-02-22 14:35 Fixed all CRITICAL/MAJOR findings
+- 2026-02-22 15:45 Self-review #2: 0 CRITICAL, 0 MAJOR, 5 MINOR, 4 NIT — APPROVED
+- 2026-02-22 15:46 Task completed. Final review passed with 0 CRITICAL, 0 MAJOR findings.
