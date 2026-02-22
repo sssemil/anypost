@@ -10,14 +10,14 @@ Implement device key generation and device certificates in `anypost-core/src/cry
 
 ## Acceptance Criteria
 
-- [ ] `generateDeviceKey` produces a unique keypair each call
-- [ ] `createDeviceCertificate` signs with account key
-- [ ] `createDeviceCertificate` includes device PeerId and account public key
-- [ ] `verifyDeviceCertificate` accepts valid certificate
-- [ ] `verifyDeviceCertificate` rejects certificate signed by wrong key
-- [ ] `verifyDeviceCertificate` rejects expired certificate
-- [ ] `verifyDeviceCertificate` rejects tampered certificate
-- [ ] All tests pass via TDD
+- [x] `generateDeviceKey` produces a unique keypair each call
+- [x] `createDeviceCertificate` signs with account key
+- [x] `createDeviceCertificate` includes device PeerId and account public key
+- [x] `verifyDeviceCertificate` accepts valid certificate
+- [x] `verifyDeviceCertificate` rejects certificate signed by wrong key
+- [x] `verifyDeviceCertificate` rejects expired certificate
+- [x] `verifyDeviceCertificate` rejects tampered certificate
+- [x] All tests pass via TDD
 
 ## Implementation Notes
 
@@ -37,3 +37,8 @@ Implement device key generation and device certificates in `anypost-core/src/cry
 ## History
 
 - 2026-02-22 Created from brutal-plan PLAN-0001
+- 2026-02-22 09:31 Started work on this task
+- 2026-02-22 10:40 Self-review #1: 1 CRITICAL, 1 MAJOR, 0 MINOR, 0 NIT
+- 2026-02-22 10:44 Fixed: future timestamp guard + malformed data try/catch
+- 2026-02-22 10:50 Self-review #2: 0 CRITICAL, 0 MAJOR, 1 MINOR, 0 NIT — APPROVED
+- 2026-02-22 10:51 Task completed. Final review passed with 0 CRITICAL, 0 MAJOR findings.

@@ -10,13 +10,13 @@ Implement account key generation in `anypost-core/src/crypto/identity.ts`. Accou
 
 ## Acceptance Criteria
 
-- [ ] `generateAccountKey` produces an ed25519 keypair
-- [ ] `accountKeyFromSeed` is deterministic (same seed = same key)
-- [ ] `accountKeyFromSeed` produces different keys for different seeds
-- [ ] `exportAccountKey` produces importable format (seed phrase or raw key)
-- [ ] `importAccountKey` reconstructs the same keypair
-- [ ] `seedPhraseToKey` round-trip preserves identity
-- [ ] All tests pass via TDD
+- [x] `generateAccountKey` produces an ed25519 keypair
+- [x] `accountKeyFromSeed` is deterministic (same seed = same key)
+- [x] `accountKeyFromSeed` produces different keys for different seeds
+- [x] `exportAccountKey` produces importable format (seed phrase or raw key)
+- [x] `importAccountKey` reconstructs the same keypair
+- [x] `seedPhraseToKey` round-trip preserves identity
+- [x] All tests pass via TDD
 
 ## Implementation Notes
 
@@ -41,3 +41,10 @@ Implement account key generation in `anypost-core/src/crypto/identity.ts`. Accou
 ## History
 
 - 2026-02-22 Created from brutal-plan PLAN-0001
+- 2026-02-22 09:15 Started work on this task
+- 2026-02-22 09:45 Implementation complete, starting code reduction
+- 2026-02-22 09:50 Code reduction complete, starting self-review
+- 2026-02-22 10:00 Self-review #1: 0 CRITICAL, 2 MAJOR, 0 MINOR, 0 NIT
+- 2026-02-22 10:26 Fixed both MAJOR findings (sign/verify test + accountKeyFromSeed validation)
+- 2026-02-22 10:27 Self-review #2: 0 CRITICAL, 0 MAJOR, 0 MINOR, 0 NIT
+- 2026-02-22 10:28 Task completed. Final review passed with 0 CRITICAL, 0 MAJOR findings.

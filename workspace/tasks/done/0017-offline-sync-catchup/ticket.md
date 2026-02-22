@@ -10,11 +10,11 @@ Wire the Yjs sync provider and IndexedDB persistence into the web app. Achieve t
 
 ## Acceptance Criteria
 
-- [ ] Messages persist after page reload (integration test)
-- [ ] Offline peer sees missed messages after reconnecting (integration test)
-- [ ] Yjs sync + IndexedDB persistence work together without conflicts
-- [ ] No data loss during normal usage patterns (send, reload, reconnect)
-- [ ] All tests pass via TDD
+- [x] Messages persist after page reload (integration test)
+- [x] Offline peer sees missed messages after reconnecting (integration test)
+- [x] Yjs sync + IndexedDB persistence work together without conflicts
+- [x] No data loss during normal usage patterns (send, reload, reconnect)
+- [x] All tests pass via TDD
 
 ## Implementation Notes
 
@@ -34,3 +34,9 @@ Wire the Yjs sync provider and IndexedDB persistence into the web app. Achieve t
 ## History
 
 - 2026-02-22 Created from brutal-plan PLAN-0001
+- 2026-02-22 09:06 Started work on this task
+- 2026-02-22 09:10 Implementation complete — 3 integration tests passing (97 total)
+- 2026-02-22 09:12 Code reduction complete, starting self-review
+- 2026-02-22 09:15 Self-review #1: 1 CRITICAL, 2 MAJOR, 2 MINOR, 0 NIT
+- 2026-02-22 09:18 Fixed all CRITICAL/MAJOR: unique message IDs, resource cleanup, naming
+- 2026-02-22 09:20 Task completed. Final review passed with 0 CRITICAL, 0 MAJOR findings.

@@ -10,13 +10,13 @@ Implement the first-time user onboarding flow in the SolidJS web app. On first l
 
 ## Acceptance Criteria
 
-- [ ] First-time users get an auto-generated account key
-- [ ] Display name prompt appears immediately after key generation
-- [ ] Seed phrase backup is deferred but a persistent banner reminds the user
-- [ ] Banner disappears after user confirms seed phrase backup
-- [ ] Returning users skip onboarding (key exists in IndexedDB)
-- [ ] Import flow: seed phrase / key file / QR code scan to restore existing account
-- [ ] All tests pass via TDD
+- [x] First-time users get an auto-generated account key
+- [x] Display name prompt appears immediately after key generation
+- [x] Seed phrase backup is deferred but a persistent banner reminds the user
+- [x] Banner disappears after user confirms seed phrase backup
+- [x] Returning users skip onboarding (key exists in IndexedDB)
+- [x] Import flow: seed phrase / key file / QR code scan to restore existing account
+- [x] All tests pass via TDD
 
 ## Implementation Notes
 
@@ -35,3 +35,5 @@ Implement the first-time user onboarding flow in the SolidJS web app. On first l
 ## History
 
 - 2026-02-22 Created from brutal-plan PLAN-0001
+- 2026-02-22 10:04 Started work on this task
+- 2026-02-22 11:36 Task completed. Final review #4 passed with 0 CRITICAL, 0 MAJOR findings.
