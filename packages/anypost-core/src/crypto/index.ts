@@ -66,3 +66,18 @@ export type {
   MessageBuffer,
   DrainFailure,
 } from "./encrypted-message-flow.js";
+
+export {
+  createRetentionConfig,
+  createEpochTracker,
+  recordEpoch,
+  getExpiredEpochs,
+  pruneTracker,
+  pruneGroupState,
+} from "./epoch-key-retention.js";
+
+export type {
+  RetentionConfig,
+  EpochRecord,
+  EpochTracker,
+} from "./epoch-key-retention.js";
