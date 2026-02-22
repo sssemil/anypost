@@ -54,7 +54,7 @@ export const createRelayHealthState = (
   return {
     relays: relayAddresses.map((address) => ({
       address,
-      status: "unknown" as RelayStatus,
+      status: "unknown",
       consecutiveFailures: 0,
       latencyMs: null,
     })),
@@ -84,7 +84,7 @@ export const recordHealthCheckSuccess = (
     ...state,
     relays: state.relays.map((relay, i) =>
       i === index
-        ? { ...relay, status: "healthy" as RelayStatus, consecutiveFailures: 0, latencyMs }
+        ? { ...relay, status: "healthy", consecutiveFailures: 0, latencyMs }
         : relay,
     ),
   };
