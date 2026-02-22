@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   createRouter,
   groupTopic,
+  deviceDiscoveryTopic,
   type MessageHandler,
 } from "./router.js";
 import { createWireMessage } from "../shared/factories.js";
@@ -82,6 +83,22 @@ describe("groupTopic", () => {
   it("should produce different topics for different group IDs", () => {
     const topic1 = groupTopic("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11");
     const topic2 = groupTopic("b1ffbc99-9c0b-4ef8-bb6d-6bb9bd380a22");
+
+    expect(topic1).not.toBe(topic2);
+  });
+});
+
+describe("deviceDiscoveryTopic", () => {
+  it("should return a topic string derived from account public key", () => {
+    const pubKeyHex = "abcdef0123456789";
+    const topic = deviceDiscoveryTopic(pubKeyHex);
+
+    expect(topic).toBe("anypost/account/abcdef0123456789/devices");
+  });
+
+  it("should produce different topics for different accounts", () => {
+    const topic1 = deviceDiscoveryTopic("aaa111");
+    const topic2 = deviceDiscoveryTopic("bbb222");
 
     expect(topic1).not.toBe(topic2);
   });

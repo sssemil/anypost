@@ -41,3 +41,14 @@ export type {
   YjsSyncProvider,
   YjsSyncProviderOptions,
 } from "./yjs-sync-provider.js";
+
+export {
+  createDeviceRegistryDocument,
+  addDeviceToRegistry,
+  removeDeviceFromRegistry,
+  getRegisteredDevices,
+  isDeviceRegistered,
+  updateDeviceLastSeen,
+} from "./device-registry.js";
+
+export type { RegisteredDevice } from "./device-registry.js";
