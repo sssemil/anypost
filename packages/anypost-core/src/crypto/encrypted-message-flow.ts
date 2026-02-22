@@ -116,11 +116,9 @@ export const drainMessageBuffer = async (
         message: buffered.message,
       });
 
+      currentState = result.newGroupState;
       if (result.kind === "message") {
         decrypted.push({ id: buffered.id, content: result.content });
-        currentState = result.newGroupState;
-      } else {
-        currentState = result.newGroupState;
       }
     } catch {
       remaining.push(buffered);
