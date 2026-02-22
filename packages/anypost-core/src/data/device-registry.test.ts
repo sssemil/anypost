@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import * as Y from "yjs";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import {
   createDeviceRegistryDocument,
@@ -202,5 +203,3 @@ describe("Device registry", () => {
     });
   });
 });
-
-import * as Y from "yjs";

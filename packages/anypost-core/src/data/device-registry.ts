@@ -1,6 +1,15 @@
 import * as Y from "yjs";
+import { z } from "zod";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import type { DeviceCertificate } from "../shared/schemas.js";
+
+const RegisteredDeviceSchema = z.object({
+  devicePeerId: z.string().min(1),
+  accountPublicKey: z.instanceof(Uint8Array),
+  timestamp: z.number(),
+  signature: z.instanceof(Uint8Array),
+  lastSeen: z.number(),
+});
 
 export type RegisteredDevice = {
   readonly devicePeerId: string;
@@ -24,11 +33,11 @@ type AddDeviceOptions = {
 export const addDeviceToRegistry = (options: AddDeviceOptions): void => {
   const { doc, certificate } = options;
   const now = options.now ?? Date.now();
-  const devicesMap = doc.getMap("devices");
-
-  if (devicesMap.has(certificate.devicePeerId)) return;
 
   doc.transact(() => {
+    const devicesMap = doc.getMap("devices");
+    if (devicesMap.has(certificate.devicePeerId)) return;
+
     const deviceData = new Y.Map();
     deviceData.set("devicePeerId", certificate.devicePeerId);
     deviceData.set("accountPublicKey", new Uint8Array(certificate.accountPublicKey));
@@ -51,20 +60,14 @@ export const removeDeviceFromRegistry = (options: RemoveDeviceOptions): void => 
 
 export const getRegisteredDevices = (doc: Y.Doc): readonly RegisteredDevice[] => {
   const devicesMap = doc.getMap("devices");
-  const devices: RegisteredDevice[] = [];
-
-  devicesMap.forEach((value) => {
-    if (!(value instanceof Y.Map)) return;
-    devices.push({
-      devicePeerId: value.get("devicePeerId") as string,
-      accountPublicKey: value.get("accountPublicKey") as Uint8Array,
-      timestamp: value.get("timestamp") as number,
-      signature: value.get("signature") as Uint8Array,
-      lastSeen: value.get("lastSeen") as number,
-    });
-  });
-
-  return devices;
+  return Array.from(devicesMap.values())
+    .filter((value): value is Y.Map<unknown> => value instanceof Y.Map)
+    .map((deviceMap) => {
+      const raw = Object.fromEntries(deviceMap.entries());
+      return RegisteredDeviceSchema.safeParse(raw);
+    })
+    .filter((result) => result.success)
+    .map((result) => result.data);
 };
 
 export const isDeviceRegistered = (doc: Y.Doc, devicePeerId: string): boolean => {
