@@ -19,11 +19,10 @@ Key areas to investigate:
 
 ## Acceptance Criteria
 
-- [ ] DMLS research summary written (key papers, approaches, trade-offs)
-- [ ] Feasibility assessment: can DMLS be implemented on top of ts-mls?
-- [ ] If feasible: prototype concurrent commits from 2+ peers without steward
-- [ ] If infeasible: document why and confirm steward model as fallback
-- [ ] Go/no-go recommendation with clear rationale
+- [x] DMLS research summary written (key papers, approaches, trade-offs)
+- [x] Feasibility assessment: can DMLS be implemented on top of ts-mls? (NO — requires fork for key schedule changes)
+- [x] If infeasible: document why and confirm steward model as fallback (CONFIRMED — steward model with automatic failover for v1)
+- [x] Go/no-go recommendation with clear rationale (DEFER DMLS — steward model for v1, multi-steward or DMLS for v2+)
 
 ## Implementation Notes
 
@@ -42,3 +41,5 @@ Key areas to investigate:
 ## History
 
 - 2026-02-22 Created from brutal-plan PLAN-0001
+- 2026-02-22 06:57 Started work on this task
+- 2026-02-22 Research complete. Two competing DMLS approaches investigated (draft-kohbrok DAG+PPRF, draft-xue Send Groups). Neither feasible for v1 without ts-mls fork. Steward model with automatic failover confirmed for v1. FINDINGS.md written.
