@@ -1,23 +1,17 @@
 import { createSignal, For, onCleanup, onMount } from "solid-js";
 import { createPlaintextChat } from "anypost-core/protocol";
-import type { PlaintextChat } from "anypost-core/protocol";
-
-type ChatMessage = {
-  readonly id: string;
-  readonly senderPeerId: string;
-  readonly text: string;
-  readonly timestamp: number;
-};
+import type { PlaintextChat, ChatMessageEvent } from "anypost-core/protocol";
 
 const DEFAULT_GROUP_ID = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11";
 
 export const App = () => {
-  const [messages, setMessages] = createSignal<readonly ChatMessage[]>([]);
+  const [messages, setMessages] = createSignal<readonly ChatMessageEvent[]>([]);
   const [inputText, setInputText] = createSignal("");
   const [status, setStatus] = createSignal<"connecting" | "connected" | "disconnected">("connecting");
   const [peerId, setPeerId] = createSignal("");
 
   let chat: PlaintextChat | undefined;
+  let unsubscribe: (() => void) | undefined;
 
   onMount(async () => {
     try {
@@ -29,7 +23,7 @@ export const App = () => {
       setPeerId(chat.peerId);
       setStatus("connected");
 
-      chat.onMessage((msg) => {
+      unsubscribe = chat.onMessage((msg) => {
         setMessages((prev) => [...prev, msg]);
       });
     } catch {
@@ -37,35 +31,39 @@ export const App = () => {
     }
   });
 
-  onCleanup(async () => {
-    if (chat) {
-      await chat.stop();
-    }
+  onCleanup(() => {
+    unsubscribe?.();
+    chat?.stop();
   });
 
   const sendMessage = async () => {
     const text = inputText().trim();
-    if (!text || !chat) return;
+    const currentChat = chat;
+    if (!text || !currentChat) return;
 
-    await chat.sendMessage(text);
+    try {
+      await currentChat.sendMessage(text);
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: crypto.randomUUID(),
-        senderPeerId: chat!.peerId,
-        text,
-        timestamp: Date.now(),
-      },
-    ]);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          senderPeerId: currentChat.peerId,
+          text,
+          timestamp: Date.now(),
+        },
+      ]);
 
-    setInputText("");
+      setInputText("");
+    } catch {
+      setStatus("disconnected");
+    }
   };
 
   const handleKeyDown = (e: KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      sendMessage();
+      void sendMessage();
     }
   };
 

@@ -15,7 +15,7 @@ import { encodeWireMessage, decodeWireMessage } from "./codec.js";
 import { createEncryptedMessage } from "../shared/factories.js";
 import type { GroupId, WireMessage } from "../shared/schemas.js";
 
-type ChatMessageEvent = {
+export type ChatMessageEvent = {
   readonly senderPeerId: string;
   readonly text: string;
   readonly timestamp: number;
@@ -29,7 +29,7 @@ export type PlaintextChat = {
   readonly multiaddrs: readonly Multiaddr[];
   readonly connectTo: (addr: Multiaddr) => Promise<void>;
   readonly sendMessage: (text: string) => Promise<void>;
-  readonly onMessage: (listener: MessageListener) => void;
+  readonly onMessage: (listener: MessageListener) => () => void;
   readonly stop: () => Promise<void>;
 };
 
@@ -79,8 +79,7 @@ export const createPlaintextChat = async (
   const pubsub = node.services.pubsub as PubSub;
   const listeners: MessageListener[] = [];
 
-  pubsub.subscribe(topic);
-  pubsub.addEventListener("message", (event: CustomEvent) => {
+  const handlePubsubMessage = (event: CustomEvent) => {
     const detail = event.detail as { topic: string; data: Uint8Array };
     if (detail.topic !== topic) return;
 
@@ -99,7 +98,10 @@ export const createPlaintextChat = async (
     };
 
     listeners.forEach((listener) => listener(chatMessage));
-  });
+  };
+
+  pubsub.subscribe(topic);
+  pubsub.addEventListener("message", handlePubsubMessage);
 
   return {
     peerId: node.peerId.toString(),
@@ -129,8 +131,17 @@ export const createPlaintextChat = async (
     },
     onMessage: (listener: MessageListener) => {
       listeners.push(listener);
+      return () => {
+        const index = listeners.indexOf(listener);
+        if (index !== -1) {
+          listeners.splice(index, 1);
+        }
+      };
     },
     stop: async () => {
+      pubsub.removeEventListener("message", handlePubsubMessage);
+      pubsub.unsubscribe(topic);
+      listeners.length = 0;
       await node.stop();
     },
   };
