@@ -43,28 +43,24 @@ export const ChatLayout = (props: ChatLayoutProps) => {
             {props.messageInput}
           </div>
         </div>
-      </div>
 
-      <Show when={props.isDevDrawerOpen}>
-        <div
-          class="fixed inset-0 bg-black/40 z-40"
-          onClick={() => props.onDevDrawerClose()}
-        />
-        <div class="fixed top-0 right-0 h-full w-full sm:w-[420px] bg-tg-sidebar z-50 flex flex-col shadow-2xl">
-          <div class="flex items-center justify-between px-4 py-3 border-b border-tg-border">
-            <span class="font-semibold text-tg-text">Developer Tools</span>
-            <button
-              class="text-tg-text-dim hover:text-tg-text text-xl leading-none p-1"
-              onClick={() => props.onDevDrawerClose()}
-            >
-              &times;
-            </button>
+        <Show when={props.isDevDrawerOpen}>
+          <div class="w-full sm:w-[420px] sm:min-w-[420px] flex flex-col border-l border-tg-border bg-tg-sidebar">
+            <div class="flex items-center justify-between px-4 py-3 border-b border-tg-border shrink-0">
+              <span class="font-semibold text-tg-text">Developer Tools</span>
+              <button
+                class="text-tg-text-dim hover:text-tg-text text-xl leading-none p-1 cursor-pointer"
+                onClick={() => props.onDevDrawerClose()}
+              >
+                &times;
+              </button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-4">
+              {props.devDrawerContent}
+            </div>
           </div>
-          <div class="flex-1 overflow-y-auto p-4">
-            {props.devDrawerContent}
-          </div>
-        </div>
-      </Show>
+        </Show>
+      </div>
     </div>
   );
 };
