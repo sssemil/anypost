@@ -49,3 +49,17 @@ export {
   clearSubscriptions,
   getSubscriptions,
 } from "./subscription-tracker.js";
+export {
+  DEFAULT_MESH_D,
+  DEFAULT_MESH_D_LOW,
+  DEFAULT_MESH_D_HIGH,
+  DEFAULT_MESH_D_LAZY,
+  FLOODSUB_PEER_THRESHOLD,
+  createOpaqueTopicName,
+  shouldUseFloodSub,
+  createGossipSubParams,
+} from "./gossipsub-config.js";
+export {
+  DEFAULT_MAX_MESSAGE_SIZE_BYTES,
+  validateMessageSize,
+} from "./message-validation.js";
