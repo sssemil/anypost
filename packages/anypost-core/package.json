@@ -1,0 +1,19 @@
+{
+  "name": "anypost-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./shared": "./src/shared/index.ts",
+    "./crypto": "./src/crypto/index.ts",
+    "./data": "./src/data/index.ts",
+    "./protocol": "./src/protocol/index.ts",
+    "./media": "./src/media/index.ts",
+    "./libp2p": "./src/libp2p/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  }
+}

@@ -15,15 +15,15 @@ Workspaces:
 
 ## Acceptance Criteria
 
-- [ ] pnpm workspace configured with 3 workspaces
-- [ ] Turborepo configured with build, test, lint, typecheck pipelines
-- [ ] Shared tsconfig.base.json with TypeScript strict mode (all strict flags enabled)
-- [ ] Per-workspace tsconfig extending base
-- [ ] Vitest workspace config with shared test settings
-- [ ] `pnpm build` succeeds (empty packages)
-- [ ] `pnpm test` succeeds (no tests yet)
-- [ ] `pnpm typecheck` succeeds
-- [ ] ESM-only configuration (type: "module" in all package.json)
+- [x] pnpm workspace configured with 3 workspaces
+- [x] Turborepo configured with build, test, lint, typecheck pipelines
+- [x] Shared tsconfig.base.json with TypeScript strict mode (all strict flags enabled)
+- [x] Per-workspace tsconfig extending base
+- [x] Vitest workspace config with shared test settings
+- [x] `pnpm build` succeeds (empty packages)
+- [x] `pnpm test` succeeds (no tests yet)
+- [x] `pnpm typecheck` succeeds
+- [x] ESM-only configuration (type: "module" in all package.json)
 
 ## Implementation Notes
 
@@ -42,3 +42,5 @@ Workspaces:
 ## History
 
 - 2026-02-22 Created from brutal-plan PLAN-0001
+- 2026-02-22 07:17 Started work on this task
+- 2026-02-22 Monorepo scaffolding complete. pnpm workspace with 3 workspaces, Turborepo, tsconfig strict, Vitest workspace config. All verification commands pass.
