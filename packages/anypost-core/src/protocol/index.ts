@@ -11,3 +11,11 @@ export type {
   KeyPackageOffer,
   KeyPackageResponse,
 } from "./key-package-exchange.js";
+export {
+  createPresenceTracker,
+  recordHeartbeat,
+  getOnlineMembers,
+  isOnline,
+  recordTypingStart,
+  getTypingMembers,
+} from "./presence.js";
