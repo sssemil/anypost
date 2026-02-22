@@ -26,7 +26,7 @@ export const createInviteLink = (options: CreateInviteLinkOptions): string => {
   for (const addr of options.inviterAddrs) {
     params.append("addr", addr);
   }
-  if (options.psk) {
+  if (options.psk !== undefined) {
     params.set("psk", options.psk);
   }
   return `${options.baseUrl}${INVITE_FRAGMENT_PREFIX}${params.toString()}`;

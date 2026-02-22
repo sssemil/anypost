@@ -5,6 +5,8 @@ import { tcp } from "@libp2p/tcp";
 import { noise } from "@chainsafe/libp2p-noise";
 import { yamux } from "@chainsafe/libp2p-yamux";
 import { identify } from "@libp2p/identify";
+import { encode } from "cbor-x";
+import { lpStream } from "it-length-prefixed-stream";
 import {
   createKeyPackageExchangeHandler,
   sendKeyPackage,
@@ -132,9 +134,43 @@ describe("Key-package exchange", () => {
 
         expect(response.type).toBe("error");
         if (response.type === "error") {
-          expect(response.message).toContain("Group not found");
+          expect(response.message).toBe("Key package processing failed");
         }
 
+        handler.stop();
+      } finally {
+        await stewardNode.stop();
+        await inviteeNode.stop();
+      }
+    });
+
+    it("should respond with error for malformed CBOR data", async () => {
+      const stewardNode = await createTestNode();
+      const inviteeNode = await createTestNode();
+
+      try {
+        const handler = createKeyPackageExchangeHandler({
+          node: stewardNode,
+          onOffer: async () => ({ type: "welcome" as const, welcome: null, commit: null }),
+        });
+        handler.start();
+
+        await inviteeNode.dial(stewardNode.getMultiaddrs()[0]);
+
+        const connections = inviteeNode.getConnections(stewardNode.peerId);
+        const stream = await connections[0].newStream("/anypost/key-package/1.0.0");
+        const lp = lpStream(stream);
+
+        await lp.write(new Uint8Array(encode({ garbage: true })));
+
+        const raw = await lp.read();
+        expect(raw).toBeDefined();
+
+        const { decode } = await import("cbor-x");
+        const response = decode(raw!.subarray());
+        expect(response.type).toBe("error");
+
+        await stream.close().catch(() => {});
         handler.stop();
       } finally {
         await stewardNode.stop();

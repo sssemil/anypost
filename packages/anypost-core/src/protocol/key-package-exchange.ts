@@ -1,22 +1,36 @@
+import { z } from "zod";
 import { encode, decode } from "cbor-x";
 import { lpStream } from "it-length-prefixed-stream";
 import type { Libp2p, Stream } from "@libp2p/interface";
 import type { PeerId } from "@libp2p/interface";
+import { GroupIdSchema } from "../shared/schemas.js";
 import type { GroupId } from "../shared/schemas.js";
 
 const PROTOCOL = "/anypost/key-package/1.0.0";
 const MAX_DATA_LENGTH = 512 * 1024;
 
-export type KeyPackageOffer = {
-  readonly groupId: GroupId;
-  readonly keyPackage: unknown;
-  readonly identity: Uint8Array;
-  readonly accountPublicKey: string;
-};
+const KeyPackageOfferSchema = z.object({
+  groupId: GroupIdSchema,
+  keyPackage: z.unknown(),
+  identity: z.instanceof(Uint8Array),
+  accountPublicKey: z.string().min(1),
+});
 
-export type KeyPackageResponse =
-  | { readonly type: "welcome"; readonly welcome: unknown; readonly commit: unknown }
-  | { readonly type: "error"; readonly message: string };
+const KeyPackageResponseSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("welcome"),
+    welcome: z.unknown(),
+    commit: z.unknown(),
+  }),
+  z.object({
+    type: z.literal("error"),
+    message: z.string(),
+  }),
+]);
+
+export type KeyPackageOffer = z.infer<typeof KeyPackageOfferSchema>;
+
+export type KeyPackageResponse = z.infer<typeof KeyPackageResponseSchema>;
 
 type OnKeyPackageOffer = (offer: KeyPackageOffer) => Promise<KeyPackageResponse>;
 
@@ -42,14 +56,14 @@ export const createKeyPackageExchangeHandler = (
       const raw = await lp.read();
       if (!raw) return;
 
-      const decoded = decode(raw.subarray()) as KeyPackageOffer;
+      const decoded = KeyPackageOfferSchema.parse(decode(raw.subarray()));
       const response = await onOffer(decoded);
       await lp.write(new Uint8Array(encode(response)));
     } catch (error: unknown) {
       try {
         const errorResponse: KeyPackageResponse = {
           type: "error",
-          message: error instanceof Error ? error.message : "Unknown error",
+          message: "Key package processing failed",
         };
         await lp.write(new Uint8Array(encode(errorResponse)));
       } catch {
@@ -98,10 +112,10 @@ export const sendKeyPackage = async (
 
   const lp = lpStream(stream, { maxDataLength: MAX_DATA_LENGTH });
   try {
-    const offer: KeyPackageOffer = {
+    const offer = {
       groupId: options.groupId,
       keyPackage: options.keyPackage,
-      identity: options.identity,
+      identity: new Uint8Array(options.identity),
       accountPublicKey: options.accountPublicKey,
     };
     await lp.write(new Uint8Array(encode(offer)));
@@ -109,7 +123,7 @@ export const sendKeyPackage = async (
     const raw = await lp.read();
     if (!raw) throw new Error("No response from peer");
 
-    return decode(raw.subarray()) as KeyPackageResponse;
+    return KeyPackageResponseSchema.parse(decode(raw.subarray()));
   } finally {
     await stream.close().catch(() => {});
   }
