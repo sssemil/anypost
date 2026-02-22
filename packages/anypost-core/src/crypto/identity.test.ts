@@ -196,4 +196,49 @@ describe("Device Certificates", () => {
 
     expect(verifyDeviceCertificate({ certificate: tamperedCert })).toBe(false);
   });
+
+  it("verifyDeviceCertificate should reject certificate with future timestamp", () => {
+    const accountKey = generateAccountKey();
+    const tenMinutesFromNow = Date.now() + 10 * 60 * 1000;
+
+    const cert = createDeviceCertificate({
+      accountKey,
+      devicePeerId: TEST_DEVICE_PEER_ID,
+      timestamp: tenMinutesFromNow,
+    });
+
+    expect(verifyDeviceCertificate({ certificate: cert })).toBe(false);
+  });
+
+  it("verifyDeviceCertificate should return false for malformed signature", () => {
+    const accountKey = generateAccountKey();
+
+    const cert = createDeviceCertificate({
+      accountKey,
+      devicePeerId: TEST_DEVICE_PEER_ID,
+    });
+
+    const malformedCert = {
+      ...cert,
+      signature: new Uint8Array(10),
+    };
+
+    expect(verifyDeviceCertificate({ certificate: malformedCert })).toBe(false);
+  });
+
+  it("verifyDeviceCertificate should return false for malformed public key", () => {
+    const accountKey = generateAccountKey();
+
+    const cert = createDeviceCertificate({
+      accountKey,
+      devicePeerId: TEST_DEVICE_PEER_ID,
+    });
+
+    const malformedCert = {
+      ...cert,
+      accountPublicKey: new Uint8Array(10),
+    };
+
+    expect(verifyDeviceCertificate({ certificate: malformedCert })).toBe(false);
+  });
 });

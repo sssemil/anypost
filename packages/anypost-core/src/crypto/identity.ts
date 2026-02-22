@@ -46,6 +46,7 @@ export const importAccountKey = (seedPhrase: string): AccountKey =>
   accountKeyFromSeed(seedPhrase);
 
 const DEFAULT_CERTIFICATE_MAX_AGE_MS = 365 * 24 * 60 * 60 * 1000;
+const CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000;
 
 const encodeCertificatePayload = (
   devicePeerId: string,
@@ -92,6 +93,10 @@ export const verifyDeviceCertificate = (
   const now = options.now ?? Date.now();
   const maxAge = options.maxAge ?? DEFAULT_CERTIFICATE_MAX_AGE_MS;
 
+  if (certificate.timestamp > now + CLOCK_SKEW_TOLERANCE_MS) {
+    return false;
+  }
+
   if (now - certificate.timestamp > maxAge) {
     return false;
   }
@@ -102,5 +107,9 @@ export const verifyDeviceCertificate = (
     certificate.timestamp,
   );
 
-  return ed25519.verify(certificate.signature, payload, certificate.accountPublicKey);
+  try {
+    return ed25519.verify(certificate.signature, payload, certificate.accountPublicKey);
+  } catch {
+    return false;
+  }
 };
