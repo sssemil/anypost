@@ -1,10 +1,9 @@
-import * as Y from "yjs";
+import type * as Y from "yjs";
 import { IndexeddbPersistence } from "y-indexeddb";
 import { openDB } from "idb";
 import type { IDBPDatabase } from "idb";
 import { createGroupDocument } from "./group-document.js";
-import type { GroupId } from "../shared/schemas.js";
-import type { MessageContent } from "../shared/schemas.js";
+import type { GroupId, MessageContent } from "../shared/schemas.js";
 
 export type PersistedGroupDocument = {
   readonly doc: Y.Doc;
