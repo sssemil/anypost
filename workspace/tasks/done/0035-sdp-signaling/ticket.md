@@ -10,12 +10,12 @@ Implement WebRTC SDP/ICE signaling over libp2p streams in `anypost-core/src/medi
 
 ## Acceptance Criteria
 
-- [ ] `createOffer` produces valid SDP offer signal message
-- [ ] `createAnswer` produces valid SDP answer signal message
-- [ ] Signal messages route through libp2p media-signal protocol
-- [ ] ICE candidates trickle through signal stream
-- [ ] Hangup signal terminates the call
-- [ ] All tests pass via TDD
+- [x] `createOffer` produces valid SDP offer signal message
+- [x] `createAnswer` produces valid SDP answer signal message
+- [x] Signal messages route through libp2p media-signal protocol
+- [x] ICE candidates trickle through signal stream
+- [x] Hangup signal terminates the call
+- [x] All tests pass via TDD
 
 ## Implementation Notes
 
@@ -34,3 +34,9 @@ Implement WebRTC SDP/ICE signaling over libp2p streams in `anypost-core/src/medi
 ## History
 
 - 2026-02-22 Created from brutal-plan PLAN-0001
+- 2026-02-22 14:29 Started work on this task
+- 2026-02-22 14:35 Implementation complete: SignalMessageSchema, encode/decode, protocol constant
+- 2026-02-22 15:40 Self-review #1: 0 CRITICAL, 3 MAJOR (nullable ICE fields, factory validation, size limits)
+- 2026-02-22 15:42 All fixes applied. ICE fields nullable per WebRTC spec, max length constraints added
+- 2026-02-22 15:42 Self-review #2: APPROVED (0 CRITICAL, 0 MAJOR)
+- 2026-02-22 15:42 Task completed. 18 tests, 52 lines production code.
