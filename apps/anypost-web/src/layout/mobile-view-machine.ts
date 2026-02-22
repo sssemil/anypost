@@ -11,7 +11,7 @@ export type MobileViewEvent =
 
 export const createMobileViewState = (): MobileViewState => ({
   currentView: "group-list",
-  isDevDrawerOpen: false,
+  isDevDrawerOpen: true,
 });
 
 export const transitionMobileView = (

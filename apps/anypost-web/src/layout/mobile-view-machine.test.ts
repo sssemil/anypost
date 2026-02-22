@@ -6,11 +6,11 @@ import {
 
 describe("Mobile view machine", () => {
   describe("createMobileViewState", () => {
-    it("should start on group-list view with dev drawer closed", () => {
+    it("should start on group-list view with dev drawer open", () => {
       const state = createMobileViewState();
 
       expect(state.currentView).toBe("group-list");
-      expect(state.isDevDrawerOpen).toBe(false);
+      expect(state.isDevDrawerOpen).toBe(true);
     });
   });
 
@@ -46,28 +46,27 @@ describe("Mobile view machine", () => {
   });
 
   describe("dev-drawer-toggled event", () => {
-    it("should open dev drawer when closed", () => {
-      const state = createMobileViewState();
-
-      const next = transitionMobileView(state, { type: "dev-drawer-toggled" });
-
-      expect(next.isDevDrawerOpen).toBe(true);
-    });
-
     it("should close dev drawer when open", () => {
-      let state = createMobileViewState();
-      state = transitionMobileView(state, { type: "dev-drawer-toggled" });
+      const state = createMobileViewState();
 
       const next = transitionMobileView(state, { type: "dev-drawer-toggled" });
 
       expect(next.isDevDrawerOpen).toBe(false);
     });
+
+    it("should open dev drawer when closed", () => {
+      let state = createMobileViewState();
+      state = transitionMobileView(state, { type: "dev-drawer-toggled" });
+
+      const next = transitionMobileView(state, { type: "dev-drawer-toggled" });
+
+      expect(next.isDevDrawerOpen).toBe(true);
+    });
   });
 
   describe("dev-drawer-closed event", () => {
     it("should close the dev drawer", () => {
-      let state = createMobileViewState();
-      state = transitionMobileView(state, { type: "dev-drawer-toggled" });
+      const state = createMobileViewState();
 
       const next = transitionMobileView(state, { type: "dev-drawer-closed" });
 
