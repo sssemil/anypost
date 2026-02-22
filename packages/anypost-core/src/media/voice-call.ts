@@ -1,7 +1,9 @@
+import type { PeerId } from "../shared/schemas.js";
+
 export const MAX_VOICE_PEERS = 8;
 
 type VoiceCallState = {
-  readonly peers: readonly string[];
+  readonly peers: readonly PeerId[];
   readonly muted: boolean;
 };
 
@@ -12,7 +14,7 @@ export const createVoiceCallState = (): VoiceCallState => ({
 
 export const addPeer = (
   state: VoiceCallState,
-  peerId: string,
+  peerId: PeerId,
 ): VoiceCallState => {
   if (state.peers.includes(peerId)) return state;
   if (state.peers.length >= MAX_VOICE_PEERS) {
@@ -23,7 +25,7 @@ export const addPeer = (
 
 export const removePeer = (
   state: VoiceCallState,
-  peerId: string,
+  peerId: PeerId,
 ): VoiceCallState => ({
   ...state,
   peers: state.peers.filter((p) => p !== peerId),
@@ -37,7 +39,7 @@ export const setMuted = (
   muted,
 });
 
-export const getPeers = (state: VoiceCallState): readonly string[] =>
+export const getPeers = (state: VoiceCallState): readonly PeerId[] =>
   state.peers;
 
 export const isMuted = (state: VoiceCallState): boolean => state.muted;

@@ -47,6 +47,16 @@ describe("Voice Call State", () => {
       expect(getPeers(state)).toEqual(["peer-1"]);
     });
 
+    it("should accept exactly MAX_VOICE_PEERS peers", () => {
+      let state = createVoiceCallState();
+
+      for (let i = 0; i < MAX_VOICE_PEERS; i++) {
+        state = addPeer(state, `peer-${i}`);
+      }
+
+      expect(getPeers(state)).toHaveLength(MAX_VOICE_PEERS);
+    });
+
     it("should reject adding peer beyond max capacity", () => {
       let state = createVoiceCallState();
 
