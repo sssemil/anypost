@@ -8,6 +8,7 @@ import {
 type GroupItem = {
   readonly groupId: string;
   readonly unreadCount: number;
+  readonly lastMessage?: { readonly text: string; readonly timestamp: number };
 };
 
 type GroupSidebarProps = {
@@ -17,6 +18,28 @@ type GroupSidebarProps = {
   readonly onJoinGroup: (groupId: string) => void;
   readonly onCreateGroup: () => void;
   readonly onLeaveGroup: (groupId: string) => void;
+};
+
+const AVATAR_COLORS = [
+  "bg-red-600", "bg-blue-600", "bg-green-600", "bg-purple-600",
+  "bg-orange-600", "bg-teal-600", "bg-pink-600", "bg-indigo-600",
+];
+
+const avatarColor = (groupId: string): string => {
+  let hash = 0;
+  for (let i = 0; i < groupId.length; i++) {
+    hash = ((hash << 5) - hash + groupId.charCodeAt(i)) | 0;
+  }
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+};
+
+const formatTime = (timestamp: number): string => {
+  const date = new Date(timestamp);
+  const now = new Date();
+  if (date.toDateString() === now.toDateString()) {
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
 };
 
 export const GroupSidebar = (props: GroupSidebarProps) => {
@@ -47,58 +70,24 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
   };
 
   return (
-    <div style={{
-      display: "flex",
-      "flex-direction": "column",
-      height: "100%",
-      "background-color": "#f5f5f5",
-      "border-right": "1px solid #e0e0e0",
-      width: "220px",
-      "min-width": "220px",
-    }}>
-      <div style={{
-        padding: "12px",
-        "border-bottom": "1px solid #e0e0e0",
-        display: "flex",
-        gap: "6px",
-      }}>
+    <div class="flex flex-col h-full bg-tg-sidebar">
+      <div class="p-3 border-b border-tg-border flex gap-2">
         <button
           onClick={() => dispatch({ type: "join-form-opened" })}
-          style={{
-            flex: 1,
-            padding: "6px 10px",
-            "border-radius": "4px",
-            border: "1px solid #ccc",
-            cursor: "pointer",
-            "font-size": "0.85em",
-            "background-color": "#fff",
-          }}
+          class="flex-1 py-1.5 px-3 rounded-lg border border-tg-border text-sm text-tg-text hover:bg-tg-hover cursor-pointer"
         >
           Join
         </button>
         <button
           onClick={props.onCreateGroup}
-          style={{
-            flex: 1,
-            padding: "6px 10px",
-            "border-radius": "4px",
-            border: "none",
-            cursor: "pointer",
-            "font-size": "0.85em",
-            "background-color": "#2196F3",
-            color: "white",
-          }}
+          class="flex-1 py-1.5 px-3 rounded-lg bg-tg-accent text-white text-sm hover:bg-tg-accent/80 cursor-pointer"
         >
           Create
         </button>
       </div>
 
       <Show when={state().isJoinFormOpen}>
-        <div style={{
-          padding: "10px 12px",
-          "border-bottom": "1px solid #e0e0e0",
-          "background-color": "#fff",
-        }}>
+        <div class="px-3 py-2.5 border-b border-tg-border bg-tg-chat">
           <input
             type="text"
             value={state().joinInput}
@@ -106,49 +95,22 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
             onKeyDown={handleJoinKeyDown}
             placeholder="Paste group UUID..."
             autofocus
-            style={{
-              width: "100%",
-              padding: "6px 8px",
-              "border-radius": "4px",
-              border: "1px solid #ccc",
-              "font-family": "monospace",
-              "font-size": "0.8em",
-              "box-sizing": "border-box",
-              "margin-bottom": "6px",
-            }}
+            class="w-full px-2.5 py-1.5 rounded-lg bg-tg-sidebar border border-tg-border text-tg-text font-mono text-xs mb-2 box-border placeholder:text-tg-text-dim"
           />
           <Show when={state().joinError}>
-            <div style={{ color: "#f44336", "font-size": "0.78em", "margin-bottom": "6px" }}>
-              {state().joinError}
-            </div>
+            <div class="text-tg-danger text-xs mb-2">{state().joinError}</div>
           </Show>
-          <div style={{ display: "flex", gap: "6px" }}>
+          <div class="flex gap-2">
             <button
               onClick={handleJoinSubmit}
               disabled={!state().joinInput.trim()}
-              style={{
-                flex: 1,
-                padding: "4px 8px",
-                "border-radius": "4px",
-                border: "none",
-                cursor: "pointer",
-                "font-size": "0.82em",
-                "background-color": "#4caf50",
-                color: "white",
-              }}
+              class="flex-1 py-1 px-2 rounded-lg bg-tg-success text-white text-xs cursor-pointer disabled:opacity-50"
             >
               Join
             </button>
             <button
               onClick={() => dispatch({ type: "join-form-closed" })}
-              style={{
-                padding: "4px 8px",
-                "border-radius": "4px",
-                border: "1px solid #ccc",
-                cursor: "pointer",
-                "font-size": "0.82em",
-                "background-color": "#fff",
-              }}
+              class="py-1 px-2 rounded-lg border border-tg-border text-tg-text text-xs cursor-pointer hover:bg-tg-hover"
             >
               Cancel
             </button>
@@ -156,102 +118,64 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
         </div>
       </Show>
 
-      <div style={{ flex: 1, "overflow-y": "auto", padding: "4px 0" }}>
+      <div class="flex-1 overflow-y-auto">
         <For each={props.groups} fallback={
-          <div style={{ padding: "20px 12px", "text-align": "center", color: "#999", "font-size": "0.85em" }}>
+          <div class="p-5 text-center text-tg-text-dim text-sm">
             No groups joined yet
           </div>
         }>
           {(group) => {
             const [hovered, setHovered] = createSignal(false);
-            const [copied, setCopied] = createSignal(false);
             const isActive = () => props.activeGroupId === group.groupId;
-
-            const copyGroupId = (e: MouseEvent) => {
-              e.stopPropagation();
-              navigator.clipboard.writeText(group.groupId).then(() => {
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
-              }).catch(() => {});
-            };
 
             return (
               <div
                 onMouseEnter={() => setHovered(true)}
                 onMouseLeave={() => setHovered(false)}
                 onClick={() => props.onSelectGroup(group.groupId)}
-                style={{
-                  display: "flex",
-                  "align-items": "center",
-                  padding: "8px 12px",
-                  cursor: "pointer",
-                  "background-color": isActive() ? "#e3f2fd" : hovered() ? "#eee" : "transparent",
-                  "border-left": isActive() ? "3px solid #2196F3" : "3px solid transparent",
+                class="flex items-center gap-3 px-3 py-2.5 cursor-pointer border-l-3"
+                classList={{
+                  "bg-tg-active border-tg-accent": isActive(),
+                  "border-transparent hover:bg-tg-hover": !isActive(),
                 }}
               >
-                <span style={{
-                  flex: 1,
-                  "font-family": "monospace",
-                  "font-size": "0.8em",
-                  overflow: "hidden",
-                  "text-overflow": "ellipsis",
-                  "white-space": "nowrap",
-                  color: isActive() ? "#1565c0" : "#333",
-                }}>
-                  {group.groupId.slice(0, 8)}...
-                </span>
+                <div class={`w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold text-sm shrink-0 ${avatarColor(group.groupId)}`}>
+                  {group.groupId.charAt(0).toUpperCase()}
+                </div>
 
-                <Show when={group.unreadCount > 0}>
-                  <span style={{
-                    "min-width": "18px",
-                    height: "18px",
-                    "border-radius": "9px",
-                    "background-color": "#2196F3",
-                    color: "white",
-                    "font-size": "0.7em",
-                    display: "flex",
-                    "align-items": "center",
-                    "justify-content": "center",
-                    "margin-right": "4px",
-                    padding: "0 4px",
-                  }}>
-                    {group.unreadCount}
-                  </span>
-                </Show>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center justify-between">
+                    <span class="font-mono text-sm text-tg-text truncate">
+                      {group.groupId.slice(0, 8)}...
+                    </span>
+                    <Show when={group.lastMessage}>
+                      <span class="text-[10px] text-tg-text-dim ml-2 shrink-0">
+                        {formatTime(group.lastMessage!.timestamp)}
+                      </span>
+                    </Show>
+                  </div>
+                  <div class="flex items-center justify-between mt-0.5">
+                    <span class="text-xs text-tg-text-dim truncate">
+                      {group.lastMessage?.text ?? "No messages yet"}
+                    </span>
+                    <Show when={group.unreadCount > 0}>
+                      <span class="min-w-[20px] h-5 rounded-full bg-tg-unread text-white text-[11px] flex items-center justify-center px-1.5 ml-2 shrink-0">
+                        {group.unreadCount}
+                      </span>
+                    </Show>
+                  </div>
+                </div>
 
                 <Show when={hovered()}>
-                  <button
-                    onClick={copyGroupId}
-                    style={{
-                      background: "none",
-                      border: "none",
-                      cursor: "pointer",
-                      color: copied() ? "#4caf50" : "#999",
-                      "font-size": "0.75em",
-                      padding: "0 3px",
-                      "line-height": "1",
-                    }}
-                    title="Copy group ID"
-                  >
-                    {copied() ? "ok" : "cp"}
-                  </button>
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       props.onLeaveGroup(group.groupId);
                     }}
-                    style={{
-                      background: "none",
-                      border: "none",
-                      cursor: "pointer",
-                      color: "#999",
-                      "font-size": "0.9em",
-                      padding: "0 2px",
-                      "line-height": "1",
-                    }}
+                    class="text-tg-text-dim hover:text-tg-danger text-sm p-0.5 shrink-0"
                     title="Leave group"
                   >
-                    x
+                    &times;
                   </button>
                 </Show>
               </div>

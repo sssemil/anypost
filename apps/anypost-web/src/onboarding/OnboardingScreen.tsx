@@ -27,15 +27,15 @@ export const OnboardingScreen = (props: OnboardingScreenProps) => {
   };
 
   return (
-    <div style={{ "max-width": "400px", margin: "80px auto", padding: "20px", "font-family": "system-ui", "text-align": "center" }}>
-      <h1>Welcome to Anypost</h1>
-      <p style={{ color: "#666", "margin-bottom": "32px" }}>
+    <div class="max-w-md mx-auto mt-20 px-5 font-sans text-center">
+      <h1 class="text-2xl font-bold text-tg-text mb-2">Welcome to Anypost</h1>
+      <p class="text-tg-text-dim mb-8">
         Decentralized, encrypted messaging. No servers. No accounts.
       </p>
 
       <Show when={!showImport()} fallback={
         <div>
-          <h2>Import Account</h2>
+          <h2 class="text-lg font-semibold text-tg-text mb-4">Import Account</h2>
           <textarea
             value={seedPhrase()}
             onInput={(e) => {
@@ -44,38 +44,38 @@ export const OnboardingScreen = (props: OnboardingScreenProps) => {
             }}
             placeholder="Enter your 24-word seed phrase..."
             rows={4}
-            style={{ width: "100%", padding: "8px", "border-radius": "4px", border: "1px solid #ccc", "margin-bottom": "12px", "font-family": "monospace", resize: "vertical" }}
+            class="w-full p-3 rounded-xl bg-tg-chat border border-tg-border text-tg-text font-mono text-sm mb-3 resize-y placeholder:text-tg-text-dim"
           />
           <Show when={error()}>
-            <p style={{ color: "red", "margin-top": "0" }}>{error()}</p>
+            <p class="text-tg-danger text-sm mt-0 mb-3">{error()}</p>
           </Show>
-          <div style={{ display: "flex", gap: "8px", "justify-content": "center" }}>
+          <div class="flex gap-2 justify-center">
             <button
               onClick={() => { setShowImport(false); setError(""); }}
-              style={{ padding: "10px 20px", "border-radius": "4px", cursor: "pointer" }}
+              class="py-2.5 px-5 rounded-xl border border-tg-border text-tg-text cursor-pointer hover:bg-tg-hover"
             >
               Back
             </button>
             <button
               onClick={handleImport}
               disabled={!seedPhrase().trim()}
-              style={{ padding: "10px 20px", "border-radius": "4px", cursor: "pointer", "background-color": "#4CAF50", color: "white", border: "none" }}
+              class="py-2.5 px-5 rounded-xl bg-tg-success text-white cursor-pointer disabled:opacity-40 hover:bg-tg-success/80"
             >
               Import
             </button>
           </div>
         </div>
       }>
-        <div style={{ display: "flex", "flex-direction": "column", gap: "12px" }}>
+        <div class="flex flex-col gap-3">
           <button
             onClick={props.onCreateAccount}
-            style={{ padding: "12px 24px", "border-radius": "4px", cursor: "pointer", "background-color": "#2196F3", color: "white", border: "none", "font-size": "1.1em" }}
+            class="py-3 px-6 rounded-xl bg-tg-accent text-white text-lg cursor-pointer hover:bg-tg-accent/80"
           >
             Create New Account
           </button>
           <button
             onClick={() => setShowImport(true)}
-            style={{ padding: "12px 24px", "border-radius": "4px", cursor: "pointer", border: "1px solid #ccc", background: "white" }}
+            class="py-3 px-6 rounded-xl border border-tg-border text-tg-text cursor-pointer hover:bg-tg-hover"
           >
             Import Existing Account
           </button>

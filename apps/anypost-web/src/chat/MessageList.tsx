@@ -1,4 +1,4 @@
-import { For } from "solid-js";
+import { For, Show, createEffect } from "solid-js";
 import { formatSenderDisplay } from "anypost-core/protocol";
 import type { ChatMessageEvent } from "anypost-core/protocol";
 
@@ -7,33 +7,58 @@ type MessageListProps = {
   readonly ownPeerId: string;
 };
 
-const dimText = { color: "#888", "font-size": "0.8em" } as const;
+const formatTime = (timestamp: number): string =>
+  new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 export const MessageList = (props: MessageListProps) => {
+  let containerRef: HTMLDivElement | undefined;
+
+  createEffect(() => {
+    const _msgs = props.messages;
+    if (containerRef) {
+      containerRef.scrollTop = containerRef.scrollHeight;
+    }
+  });
+
   return (
-    <div style={{
-      border: "1px solid #ccc",
-      "border-radius": "8px",
-      height: "100%",
-      "overflow-y": "auto",
-      padding: "12px",
-    }}>
+    <div
+      ref={containerRef}
+      class="h-full overflow-y-auto px-4 py-3"
+    >
       <For each={props.messages} fallback={
-        <div style={{ ...dimText, "text-align": "center", padding: "40px 0" }}>
+        <div class="text-tg-text-dim text-sm text-center py-10">
           No messages yet. Send something!
         </div>
       }>
         {(msg) => {
           const isMe = () => props.ownPeerId === msg.senderPeerId;
           return (
-            <div style={{ "margin-bottom": "8px" }}>
-              <strong style={{ color: isMe() ? "#1565c0" : "#333" }}>
-                {isMe() ? "You" : formatSenderDisplay(msg.senderDisplayName, msg.senderPeerId)}
-              </strong>{" "}
-              <span style={dimText}>
-                {new Date(msg.timestamp).toLocaleTimeString()}
-              </span>
-              <div>{msg.text}</div>
+            <div
+              class="flex mb-2"
+              classList={{
+                "justify-end": isMe(),
+                "justify-start": !isMe(),
+              }}
+            >
+              <div
+                class="max-w-[75%] sm:max-w-[60%] px-3 py-2 rounded-2xl"
+                classList={{
+                  "bg-tg-bubble-own rounded-br-sm": isMe(),
+                  "bg-tg-bubble-other rounded-bl-sm": !isMe(),
+                }}
+              >
+                <Show when={!isMe()}>
+                  <div class="text-tg-accent text-xs font-medium mb-0.5">
+                    {formatSenderDisplay(msg.senderDisplayName, msg.senderPeerId)}
+                  </div>
+                </Show>
+                <div class="text-tg-text text-sm break-words">
+                  {msg.text}
+                  <span class="text-[10px] text-tg-text-dim ml-2 float-right mt-1">
+                    {formatTime(msg.timestamp)}
+                  </span>
+                </div>
+              </div>
             </div>
           );
         }}

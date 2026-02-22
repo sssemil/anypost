@@ -9,17 +9,20 @@ type NetworkPanelProps = {
   readonly latencyMap: ReadonlyMap<string, number>;
 };
 
-const mono = { "font-family": "monospace", "font-size": "0.82em" } as const;
-const dimText = { color: "#888", "font-size": "0.8em" } as const;
-const panelStyle = {
-  border: "1px solid #ddd",
-  "border-radius": "8px",
-  padding: "12px",
-  "margin-bottom": "12px",
-  "background-color": "#f9f9f9",
-} as const;
-
 const PEERS_PER_PAGE = 10;
+
+const latencyBadge = (ms: number) => {
+  const classes = ms < 50
+    ? "bg-tg-success/20 text-tg-success"
+    : ms < 200
+      ? "bg-tg-warning/20 text-tg-warning"
+      : "bg-tg-danger/20 text-tg-danger";
+  return (
+    <span class={`px-1.5 rounded-full text-[10px] ${classes}`}>
+      {Math.round(ms)}ms
+    </span>
+  );
+};
 
 export const NetworkPanel = (props: NetworkPanelProps) => {
   const [showPanel, setShowPanel] = createSignal(true);
@@ -27,12 +30,12 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
   const [peerPage, setPeerPage] = createSignal(0);
 
   return (
-    <div style={{ ...panelStyle, "margin-bottom": "12px" }}>
-      <div style={{ display: "flex", "justify-content": "space-between", "align-items": "center", "margin-bottom": "8px" }}>
-        <strong style={{ "font-size": "0.9em" }}>
+    <div class="rounded-xl border border-tg-border bg-tg-chat p-4 mb-4">
+      <div class="flex justify-between items-center mb-2">
+        <strong class="text-sm text-tg-text">
           Network
           {props.networkStatus && (
-            <span style={{ "font-weight": "normal", ...dimText, "margin-left": "8px" }}>
+            <span class="font-normal text-xs text-tg-text-dim ml-2">
               {props.networkStatus.peers.length} peer{props.networkStatus.peers.length !== 1 ? "s" : ""}
               {" / "}
               {props.networkStatus.subscriberCount} subscriber{props.networkStatus.subscriberCount !== 1 ? "s" : ""}
@@ -41,7 +44,7 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
         </strong>
         <button
           onClick={() => setShowPanel(!showPanel())}
-          style={{ background: "none", border: "none", cursor: "pointer", ...dimText }}
+          class="text-xs text-tg-text-dim hover:text-tg-text cursor-pointer"
         >
           {showPanel() ? "hide" : "show"}
         </button>
@@ -49,8 +52,8 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
 
       <Show when={showPanel() && props.networkStatus}>
         {(status) => (
-          <div style={{ ...mono }}>
-            <div style={{ "margin-bottom": "10px", "padding-bottom": "10px", "border-bottom": "1px solid #e0e0e0" }}>
+          <div class="font-mono text-xs">
+            <div class="mb-3 pb-3 border-b border-tg-border">
               <TopologyGraph
                 networkStatus={status()}
                 bootstrapAddrs={props.bootstrapAddrs}
@@ -58,29 +61,29 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
               />
             </div>
 
-            <div style={{ "margin-bottom": "10px", "padding-bottom": "10px", "border-bottom": "1px solid #e0e0e0" }}>
-              <div style={{ "margin-bottom": "4px" }}>
-                <span style={dimText}>PeerId </span>
-                <code>{status().peerId}</code>
+            <div class="mb-3 pb-3 border-b border-tg-border">
+              <div class="mb-1">
+                <span class="text-tg-text-dim">PeerId </span>
+                <code class="text-tg-text">{status().peerId}</code>
               </div>
-              <div style={{ "margin-bottom": "4px" }}>
-                <span style={dimText}>Topic </span>
-                <code>{status().topic}</code>
+              <div class="mb-1">
+                <span class="text-tg-text-dim">Topic </span>
+                <code class="text-tg-text">{status().topic}</code>
               </div>
               {props.displayName && (
                 <div>
-                  <span style={dimText}>Name </span>
-                  {props.displayName}
+                  <span class="text-tg-text-dim">Name </span>
+                  <span class="text-tg-text">{props.displayName}</span>
                 </div>
               )}
               <Show when={status().multiaddrs.length > 0}>
-                <details style={{ "margin-top": "4px" }}>
-                  <summary style={{ cursor: "pointer", ...dimText }}>
+                <details class="mt-1">
+                  <summary class="cursor-pointer text-tg-text-dim">
                     My addresses ({status().multiaddrs.length})
                   </summary>
                   <For each={status().multiaddrs}>
                     {(addr) => (
-                      <div style={{ "padding-left": "12px", "word-break": "break-all", "margin-top": "2px" }}>
+                      <div class="pl-3 break-all mt-0.5 text-tg-text">
                         {addr}
                       </div>
                     )}
@@ -89,25 +92,25 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
               </Show>
             </div>
 
-            <details style={{ "margin-top": "4px" }}>
-              <summary style={{ cursor: "pointer", ...dimText }}>
+            <details class="mt-1">
+              <summary class="cursor-pointer text-tg-text-dim">
                 Connected peers ({status().peers.length})
               </summary>
               <Show
                 when={status().peers.length > 0}
                 fallback={
-                  <div style={{ ...dimText, "text-align": "center", padding: "8px" }}>
+                  <div class="text-tg-text-dim text-center py-2">
                     No peers connected. Waiting for connections...
                   </div>
                 }
               >
-                <div style={{ "margin-top": "6px", "margin-bottom": "6px" }}>
+                <div class="my-1.5">
                   <input
                     type="text"
                     value={peerSearch()}
                     onInput={(e) => { setPeerSearch(e.currentTarget.value); setPeerPage(0); }}
                     placeholder="Search by peer ID or address..."
-                    style={{ width: "100%", padding: "6px 8px", "border-radius": "4px", border: "1px solid #ddd", ...mono, "font-size": "0.85em", "box-sizing": "border-box" }}
+                    class="w-full px-2 py-1.5 rounded-lg bg-tg-sidebar border border-tg-border text-tg-text font-mono text-xs box-border placeholder:text-tg-text-dim"
                   />
                 </div>
                 {(() => {
@@ -125,81 +128,61 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                     <>
                       <For each={paged}>
                         {(peer) => (
-                          <div style={{
-                            padding: "8px",
-                            "margin-bottom": "6px",
-                            "background-color": "#fff",
-                            "border-radius": "6px",
-                            border: "1px solid #e8e8e8",
-                          }}>
-                            <div style={{ display: "flex", "justify-content": "space-between", "align-items": "center" }}>
-                              <div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
-                                <code style={{ "font-weight": "bold" }}>{peer.peerId.slice(0, 20)}...</code>
+                          <div class="p-2 mb-1.5 bg-tg-sidebar rounded-lg border border-tg-border">
+                            <div class="flex justify-between items-center">
+                              <div class="flex items-center gap-1.5">
+                                <code class="font-bold text-tg-text">{peer.peerId.slice(0, 20)}...</code>
                                 {(() => {
                                   const latency = props.latencyMap.get(peer.peerId);
                                   if (latency === undefined) return null;
-                                  const bg = latency < 50 ? "#e8f5e9" : latency < 200 ? "#fff8e1" : "#fbe9e7";
-                                  const fg = latency < 50 ? "#2e7d32" : latency < 200 ? "#f57f17" : "#c62828";
-                                  return (
-                                    <span style={{
-                                      padding: "1px 6px",
-                                      "border-radius": "8px",
-                                      "font-size": "0.7em",
-                                      "background-color": bg,
-                                      color: fg,
-                                    }}>
-                                      {Math.round(latency)}ms
-                                    </span>
-                                  );
+                                  return latencyBadge(latency);
                                 })()}
                               </div>
-                              <span style={{
-                                padding: "2px 8px",
-                                "border-radius": "10px",
-                                "font-size": "0.75em",
-                                "background-color": peer.direction === "outbound" ? "#e3f2fd" : "#f3e5f5",
-                                color: peer.direction === "outbound" ? "#1565c0" : "#7b1fa2",
-                              }}>
+                              <span class={`px-2 py-0.5 rounded-full text-[10px] ${
+                                peer.direction === "outbound"
+                                  ? "bg-tg-accent/20 text-tg-accent"
+                                  : "bg-purple-500/20 text-purple-400"
+                              }`}>
                                 {peer.direction}
                               </span>
                             </div>
                             <For each={peer.addrs}>
                               {(addr) => (
-                                <div style={{ ...dimText, "word-break": "break-all", "margin-top": "4px" }}>
+                                <div class="text-tg-text-dim break-all mt-1">
                                   {addr}
                                 </div>
                               )}
                             </For>
-                            <div style={{ ...dimText, "margin-top": "2px" }}>
+                            <div class="text-tg-text-dim mt-0.5">
                               muxer: {peer.protocol}
                             </div>
                           </div>
                         )}
                       </For>
                       <Show when={totalPages > 1}>
-                        <div style={{ display: "flex", "justify-content": "center", "align-items": "center", gap: "8px", "margin-top": "8px" }}>
+                        <div class="flex justify-center items-center gap-2 mt-2">
                           <button
                             onClick={() => setPeerPage(Math.max(0, page - 1))}
                             disabled={page === 0}
-                            style={{ background: "none", border: "1px solid #ddd", "border-radius": "4px", padding: "2px 8px", cursor: page === 0 ? "default" : "pointer", ...dimText }}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
                           >
                             prev
                           </button>
-                          <span style={dimText}>
+                          <span class="text-tg-text-dim text-xs">
                             {page + 1} / {totalPages}
                             {query && ` (${filtered.length} match${filtered.length !== 1 ? "es" : ""})`}
                           </span>
                           <button
                             onClick={() => setPeerPage(Math.min(totalPages - 1, page + 1))}
                             disabled={page >= totalPages - 1}
-                            style={{ background: "none", border: "1px solid #ddd", "border-radius": "4px", padding: "2px 8px", cursor: page >= totalPages - 1 ? "default" : "pointer", ...dimText }}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
                           >
                             next
                           </button>
                         </div>
                       </Show>
                       <Show when={query && filtered.length === 0}>
-                        <div style={{ ...dimText, "text-align": "center", padding: "8px" }}>
+                        <div class="text-tg-text-dim text-center py-2">
                           No peers matching "{peerSearch()}"
                         </div>
                       </Show>

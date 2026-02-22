@@ -4,13 +4,17 @@ type HeaderBarProps = {
   readonly peerId: string;
   readonly connectionStatus: "connecting" | "connected" | "disconnected";
   readonly displayName: string;
+  readonly activeGroupId: string | null;
+  readonly showBackButton: boolean;
+  readonly onBackPress: () => void;
+  readonly onDevDrawerToggle: () => void;
 };
 
-const statusColor = (status: HeaderBarProps["connectionStatus"]): string => {
+const statusDotColor = (status: HeaderBarProps["connectionStatus"]): string => {
   switch (status) {
-    case "connected": return "#4caf50";
-    case "connecting": return "#ff9800";
-    case "disconnected": return "#f44336";
+    case "connected": return "bg-tg-success";
+    case "connecting": return "bg-tg-warning";
+    case "disconnected": return "bg-tg-danger";
   }
 };
 
@@ -32,58 +36,63 @@ export const HeaderBar = (props: HeaderBarProps) => {
     }).catch(() => {});
   };
 
+  const truncatedGroupId = () => {
+    const id = props.activeGroupId;
+    if (!id) return "No group";
+    return `${id.slice(0, 8)}...`;
+  };
+
   return (
-    <div style={{
-      display: "flex",
-      "align-items": "center",
-      gap: "12px",
-      padding: "12px 16px",
-      "border-bottom": "1px solid #e0e0e0",
-      "background-color": "#fafafa",
-    }}>
-      <div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
-        <div style={{
-          width: "10px",
-          height: "10px",
-          "border-radius": "50%",
-          "background-color": statusColor(props.connectionStatus),
-        }} />
-        <span style={{ "font-size": "0.8em", color: "#666" }}>
-          {statusLabel(props.connectionStatus)}
-        </span>
+    <div class="flex items-center gap-3 px-4 py-3 bg-tg-header border-b border-tg-border">
+      <Show when={props.showBackButton}>
+        <button
+          class="sm:hidden text-tg-accent text-lg p-1 -ml-1"
+          onClick={() => props.onBackPress()}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5">
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+        </button>
+      </Show>
+
+      <div class="flex flex-col flex-1 min-w-0">
+        <div class="flex items-center gap-2">
+          <span class="font-semibold text-tg-text truncate">
+            {props.displayName || truncatedGroupId()}
+          </span>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <div class={`w-2 h-2 rounded-full ${statusDotColor(props.connectionStatus)}`} />
+          <span class="text-xs text-tg-text-dim">
+            {statusLabel(props.connectionStatus)}
+          </span>
+          <Show when={props.activeGroupId}>
+            <span class="text-xs text-tg-text-dim ml-1 font-mono truncate hidden sm:inline">
+              {props.activeGroupId}
+            </span>
+          </Show>
+        </div>
       </div>
 
-      <Show when={props.displayName}>
-        <span style={{ "font-weight": "bold" }}>{props.displayName}</span>
+      <Show when={props.peerId}>
+        <button
+          onClick={copyPeerId}
+          class="text-xs font-mono text-tg-text-dim hover:text-tg-text border border-tg-border rounded px-2 py-1 hidden sm:block"
+        >
+          {copied() ? "Copied!" : `${props.peerId.slice(0, 12)}...`}
+        </button>
       </Show>
 
-      <Show when={props.peerId}>
-        <div style={{
-          display: "flex",
-          "align-items": "center",
-          gap: "6px",
-          "margin-left": "auto",
-          "font-family": "monospace",
-          "font-size": "0.78em",
-          color: "#555",
-        }}>
-          <span>{props.peerId.slice(0, 16)}...</span>
-          <button
-            onClick={copyPeerId}
-            style={{
-              background: "none",
-              border: "1px solid #ccc",
-              "border-radius": "4px",
-              padding: "2px 8px",
-              cursor: "pointer",
-              "font-size": "0.9em",
-              color: "#555",
-            }}
-          >
-            {copied() ? "Copied!" : "Copy"}
-          </button>
-        </div>
-      </Show>
+      <button
+        class="text-tg-text-dim hover:text-tg-text p-1"
+        onClick={() => props.onDevDrawerToggle()}
+        title="Developer Tools"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5">
+          <path d="M12 15a3 3 0 100-6 3 3 0 000 6z" />
+          <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+        </svg>
+      </button>
     </div>
   );
 };

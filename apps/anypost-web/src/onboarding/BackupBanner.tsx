@@ -10,49 +10,34 @@ export const BackupBanner = (props: BackupBannerProps) => {
   const [confirmed, setConfirmed] = createSignal(false);
 
   return (
-    <div style={{
-      background: "#FFF3CD",
-      border: "1px solid #FFECB5",
-      "border-radius": "8px",
-      padding: "12px 16px",
-      "margin-bottom": "16px",
-      "font-family": "system-ui",
-    }}>
-      <div style={{ display: "flex", "align-items": "center", "justify-content": "space-between" }}>
-        <strong style={{ color: "#856404" }}>
+    <div class="bg-tg-warning/15 border border-tg-warning/30 rounded-xl px-4 py-3 mb-4 font-sans">
+      <div class="flex items-center justify-between">
+        <strong class="text-tg-warning">
           Back up your account
         </strong>
         <button
           onClick={() => setShowSeedPhrase(!showSeedPhrase())}
-          style={{ padding: "6px 12px", "border-radius": "4px", cursor: "pointer", border: "1px solid #856404", background: "transparent", color: "#856404" }}
+          class="py-1.5 px-3 rounded-lg border border-tg-warning/50 text-tg-warning text-sm cursor-pointer hover:bg-tg-warning/10"
         >
           {showSeedPhrase() ? "Hide" : "Show Seed Phrase"}
         </button>
       </div>
 
-      <p style={{ color: "#856404", "font-size": "0.9em", "margin-bottom": "8px" }}>
+      <p class="text-tg-warning/80 text-sm mb-2">
         Save your seed phrase to recover your account on another device. Without it, your identity is lost if this device fails.
       </p>
 
       <Show when={showSeedPhrase()}>
-        <div style={{
-          background: "white",
-          border: "1px solid #ddd",
-          "border-radius": "4px",
-          padding: "12px",
-          "margin-bottom": "12px",
-          "font-family": "monospace",
-          "word-break": "break-word",
-          "user-select": "all",
-        }}>
+        <div class="bg-tg-chat border border-tg-border rounded-lg p-3 mb-3 font-mono text-sm text-tg-text break-words select-all">
           {props.seedPhrase}
         </div>
 
-        <label style={{ display: "flex", "align-items": "center", gap: "8px", "margin-bottom": "8px", cursor: "pointer", color: "#856404" }}>
+        <label class="flex items-center gap-2 mb-2 cursor-pointer text-tg-warning text-sm">
           <input
             type="checkbox"
             checked={confirmed()}
             onChange={(e) => setConfirmed(e.currentTarget.checked)}
+            class="accent-tg-success"
           />
           I have saved my seed phrase in a safe place
         </label>
@@ -60,14 +45,7 @@ export const BackupBanner = (props: BackupBannerProps) => {
         <button
           onClick={props.onBackupConfirmed}
           disabled={!confirmed()}
-          style={{
-            padding: "8px 16px",
-            "border-radius": "4px",
-            cursor: confirmed() ? "pointer" : "default",
-            "background-color": confirmed() ? "#28A745" : "#ccc",
-            color: "white",
-            border: "none",
-          }}
+          class="py-2 px-4 rounded-xl bg-tg-success text-white cursor-pointer disabled:opacity-40 hover:bg-tg-success/80"
         >
           Confirm Backup
         </button>

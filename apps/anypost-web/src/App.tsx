@@ -39,6 +39,10 @@ import { ConnectPanel } from "./connect/ConnectPanel.js";
 import { NetworkPanel } from "./network/NetworkPanel.js";
 import { EventLog } from "./network/EventLog.js";
 import {
+  createMobileViewState,
+  transitionMobileView,
+} from "./layout/mobile-view-machine.js";
+import {
   serializeGroups,
   deserializeGroups,
 } from "./group-persistence.js";
@@ -77,12 +81,17 @@ export const App = () => {
   const [eventLog, setEventLog] = createSignal<readonly NetworkEvent[]>([]);
   const [bootstrapAddrs, setBootstrapAddrs] = createSignal<readonly string[]>([]);
   const [latencyMap, setLatencyMap] = createSignal<ReadonlyMap<string, number>>(new Map());
+  const [mobileView, setMobileView] = createSignal(createMobileViewState());
 
   let chat: MultiGroupChat | undefined;
   let unsubscribeMessage: (() => void) | undefined;
   let unsubscribeEvents: (() => void) | undefined;
   let statusInterval: ReturnType<typeof setInterval> | undefined;
   let pingInterval: ReturnType<typeof setInterval> | undefined;
+
+  const dispatchMobileView = (event: Parameters<typeof transitionMobileView>[1]) => {
+    setMobileView((s) => transitionMobileView(s, event));
+  };
 
   const refreshNetworkStatus = () => {
     if (chat) setNetworkStatus(chat.getNetworkStatus());
@@ -366,6 +375,7 @@ export const App = () => {
     chat?.joinGroup(groupId);
     dispatchGroupEvent({ type: "group-joined", groupId });
     dispatchGroupEvent({ type: "group-selected", groupId });
+    dispatchMobileView({ type: "group-selected" });
   };
 
   const handleLeaveGroup = (groupId: string) => {
@@ -375,6 +385,7 @@ export const App = () => {
 
   const handleSelectGroup = (groupId: string) => {
     dispatchGroupEvent({ type: "group-selected", groupId });
+    dispatchMobileView({ type: "group-selected" });
   };
 
   const getCurrentAccountKey = (): AccountKey | null => {
@@ -393,11 +404,23 @@ export const App = () => {
   const showConnectPanel = () =>
     chatStatus() === "disconnected" || (chatStatus() === "connecting" && !relayAddr().trim());
 
+  const sidebarGroups = () =>
+    getGroupList(groupState()).map((g) => {
+      const lastMsg = g.messages.length > 0 ? g.messages[g.messages.length - 1] : undefined;
+      return {
+        groupId: g.groupId,
+        unreadCount: g.unreadCount,
+        lastMessage: lastMsg
+          ? { text: lastMsg.text, timestamp: lastMsg.timestamp }
+          : undefined,
+      };
+    });
+
   return (
     <Switch>
       <Match when={onboardingState().status === "checking"}>
-        <div style={{ "text-align": "center", padding: "80px", "font-family": "system-ui" }}>
-          <p>Loading...</p>
+        <div class="text-center py-20 font-sans bg-tg-chat min-h-screen">
+          <p class="text-tg-text-dim">Loading...</p>
         </div>
       </Match>
 
@@ -423,8 +446,8 @@ export const App = () => {
         </Show>
 
         <Show when={showConnectPanel()}>
-          <div style={{ "max-width": "500px", margin: "40px auto", padding: "20px", "font-family": "system-ui" }}>
-            <h1 style={{ "margin-bottom": "16px" }}>Anypost</h1>
+          <div class="max-w-lg mx-auto mt-10 px-5 font-sans">
+            <h1 class="text-2xl font-bold text-tg-text mb-4">Anypost</h1>
             <ConnectPanel
               relayAddr={relayAddr()}
               onRelayAddrChange={setRelayAddr}
@@ -444,14 +467,15 @@ export const App = () => {
                 peerId={chat!.peerId}
                 connectionStatus={chatStatus()}
                 displayName={displayName()}
+                activeGroupId={groupState().activeGroupId}
+                showBackButton={mobileView().currentView === "chat"}
+                onBackPress={() => dispatchMobileView({ type: "back-pressed" })}
+                onDevDrawerToggle={() => dispatchMobileView({ type: "dev-drawer-toggled" })}
               />
             }
             sidebar={
               <GroupSidebar
-                groups={getGroupList(groupState()).map((g) => ({
-                  groupId: g.groupId,
-                  unreadCount: g.unreadCount,
-                }))}
+                groups={sidebarGroups()}
                 activeGroupId={groupState().activeGroupId}
                 onSelectGroup={handleSelectGroup}
                 onJoinGroup={handleJoinGroup}
@@ -471,7 +495,7 @@ export const App = () => {
                 disabled={chatStatus() !== "connected" || getActiveGroup(groupState()) === null}
               />
             }
-            bottomPanels={
+            devDrawerContent={
               <>
                 <PeerSharingPanel
                   ownPeerId={chat!.peerId}
@@ -489,6 +513,9 @@ export const App = () => {
                 />
               </>
             }
+            mobileView={mobileView().currentView}
+            isDevDrawerOpen={mobileView().isDevDrawerOpen}
+            onDevDrawerClose={() => dispatchMobileView({ type: "dev-drawer-closed" })}
           />
         </Show>
       </Match>

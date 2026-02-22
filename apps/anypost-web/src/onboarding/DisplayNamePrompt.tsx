@@ -29,9 +29,9 @@ export const DisplayNamePrompt = (props: DisplayNamePromptProps) => {
   };
 
   return (
-    <div style={{ "max-width": "400px", margin: "80px auto", padding: "20px", "font-family": "system-ui", "text-align": "center" }}>
-      <h1>Choose a Display Name</h1>
-      <p style={{ color: "#666", "margin-bottom": "24px" }}>
+    <div class="max-w-md mx-auto mt-20 px-5 font-sans text-center">
+      <h1 class="text-2xl font-bold text-tg-text mb-2">Choose a Display Name</h1>
+      <p class="text-tg-text-dim mb-6">
         This is how others will see you. You can change it later.
       </p>
 
@@ -45,17 +45,17 @@ export const DisplayNamePrompt = (props: DisplayNamePromptProps) => {
         onKeyDown={handleKeyDown}
         placeholder="Enter your display name..."
         maxLength={100}
-        style={{ width: "100%", padding: "10px", "border-radius": "4px", border: "1px solid #ccc", "margin-bottom": "12px", "font-size": "1.1em", "box-sizing": "border-box" }}
+        class="w-full p-3 rounded-xl bg-tg-chat border border-tg-border text-tg-text text-lg mb-3 box-border placeholder:text-tg-text-dim focus:outline-none focus:border-tg-accent"
       />
 
       <Show when={error()}>
-        <p style={{ color: "red", "margin-top": "0" }}>{error()}</p>
+        <p class="text-tg-danger text-sm mt-0 mb-3">{error()}</p>
       </Show>
 
       <button
         onClick={handleSubmit}
         disabled={!name().trim()}
-        style={{ padding: "12px 24px", "border-radius": "4px", cursor: "pointer", "background-color": "#2196F3", color: "white", border: "none", "font-size": "1.1em", width: "100%" }}
+        class="w-full py-3 px-6 rounded-xl bg-tg-accent text-white text-lg cursor-pointer disabled:opacity-40 hover:bg-tg-accent/80"
       >
         Continue
       </button>

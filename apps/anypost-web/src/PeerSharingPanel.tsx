@@ -14,16 +14,6 @@ type PeerSharingPanelProps = {
   readonly onConnect: (targetPeerId: string) => Promise<void>;
 };
 
-const mono = { "font-family": "monospace", "font-size": "0.82em" } as const;
-const dimText = { color: "#888", "font-size": "0.8em" } as const;
-const panelStyle = {
-  border: "1px solid #ddd",
-  "border-radius": "8px",
-  padding: "12px",
-  "margin-bottom": "12px",
-  "background-color": "#f9f9f9",
-} as const;
-
 export const PeerSharingPanel = (props: PeerSharingPanelProps) => {
   const [state, setState] = createSignal(createPeerSharingState(props.ownPeerId));
 
@@ -63,45 +53,38 @@ export const PeerSharingPanel = (props: PeerSharingPanelProps) => {
     }
   };
 
-  const statusColor = () => {
+  const statusColorClass = () => {
     switch (state().connectStatus) {
-      case "connected": return "#4caf50";
-      case "failed": return "#f44336";
-      default: return "#ff9800";
+      case "connected": return "text-tg-success";
+      case "failed": return "text-tg-danger";
+      default: return "text-tg-warning";
     }
   };
 
   return (
-    <div style={panelStyle}>
-      <strong style={{ "font-size": "0.9em", display: "block", "margin-bottom": "8px" }}>
+    <div class="rounded-xl border border-tg-border bg-tg-chat p-4 mb-4">
+      <strong class="text-sm text-tg-text block mb-2">
         Peer Sharing
       </strong>
 
-      {/* Own Peer ID */}
-      <div style={{ "margin-bottom": "10px" }}>
-        <span style={dimText}>Your Peer ID </span>
-        <code style={{ ...mono, "word-break": "break-all" }}>
+      <div class="mb-3">
+        <span class="text-xs text-tg-text-dim">Your Peer ID </span>
+        <code class="font-mono text-xs text-tg-text break-all">
           {formatPeerIdForDisplay(props.ownPeerId)}
         </code>
         <button
           onClick={() => void handleCopy()}
-          style={{
-            "margin-left": "8px",
-            padding: "2px 8px",
-            "border-radius": "4px",
-            border: "1px solid #ccc",
-            "background-color": state().copied ? "#e8f5e9" : "#fff",
-            cursor: "pointer",
-            "font-size": "0.8em",
+          class="ml-2 px-2 py-0.5 rounded border border-tg-border text-xs text-tg-text-dim hover:text-tg-text cursor-pointer"
+          classList={{
+            "bg-tg-success/20": state().copied,
           }}
         >
           {state().copied ? "Copied!" : "Copy"}
         </button>
       </div>
 
-      {/* Target Peer ID input */}
-      <div style={{ "margin-bottom": "8px" }}>
-        <label style={{ display: "block", "margin-bottom": "4px", ...dimText }}>
+      <div class="mb-2">
+        <label class="block mb-1 text-xs text-tg-text-dim">
           Connect to Peer ID
         </label>
         <input
@@ -109,36 +92,20 @@ export const PeerSharingPanel = (props: PeerSharingPanelProps) => {
           value={state().targetPeerId}
           onInput={(e) => setState(setTargetPeerId(state(), e.currentTarget.value))}
           placeholder="12D3KooW..."
-          style={{
-            width: "100%",
-            padding: "6px 8px",
-            "border-radius": "4px",
-            border: "1px solid #ccc",
-            ...mono,
-            "box-sizing": "border-box",
-          }}
+          class="w-full px-2 py-1.5 rounded-lg bg-tg-sidebar border border-tg-border text-tg-text font-mono text-xs box-border placeholder:text-tg-text-dim"
         />
       </div>
 
-      {/* Connect button + status */}
-      <div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
+      <div class="flex items-center gap-2">
         <button
           onClick={() => void handleConnect()}
           disabled={!canConnect(state())}
-          style={{
-            padding: "6px 14px",
-            "border-radius": "4px",
-            cursor: canConnect(state()) ? "pointer" : "default",
-            "background-color": canConnect(state()) ? "#2196F3" : "#ccc",
-            color: "white",
-            border: "none",
-            "font-size": "0.85em",
-          }}
+          class="px-3.5 py-1.5 rounded-lg bg-tg-accent text-white text-sm cursor-pointer disabled:opacity-40 hover:bg-tg-accent/80"
         >
           Find & Connect
         </button>
         <Show when={statusLabel()}>
-          <span style={{ "font-size": "0.8em", color: statusColor() }}>
+          <span class={`text-xs ${statusColorClass()}`}>
             {statusLabel()}
           </span>
         </Show>

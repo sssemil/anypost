@@ -273,7 +273,7 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
           width: "100%",
           height: "auto",
           "max-height": "350px",
-          "background-color": "#fafafa",
+          "background-color": "#0e1621",
           "border-radius": "6px",
           cursor: panStart ? "grabbing" : "grab",
           "user-select": "none",
@@ -316,7 +316,7 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
                   text-anchor="middle"
                   font-size="8"
                   font-family="monospace"
-                  fill="#999"
+                  fill="#8696a6"
                 >
                   {formatLatency(latency!)}
                 </text>
@@ -342,7 +342,7 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
                   cy={node.y}
                   r={r + (isSelected() ? 3 : 0)}
                   fill={nodeColor(node.nodeType)}
-                  stroke={isSelected() ? "#333" : "#fff"}
+                  stroke={isSelected() ? "#f5f5f5" : "#1d2b3a"}
                   stroke-width={isSelected() ? 3 : 2}
                   opacity={0.9}
                 />
@@ -352,7 +352,7 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
                   text-anchor="middle"
                   font-size="9"
                   font-family="monospace"
-                  fill="#666"
+                  fill="#8696a6"
                 >
                   {node.nodeType === "self" ? "You" : node.label}
                 </text>
@@ -362,12 +362,12 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
         </For>
       </svg>
 
-      <div style={{ display: "flex", gap: "12px", "flex-wrap": "wrap", "margin-top": "6px", "font-size": "0.7em", color: "#888" }}>
+      <div class="flex gap-3 flex-wrap mt-1.5 text-[11px] text-tg-text-dim">
         <span><span style={{ color: "#2196F3" }}>●</span> You</span>
         <span><span style={{ color: "#FF9800" }}>●</span> Relay</span>
         <span><span style={{ color: "#4CAF50" }}>●</span> Peer</span>
         <span><span style={{ color: "#9E9E9E" }}>●</span> Bootstrap</span>
-        <span style={{ "border-left": "1px solid #ddd", "padding-left": "12px" }}>
+        <span class="border-l border-tg-border pl-3">
           <span style={{ color: "#4CAF50" }}>―</span> WebRTC
           {" "}
           <span style={{ color: "#FF9800" }}>- -</span> Relay
@@ -378,55 +378,39 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
 
       <Show when={selectedNodeInfo()}>
         {(info) => (
-          <div style={{
-            "margin-top": "8px",
-            padding: "10px",
-            "background-color": "#fff",
-            "border-radius": "6px",
-            border: "1px solid #e0e0e0",
-            "font-size": "0.8em",
-            "font-family": "monospace",
-          }}>
-            <div style={{ display: "flex", "justify-content": "space-between", "align-items": "center", "margin-bottom": "6px" }}>
-              <strong>{nodeTypeLabel(info().node.nodeType)}</strong>
+          <div class="mt-2 p-3 bg-tg-sidebar rounded-lg border border-tg-border text-xs font-mono">
+            <div class="flex justify-between items-center mb-1.5">
+              <strong class="text-tg-text">{nodeTypeLabel(info().node.nodeType)}</strong>
               <button
                 onClick={() => setSelectedNodeId(null)}
-                style={{ background: "none", border: "none", cursor: "pointer", color: "#888", "font-size": "1.1em" }}
+                class="text-tg-text-dim hover:text-tg-text cursor-pointer text-base"
               >
-                x
+                &times;
               </button>
             </div>
 
-            <div style={{ "margin-bottom": "4px", "word-break": "break-all" }}>
-              <span style={{ color: "#888" }}>Peer ID </span>
-              <code>{info().node.id}</code>
+            <div class="mb-1 break-all">
+              <span class="text-tg-text-dim">Peer ID </span>
+              <code class="text-tg-text">{info().node.id}</code>
               <button
                 onClick={() => navigator.clipboard.writeText(info().node.id)}
-                style={{
-                  "margin-left": "6px",
-                  background: "none",
-                  border: "1px solid #ddd",
-                  "border-radius": "3px",
-                  cursor: "pointer",
-                  "font-size": "0.85em",
-                  padding: "1px 6px",
-                  color: "#666",
-                }}
+                class="ml-1.5 border border-tg-border rounded px-1.5 py-px text-[10px] text-tg-text-dim hover:text-tg-text cursor-pointer"
               >
                 copy
               </button>
             </div>
 
             <Show when={info().latency !== undefined}>
-              <div style={{ "margin-bottom": "4px" }}>
-                <span style={{ color: "#888" }}>Latency </span>
-                <span style={{
-                  padding: "1px 6px",
-                  "border-radius": "8px",
-                  "font-size": "0.9em",
-                  "background-color": info().latency! < 50 ? "#e8f5e9" : info().latency! < 200 ? "#fff8e1" : "#fbe9e7",
-                  color: info().latency! < 50 ? "#2e7d32" : info().latency! < 200 ? "#f57f17" : "#c62828",
-                }}>
+              <div class="mb-1">
+                <span class="text-tg-text-dim">Latency </span>
+                <span
+                  class="px-1.5 rounded-full text-[10px]"
+                  classList={{
+                    "bg-tg-success/20 text-tg-success": info().latency! < 50,
+                    "bg-tg-warning/20 text-tg-warning": info().latency! >= 50 && info().latency! < 200,
+                    "bg-tg-danger/20 text-tg-danger": info().latency! >= 200,
+                  }}
+                >
                   {formatLatency(info().latency!)}
                 </span>
               </div>
@@ -435,20 +419,20 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
             <Show when={info().peer}>
               {(peer) => (
                 <>
-                  <div style={{ "margin-bottom": "4px" }}>
-                    <span style={{ color: "#888" }}>Direction </span>
-                    {peer().direction}
+                  <div class="mb-1">
+                    <span class="text-tg-text-dim">Direction </span>
+                    <span class="text-tg-text">{peer().direction}</span>
                   </div>
-                  <div style={{ "margin-bottom": "4px" }}>
-                    <span style={{ color: "#888" }}>Muxer </span>
-                    {peer().protocol}
+                  <div class="mb-1">
+                    <span class="text-tg-text-dim">Muxer </span>
+                    <span class="text-tg-text">{peer().protocol}</span>
                   </div>
                   <Show when={peer().addrs.length > 0}>
                     <div>
-                      <span style={{ color: "#888" }}>Addresses</span>
+                      <span class="text-tg-text-dim">Addresses</span>
                       <For each={peer().addrs}>
                         {(addr) => (
-                          <div style={{ "word-break": "break-all", "padding-left": "8px", "margin-top": "2px", color: "#555" }}>
+                          <div class="break-all pl-2 mt-0.5 text-tg-text-dim">
                             {addr}
                           </div>
                         )}
