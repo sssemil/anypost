@@ -5,5 +5,7 @@ export default defineConfig({
     globals: false,
     environment: "node",
     passWithNoTests: true,
+    setupFiles: ["../../packages/anypost-core/src/setup.ts"],
+    exclude: ["dist/**", "node_modules/**"],
   },
 });
