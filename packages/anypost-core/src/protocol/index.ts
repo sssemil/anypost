@@ -1,1 +1,1 @@
-export {};
+export { encodeWireMessage, decodeWireMessage } from "./codec.js";
