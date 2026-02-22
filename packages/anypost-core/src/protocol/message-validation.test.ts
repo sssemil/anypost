@@ -65,6 +65,20 @@ describe("validateMessageSize", () => {
   });
 });
 
+describe("validateMessageSize input validation", () => {
+  it("should reject NaN maxBytes", () => {
+    expect(() => validateMessageSize(new Uint8Array(10), NaN)).toThrow(RangeError);
+  });
+
+  it("should reject negative maxBytes", () => {
+    expect(() => validateMessageSize(new Uint8Array(10), -1)).toThrow(RangeError);
+  });
+
+  it("should reject Infinity maxBytes", () => {
+    expect(() => validateMessageSize(new Uint8Array(10), Infinity)).toThrow(RangeError);
+  });
+});
+
 describe("defaults", () => {
   it("should have 64KB max message size", () => {
     expect(DEFAULT_MAX_MESSAGE_SIZE_BYTES).toBe(65_536);

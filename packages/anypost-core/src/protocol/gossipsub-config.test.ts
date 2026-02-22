@@ -108,6 +108,28 @@ describe("createGossipSubParams", () => {
   });
 });
 
+describe("createGossipSubParams input validation", () => {
+  it("should reject Dlo greater than D", () => {
+    expect(() => createGossipSubParams({ D: 4, Dlo: 8 })).toThrow(RangeError);
+  });
+
+  it("should reject Dhi less than D", () => {
+    expect(() => createGossipSubParams({ D: 8, Dhi: 4 })).toThrow(RangeError);
+  });
+
+  it("should reject non-positive D", () => {
+    expect(() => createGossipSubParams({ D: 0 })).toThrow(RangeError);
+  });
+
+  it("should reject NaN D", () => {
+    expect(() => createGossipSubParams({ D: NaN })).toThrow(RangeError);
+  });
+
+  it("should reject Infinity Dhi", () => {
+    expect(() => createGossipSubParams({ Dhi: Infinity })).toThrow(RangeError);
+  });
+});
+
 describe("defaults", () => {
   it("should have D=6", () => {
     expect(DEFAULT_MESH_D).toBe(6);

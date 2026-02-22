@@ -37,16 +37,43 @@ export const createOpaqueTopicName = (
 export const shouldUseFloodSub = (peerCount: number): boolean =>
   peerCount < FLOODSUB_PEER_THRESHOLD;
 
+const validatePositiveFinite = (name: string, value: number): void => {
+  if (!Number.isFinite(value) || value < 1) {
+    throw new RangeError(
+      `${name} must be a positive finite integer, got ${value}`,
+    );
+  }
+};
+
 export const createGossipSubParams = (
   options?: CreateGossipSubParamsOptions,
-): GossipSubParams => ({
-  D: options?.D ?? DEFAULT_MESH_D,
-  Dlo: options?.Dlo ?? DEFAULT_MESH_D_LOW,
-  Dhi: options?.Dhi ?? DEFAULT_MESH_D_HIGH,
-  Dlazy: options?.Dlazy ?? DEFAULT_MESH_D_LAZY,
-  scoreThresholds: {
-    gossipThreshold: -100,
-    publishThreshold: -1000,
-    graylistThreshold: -10_000,
-  },
-});
+): GossipSubParams => {
+  const D = options?.D ?? DEFAULT_MESH_D;
+  const Dlo = options?.Dlo ?? DEFAULT_MESH_D_LOW;
+  const Dhi = options?.Dhi ?? DEFAULT_MESH_D_HIGH;
+  const Dlazy = options?.Dlazy ?? DEFAULT_MESH_D_LAZY;
+
+  validatePositiveFinite("D", D);
+  validatePositiveFinite("Dlo", Dlo);
+  validatePositiveFinite("Dhi", Dhi);
+  validatePositiveFinite("Dlazy", Dlazy);
+
+  if (Dlo > D) {
+    throw new RangeError(`Dlo (${Dlo}) must be <= D (${D})`);
+  }
+  if (Dhi < D) {
+    throw new RangeError(`Dhi (${Dhi}) must be >= D (${D})`);
+  }
+
+  return {
+    D,
+    Dlo,
+    Dhi,
+    Dlazy,
+    scoreThresholds: {
+      gossipThreshold: -100,
+      publishThreshold: -1000,
+      graylistThreshold: -10_000,
+    },
+  };
+};
