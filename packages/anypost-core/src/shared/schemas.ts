@@ -112,3 +112,12 @@ export const MessageRefSchema = z.object({
 });
 
 export type MessageRef = z.infer<typeof MessageRefSchema>;
+
+export const DeviceCertificateSchema = z.object({
+  devicePeerId: PeerIdSchema,
+  accountPublicKey: Uint8ArraySchema,
+  timestamp: z.number(),
+  signature: Uint8ArraySchema,
+});
+
+export type DeviceCertificate = z.infer<typeof DeviceCertificateSchema>;

@@ -15,6 +15,7 @@ export {
   MemberSchema,
   GroupMetadataSchema,
   MessageRefSchema,
+  DeviceCertificateSchema,
 } from "./schemas.js";
 
 export type {
@@ -30,6 +31,7 @@ export type {
   Member,
   GroupMetadata,
   MessageRef,
+  DeviceCertificate,
 } from "./schemas.js";
 
 export {
