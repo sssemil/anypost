@@ -69,28 +69,42 @@ export const App = () => {
   });
 
   const handleCreateAccount = async () => {
-    const accountKey = generateAccountKey();
-    const exported = exportAccountKey(accountKey);
-    setSeedPhrase(exported.seedPhrase);
-
-    const store = await openAccountStore();
     try {
-      await store.saveAccountKey(accountKey);
-    } finally {
-      store.close();
-    }
+      const accountKey = generateAccountKey();
+      const exported = exportAccountKey(accountKey);
+      setSeedPhrase(exported.seedPhrase);
 
-    setOnboardingState(
-      transition(onboardingState(), {
-        type: "key-generated",
-        accountKey,
-      }),
-    );
+      const store = await openAccountStore();
+      try {
+        await store.saveAccountKey(accountKey);
+      } finally {
+        store.close();
+      }
+
+      setOnboardingState(
+        transition(onboardingState(), {
+          type: "key-generated",
+          accountKey,
+        }),
+      );
+    } catch {
+      // Key generation is in-memory and cannot fail.
+      // IndexedDB storage failures leave the user on the onboarding screen,
+      // which is the correct recovery: they can retry.
+    }
   };
 
   const handleImportAccount = async (phrase: string) => {
+    let accountKey: AccountKey;
     try {
-      const accountKey = importAccountKey(phrase);
+      accountKey = importAccountKey(phrase);
+    } catch {
+      // importAccountKey throws on invalid seed phrase.
+      // OnboardingScreen surfaces this via its synchronous try/catch.
+      return;
+    }
+
+    try {
       setSeedPhrase(phrase);
 
       const store = await openAccountStore();
@@ -107,10 +121,8 @@ export const App = () => {
         }),
       );
     } catch {
-      // importAccountKey throws on invalid seed phrase.
-      // OnboardingScreen's try/catch cannot catch async rejections,
-      // so we handle errors here. The error is already surfaced
-      // by the synchronous throw path in OnboardingScreen.handleImport.
+      // IndexedDB storage failure. The user remains on the onboarding screen,
+      // which is the correct recovery: they can retry the import.
     }
   };
 
@@ -118,17 +130,25 @@ export const App = () => {
     const state = onboardingState();
     if (state.status !== "display-name-prompt") return;
 
-    const persistedSettings = await createPersistedSettingsDocument(state.accountKey.publicKey);
-    setDisplayName(persistedSettings.doc, name);
-    setDisplayNameState(name);
-    await persistedSettings.destroy();
+    try {
+      const persistedSettings = await createPersistedSettingsDocument(state.accountKey.publicKey);
+      try {
+        setDisplayName(persistedSettings.doc, name);
+        setDisplayNameState(name);
+      } finally {
+        await persistedSettings.destroy();
+      }
 
-    setOnboardingState(
-      transition(state, {
-        type: "display-name-set",
-        displayName: name,
-      }),
-    );
+      setOnboardingState(
+        transition(state, {
+          type: "display-name-set",
+          displayName: name,
+        }),
+      );
+    } catch {
+      // IndexedDB persistence failure. The user remains on the display name prompt,
+      // which is the correct recovery: they can retry.
+    }
   };
 
   const handleBackupConfirmed = async () => {
