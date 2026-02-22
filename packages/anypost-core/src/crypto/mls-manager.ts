@@ -22,6 +22,7 @@ import type {
   Welcome,
   Proposal,
 } from "ts-mls";
+export type { AuthenticationService } from "ts-mls";
 
 const DEFAULT_CIPHERSUITE =
   "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519" as const;

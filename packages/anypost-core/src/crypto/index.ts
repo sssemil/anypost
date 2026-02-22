@@ -25,6 +25,7 @@ export {
 } from "./mls-manager.js";
 
 export type {
+  AuthenticationService,
   MlsContext,
   MlsGroupState,
   MlsKeyPackageBundle,
