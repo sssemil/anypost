@@ -77,9 +77,11 @@ export const HeaderBar = (props: HeaderBarProps) => {
       <Show when={props.peerId}>
         <button
           onClick={copyPeerId}
-          class="text-xs font-mono text-tg-text-dim hover:text-tg-text border border-tg-border rounded px-2 py-1 hidden sm:block"
+          class="flex items-center gap-1.5 text-xs border border-tg-border rounded-lg px-2.5 py-1 hidden sm:flex hover:bg-tg-hover cursor-pointer"
         >
-          {copied() ? "Copied!" : `${props.peerId.slice(0, 12)}...`}
+          <span class="text-tg-text-dim">Your ID</span>
+          <span class="font-mono text-tg-text">{props.peerId.slice(0, 12)}...</span>
+          <span class="text-tg-accent text-[10px]">{copied() ? "Copied!" : "Copy"}</span>
         </button>
       </Show>
 
