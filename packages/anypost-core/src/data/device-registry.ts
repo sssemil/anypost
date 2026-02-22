@@ -11,13 +11,7 @@ const RegisteredDeviceSchema = z.object({
   lastSeen: z.number(),
 });
 
-export type RegisteredDevice = {
-  readonly devicePeerId: string;
-  readonly accountPublicKey: Uint8Array;
-  readonly timestamp: number;
-  readonly signature: Uint8Array;
-  readonly lastSeen: number;
-};
+export type RegisteredDevice = Readonly<z.infer<typeof RegisteredDeviceSchema>>;
 
 export const createDeviceRegistryDocument = (
   accountPublicKey: Uint8Array,

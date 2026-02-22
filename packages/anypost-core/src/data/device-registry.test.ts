@@ -149,6 +149,26 @@ describe("Device registry", () => {
 
       expect(isDeviceRegistered(doc, certificate.devicePeerId)).toBe(true);
     });
+
+    it("should skip non-Y.Map entries in the devices map", () => {
+      const accountKey = generateAccountKey();
+      const doc = createDeviceRegistryDocument(accountKey.publicKey);
+      const devicesMap = doc.getMap("devices");
+      devicesMap.set("garbage", "not-a-map");
+
+      expect(getRegisteredDevices(doc)).toHaveLength(0);
+    });
+
+    it("should skip entries with invalid data", () => {
+      const accountKey = generateAccountKey();
+      const doc = createDeviceRegistryDocument(accountKey.publicKey);
+      const devicesMap = doc.getMap("devices");
+      const badEntry = new Y.Map();
+      badEntry.set("devicePeerId", "");
+      devicesMap.set("bad-device", badEntry);
+
+      expect(getRegisteredDevices(doc)).toHaveLength(0);
+    });
   });
 
   describe("last-seen updates", () => {
