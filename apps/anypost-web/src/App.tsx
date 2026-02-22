@@ -462,7 +462,7 @@ export const App = () => {
                       </div>
                       <div style={{ "margin-bottom": "4px" }}>
                         <span style={dimText}>Topic </span>
-                        <code>{status().topic.slice(0, 16)}...</code>
+                        <code>{status().topic}</code>
                       </div>
                       {displayName() && (
                         <div>
