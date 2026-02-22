@@ -61,6 +61,19 @@ describe("Settings Document", () => {
       expect(result).toBeNull();
     });
 
+    it("should reject empty display name", () => {
+      const doc = createSettingsDocument(TEST_ACCOUNT_PUBLIC_KEY);
+
+      expect(() => setDisplayName(doc, "")).toThrow();
+    });
+
+    it("should reject display name exceeding max length", () => {
+      const doc = createSettingsDocument(TEST_ACCOUNT_PUBLIC_KEY);
+      const longName = "a".repeat(101);
+
+      expect(() => setDisplayName(doc, longName)).toThrow();
+    });
+
     it("should overwrite display name when set again", () => {
       const doc = createSettingsDocument(TEST_ACCOUNT_PUBLIC_KEY);
       setDisplayName(doc, "Alice");
@@ -73,7 +86,7 @@ describe("Settings Document", () => {
   });
 
   describe("formatUserDisplay", () => {
-    it("should format as DisplayName (..xxxx) with last 4 hex chars of public key", () => {
+    it("should format as DisplayName (..xxxxxxxx) with last 8 hex chars of public key", () => {
       const result = formatUserDisplay("Alice", TEST_ACCOUNT_PUBLIC_KEY);
 
       expect(result).toBe("Alice (..191a1b1c)");

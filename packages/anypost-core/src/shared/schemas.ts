@@ -114,7 +114,7 @@ export const MessageRefSchema = z.object({
 export type MessageRef = z.infer<typeof MessageRefSchema>;
 
 export const UserProfileSchema = z.object({
-  displayName: z.string().min(1),
+  displayName: z.string().min(1).max(100),
 });
 
 export type UserProfile = z.infer<typeof UserProfileSchema>;

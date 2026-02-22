@@ -11,8 +11,11 @@ export const setDisplayName = (
   doc: Y.Doc,
   displayName: string,
 ): void => {
-  const profileMap = doc.getMap("profile");
-  profileMap.set("displayName", displayName);
+  UserProfileSchema.shape.displayName.parse(displayName);
+  doc.transact(() => {
+    const profileMap = doc.getMap("profile");
+    profileMap.set("displayName", displayName);
+  });
 };
 
 export const getDisplayName = (doc: Y.Doc): string | null => {
