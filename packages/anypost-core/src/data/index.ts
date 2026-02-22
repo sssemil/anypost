@@ -9,6 +9,9 @@ export {
   getChannels,
   appendMessage,
   getChannelMessages,
+  storePendingWelcome,
+  getPendingWelcome,
+  removePendingWelcome,
 } from "./group-document.js";
 
 export {

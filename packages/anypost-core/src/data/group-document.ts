@@ -87,3 +87,30 @@ export const getChannelMessages = (
     .map((value) => MessageRefSchema.safeParse(value))
     .filter((result) => result.success)
     .map((result) => result.data);
+
+export const storePendingWelcome = (
+  doc: Y.Doc,
+  accountPublicKey: AccountPublicKey,
+  welcomeData: Uint8Array,
+): void => {
+  const welcomesMap = doc.getMap("pendingWelcomes");
+  welcomesMap.set(accountPublicKey, welcomeData);
+};
+
+export const getPendingWelcome = (
+  doc: Y.Doc,
+  accountPublicKey: AccountPublicKey,
+): Uint8Array | null => {
+  const welcomesMap = doc.getMap("pendingWelcomes");
+  const data = welcomesMap.get(accountPublicKey);
+  if (!(data instanceof Uint8Array)) return null;
+  return data;
+};
+
+export const removePendingWelcome = (
+  doc: Y.Doc,
+  accountPublicKey: AccountPublicKey,
+): void => {
+  const welcomesMap = doc.getMap("pendingWelcomes");
+  welcomesMap.delete(accountPublicKey);
+};

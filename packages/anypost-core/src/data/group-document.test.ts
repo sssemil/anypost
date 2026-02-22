@@ -11,6 +11,9 @@ import {
   getMembers,
   addChannel,
   getChannels,
+  storePendingWelcome,
+  getPendingWelcome,
+  removePendingWelcome,
 } from "./group-document.js";
 import {
   createGroupMetadata,
@@ -200,6 +203,48 @@ describe("Group Document", () => {
       const messages = getChannelMessages(doc, TEST_CHANNEL_ID);
 
       expect(messages.length).toBe(1);
+    });
+  });
+
+  describe("pending welcomes", () => {
+    it("should store pending welcome message in group doc", () => {
+      const doc = createGroupDocument(TEST_GROUP_ID);
+      const welcomeData = new Uint8Array([1, 2, 3, 4]);
+
+      storePendingWelcome(doc, "ed25519:invitee-key", welcomeData);
+
+      const retrieved = getPendingWelcome(doc, "ed25519:invitee-key");
+      expect(retrieved).toEqual(welcomeData);
+    });
+
+    it("should return null for unknown account key", () => {
+      const doc = createGroupDocument(TEST_GROUP_ID);
+
+      const result = getPendingWelcome(doc, "ed25519:unknown-key");
+
+      expect(result).toBeNull();
+    });
+
+    it("should remove pending welcome after removal", () => {
+      const doc = createGroupDocument(TEST_GROUP_ID);
+      storePendingWelcome(doc, "ed25519:invitee-key", new Uint8Array([5, 6]));
+
+      removePendingWelcome(doc, "ed25519:invitee-key");
+
+      expect(getPendingWelcome(doc, "ed25519:invitee-key")).toBeNull();
+    });
+
+    it("should merge pending welcomes across Y.Docs via CRDT", () => {
+      const doc1 = createGroupDocument(TEST_GROUP_ID);
+      const doc2 = createGroupDocument(TEST_GROUP_ID);
+
+      storePendingWelcome(doc1, "ed25519:invitee1", new Uint8Array([10, 20]));
+
+      const update = Y.encodeStateAsUpdate(doc1);
+      Y.applyUpdate(doc2, update);
+
+      const retrieved = getPendingWelcome(doc2, "ed25519:invitee1");
+      expect(retrieved).toEqual(new Uint8Array([10, 20]));
     });
   });
 
