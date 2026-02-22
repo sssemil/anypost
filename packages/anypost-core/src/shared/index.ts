@@ -15,6 +15,7 @@ export {
   MemberSchema,
   GroupMetadataSchema,
   MessageRefSchema,
+  UserProfileSchema,
   DeviceCertificateSchema,
 } from "./schemas.js";
 
@@ -31,6 +32,7 @@ export type {
   Member,
   GroupMetadata,
   MessageRef,
+  UserProfile,
   DeviceCertificate,
 } from "./schemas.js";
 
@@ -42,4 +44,5 @@ export {
   createMember,
   createChannel,
   createMessageRef,
+  createUserProfile,
 } from "./factories.js";

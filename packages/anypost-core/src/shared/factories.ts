@@ -6,6 +6,7 @@ import type {
   Member,
   Channel,
   MessageRef,
+  UserProfile,
 } from "./schemas.js";
 import {
   EncryptedMessageSchema,
@@ -15,6 +16,7 @@ import {
   MemberSchema,
   ChannelSchema,
   MessageRefSchema,
+  UserProfileSchema,
 } from "./schemas.js";
 
 const DEFAULT_PEER_ID = "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn";
@@ -96,5 +98,13 @@ export const createMessageRef = (
     id: DEFAULT_MESSAGE_ID,
     senderPeerId: DEFAULT_PEER_ID,
     timestamp: DEFAULT_TIMESTAMP,
+    ...overrides,
+  });
+
+export const createUserProfile = (
+  overrides?: Partial<UserProfile>,
+): UserProfile =>
+  UserProfileSchema.parse({
+    displayName: "Test User",
     ...overrides,
   });

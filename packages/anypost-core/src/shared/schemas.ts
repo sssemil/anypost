@@ -113,6 +113,12 @@ export const MessageRefSchema = z.object({
 
 export type MessageRef = z.infer<typeof MessageRefSchema>;
 
+export const UserProfileSchema = z.object({
+  displayName: z.string().min(1),
+});
+
+export type UserProfile = z.infer<typeof UserProfileSchema>;
+
 export const DeviceCertificateSchema = z.object({
   devicePeerId: PeerIdSchema,
   accountPublicKey: Uint8ArraySchema,

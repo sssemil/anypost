@@ -3,6 +3,7 @@ import { IndexeddbPersistence } from "y-indexeddb";
 import { openDB } from "idb";
 import type { IDBPDatabase } from "idb";
 import { createGroupDocument } from "./group-document.js";
+import { createSettingsDocument } from "./settings-document.js";
 import type { GroupId, MessageContent } from "../shared/schemas.js";
 
 export type PersistedGroupDocument = {
@@ -15,6 +16,28 @@ export const createPersistedGroupDocument = async (
 ): Promise<PersistedGroupDocument> => {
   const doc = createGroupDocument(groupId);
   const persistence = new IndexeddbPersistence(`anypost:group:${groupId}`, doc);
+
+  await persistence.whenSynced;
+
+  return {
+    doc,
+    destroy: async () => {
+      await persistence.destroy();
+      doc.destroy();
+    },
+  };
+};
+
+export type PersistedSettingsDocument = {
+  readonly doc: Y.Doc;
+  readonly destroy: () => Promise<void>;
+};
+
+export const createPersistedSettingsDocument = async (
+  accountPublicKey: Uint8Array,
+): Promise<PersistedSettingsDocument> => {
+  const doc = createSettingsDocument(accountPublicKey);
+  const persistence = new IndexeddbPersistence(`anypost:${doc.guid}`, doc);
 
   await persistence.whenSynced;
 
