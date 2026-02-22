@@ -11,7 +11,6 @@ import {
   createSettingsDocument,
   setDisplayName,
   getDisplayName,
-  formatUserDisplay,
 } from "anypost-core/data";
 import { openAccountStore } from "anypost-core/data";
 import {

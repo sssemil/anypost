@@ -9,10 +9,6 @@ export const BackupBanner = (props: BackupBannerProps) => {
   const [showSeedPhrase, setShowSeedPhrase] = createSignal(false);
   const [confirmed, setConfirmed] = createSignal(false);
 
-  const handleConfirmBackup = () => {
-    props.onBackupConfirmed();
-  };
-
   return (
     <div style={{
       background: "#FFF3CD",
@@ -62,7 +58,7 @@ export const BackupBanner = (props: BackupBannerProps) => {
         </label>
 
         <button
-          onClick={handleConfirmBackup}
+          onClick={props.onBackupConfirmed}
           disabled={!confirmed()}
           style={{
             padding: "8px 16px",
