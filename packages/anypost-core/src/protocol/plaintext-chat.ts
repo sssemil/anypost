@@ -10,11 +10,16 @@ import { yamux } from "@chainsafe/libp2p-yamux";
 import { gossipsub } from "@chainsafe/libp2p-gossipsub";
 import { identify } from "@libp2p/identify";
 import { dcutr } from "@libp2p/dcutr";
+import { kadDHT } from "@libp2p/kad-dht";
+import { ping } from "@libp2p/ping";
 import { bootstrap } from "@libp2p/bootstrap";
+import { peerIdFromString } from "@libp2p/peer-id";
 import { multiaddr } from "@multiformats/multiaddr";
 import type { Multiaddr } from "@multiformats/multiaddr";
 import { groupTopic } from "./router.js";
 import { encodeWireMessage, decodeWireMessage } from "./codec.js";
+import { buildCircuitRelayAddresses } from "./peer-id-sharing.js";
+import { createProviderCid, ANYPOST_CHAT_NAMESPACE } from "./dht-config.js";
 import { createEncryptedMessage } from "../shared/factories.js";
 import type { GroupId, WireMessage } from "../shared/schemas.js";
 import { IPFS_BOOTSTRAP_WSS_PEERS } from "../libp2p/bootstrap-peers.js";
@@ -59,6 +64,7 @@ export type PlaintextChat = {
   readonly peerCount: () => number;
   readonly getNetworkStatus: () => NetworkStatus;
   readonly connectTo: (addr: Multiaddr) => Promise<void>;
+  readonly connectToPeerId: (targetPeerId: string) => Promise<void>;
   readonly sendMessage: (text: string) => Promise<void>;
   readonly onMessage: (listener: MessageListener) => () => void;
   readonly onPeerChange: (listener: (count: number) => void) => () => void;
@@ -121,6 +127,8 @@ export const createPlaintextChat = async (
             runOnLimitedConnection: true,
           }),
           dcutr: dcutr(),
+          ping: ping(),
+          dht: kadDHT({ clientMode: true }),
         },
       })
     : await createLibp2p({
@@ -255,6 +263,12 @@ export const createPlaintextChat = async (
   pubsub.subscribe(topic);
   pubsub.addEventListener("message", handlePubsubMessage);
 
+  if (isBrowser) {
+    createProviderCid(ANYPOST_CHAT_NAMESPACE).then((chatCid) => {
+      node.contentRouting.provide(chatCid).catch(() => {});
+    }).catch(() => {});
+  }
+
   return {
     peerId: node.peerId.toString(),
     get multiaddrs() {
@@ -280,6 +294,46 @@ export const createPlaintextChat = async (
     },
     connectTo: async (addr: Multiaddr) => {
       await node.dial(addr);
+    },
+    connectToPeerId: async (targetPeerId: string) => {
+      const remotePeer = peerIdFromString(targetPeerId);
+
+      try {
+        emit("dial-attempt", `Looking up peer ${targetPeerId.slice(0, 16)}... on DHT`);
+        const peerInfo = await node.peerRouting.findPeer(remotePeer);
+        if (peerInfo.multiaddrs.length > 0) {
+          emit("info", `Found ${peerInfo.multiaddrs.length} address(es) via DHT for ${targetPeerId.slice(0, 16)}...`);
+          await node.dial(remotePeer);
+          emit("dial-success", `Connected to ${targetPeerId.slice(0, 16)}... via DHT`);
+          return;
+        }
+      } catch {
+        emit("info", `DHT lookup failed for ${targetPeerId.slice(0, 16)}..., trying circuit relay`);
+      }
+
+      const relayAddresses = bootstrapPeers.length > 0
+        ? bootstrapPeers
+        : node.getMultiaddrs()
+            .map((ma) => ma.toString())
+            .filter((a) => a.includes("/p2p/") && !a.includes("/p2p-circuit/"));
+
+      const circuitAddrs = buildCircuitRelayAddresses({
+        targetPeerId,
+        relayAddresses,
+      });
+
+      for (const addr of circuitAddrs) {
+        try {
+          emit("dial-attempt", `Trying circuit relay: ${addr.slice(0, 60)}...`);
+          await node.dial(multiaddr(addr));
+          emit("dial-success", `Connected to ${targetPeerId.slice(0, 16)}... via circuit relay`);
+          return;
+        } catch {
+          emit("dial-failure", `Circuit relay failed: ${addr.slice(0, 60)}...`);
+        }
+      }
+
+      throw new Error(`Could not connect to peer ${targetPeerId}`);
     },
     sendMessage: async (text: string) => {
       const payload = createEncryptedMessage({

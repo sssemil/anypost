@@ -8,6 +8,10 @@ import { noise } from "@chainsafe/libp2p-noise";
 import { yamux } from "@chainsafe/libp2p-yamux";
 import { gossipsub } from "@chainsafe/libp2p-gossipsub";
 import { identify } from "@libp2p/identify";
+import { kadDHT } from "@libp2p/kad-dht";
+import { ping } from "@libp2p/ping";
+import { bootstrap } from "@libp2p/bootstrap";
+import { IPFS_BOOTSTRAP_TCP_PEERS } from "anypost-core/libp2p";
 import {
   generateKeyPair,
   privateKeyFromProtobuf,
@@ -60,12 +64,17 @@ export const createRelayNode = async (
     transports: [tcp(), webSockets()],
     connectionEncrypters: [noise()],
     streamMuxers: [yamux()],
+    peerDiscovery: [
+      bootstrap({ list: [...IPFS_BOOTSTRAP_TCP_PEERS] }),
+    ],
     services: {
       identify: identify(),
       pubsub: gossipsub({ canRelayMessage: true }),
       relay: circuitRelayServer({
         reservations: { maxReservations: 128 },
       }),
+      ping: ping(),
+      dht: kadDHT({ clientMode: false }),
     },
   });
 

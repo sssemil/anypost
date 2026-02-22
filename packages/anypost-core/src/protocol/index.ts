@@ -73,3 +73,29 @@ export {
   getRelayStatus,
   getHealthyRelayCount,
 } from "./relay-health.js";
+export type { RelayStatus, RelayEntry } from "./relay-health.js";
+export {
+  ANYPOST_RELAY_NAMESPACE,
+  ANYPOST_CHAT_NAMESPACE,
+  DEFAULT_TARGET_RELAY_POOL_SIZE,
+  createProviderCid,
+  createBrowserDhtConfig,
+  createRelayDhtConfig,
+} from "./dht-config.js";
+export {
+  createRelayPoolState,
+  addRelay,
+  removeRelay,
+  needsMoreRelays,
+  markDiscoveryStarted,
+  markDiscoveryCompleted,
+  getActiveRelayCount,
+  selectBestRelays,
+} from "./relay-pool.js";
+export type { RelayPoolState } from "./relay-pool.js";
+export {
+  isValidPeerId,
+  formatPeerIdShort,
+  formatPeerIdForDisplay,
+  buildCircuitRelayAddresses,
+} from "./peer-id-sharing.js";

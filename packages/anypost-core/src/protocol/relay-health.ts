@@ -1,18 +1,18 @@
 export const DEFAULT_HEALTH_CHECK_INTERVAL_MS = 30_000;
 export const DEFAULT_FAILURE_THRESHOLD = 3;
 
-type RelayStatus = "unknown" | "healthy" | "degraded" | "unhealthy";
+export type RelayStatus = "unknown" | "healthy" | "degraded" | "unhealthy";
 
-type RelayEntry = {
+export type RelayEntry = {
   readonly address: string;
   readonly status: RelayStatus;
   readonly consecutiveFailures: number;
   readonly latencyMs: number | null;
 };
 
-type RelayWithLatency = RelayEntry & { readonly latencyMs: number };
+export type RelayWithLatency = RelayEntry & { readonly latencyMs: number };
 
-type RelayHealthState = {
+export type RelayHealthState = {
   readonly relays: readonly RelayEntry[];
   readonly failureThreshold: number;
   readonly healthCheckIntervalMs: number;
@@ -79,11 +79,11 @@ const findRelayIndex = (
 const hasLatency = (r: RelayEntry): r is RelayWithLatency =>
   r.latencyMs !== null;
 
-export const recordHealthCheckSuccess = (
-  state: RelayHealthState,
+export const recordHealthCheckSuccess = <T extends RelayHealthState>(
+  state: T,
   address: string,
   latencyMs: number,
-): RelayHealthState => {
+): T => {
   if (!Number.isFinite(latencyMs) || latencyMs <= 0) {
     throw new RangeError(
       `latencyMs must be a positive finite number, got ${latencyMs}`,
@@ -94,16 +94,16 @@ export const recordHealthCheckSuccess = (
     ...state,
     relays: state.relays.map((relay, i) =>
       i === index
-        ? { ...relay, status: "healthy", consecutiveFailures: 0, latencyMs }
+        ? { ...relay, status: "healthy" as const, consecutiveFailures: 0, latencyMs }
         : relay,
     ),
-  };
+  } as T;
 };
 
-export const recordHealthCheckFailure = (
-  state: RelayHealthState,
+export const recordHealthCheckFailure = <T extends RelayHealthState>(
+  state: T,
   address: string,
-): RelayHealthState => {
+): T => {
   const index = findRelayIndex(state, address);
   const relay = state.relays[index];
   const newFailures = relay.consecutiveFailures + 1;
@@ -117,7 +117,7 @@ export const recordHealthCheckFailure = (
         ? { ...r, status: newStatus, consecutiveFailures: newFailures }
         : r,
     ),
-  };
+  } as T;
 };
 
 export const selectBestRelay = (

@@ -4,13 +4,34 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./shared": "./src/shared/index.ts",
-    "./crypto": "./src/crypto/index.ts",
-    "./data": "./src/data/index.ts",
-    "./protocol": "./src/protocol/index.ts",
-    "./group-management": "./src/group-management.ts",
-    "./media": "./src/media/index.ts",
-    "./libp2p": "./src/libp2p/index.ts"
+    "./shared": {
+      "types": "./src/shared/index.ts",
+      "default": "./dist/shared/index.js"
+    },
+    "./crypto": {
+      "types": "./src/crypto/index.ts",
+      "default": "./dist/crypto/index.js"
+    },
+    "./data": {
+      "types": "./src/data/index.ts",
+      "default": "./dist/data/index.js"
+    },
+    "./protocol": {
+      "types": "./src/protocol/index.ts",
+      "default": "./dist/protocol/index.js"
+    },
+    "./group-management": {
+      "types": "./src/group-management.ts",
+      "default": "./dist/group-management.js"
+    },
+    "./media": {
+      "types": "./src/media/index.ts",
+      "default": "./dist/media/index.js"
+    },
+    "./libp2p": {
+      "types": "./src/libp2p/index.ts",
+      "default": "./dist/libp2p/index.js"
+    }
   },
   "scripts": {
     "build": "tsc --build",
@@ -26,6 +47,9 @@
     "@libp2p/dcutr": "^2.0.38",
     "@libp2p/identify": "^3.0.39",
     "@libp2p/interface": "^2.11.0",
+    "@libp2p/kad-dht": "14.2.15",
+    "@libp2p/peer-id": "^6.0.4",
+    "@libp2p/ping": "^2.0.15",
     "@libp2p/tcp": "^10.1.19",
     "@libp2p/webrtc": "5.2.24",
     "@libp2p/websockets": "^9.2.19",
@@ -39,6 +63,7 @@
     "it-length-prefixed-stream": "^2.0.4",
     "lib0": "^0.2.117",
     "libp2p": "^2.10.0",
+    "multiformats": "^13.4.2",
     "ts-mls": "2.0.0-rc.8",
     "y-indexeddb": "^9.0.12",
     "y-protocols": "^1.0.7",

@@ -1,4 +1,4 @@
-import { createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
+import { createSignal, createEffect, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { createPlaintextChat } from "anypost-core/protocol";
 import type { PlaintextChat, ChatMessageEvent, NetworkStatus, NetworkEvent } from "anypost-core/protocol";
 import {
@@ -21,6 +21,9 @@ import {
 import { OnboardingScreen } from "./onboarding/OnboardingScreen.js";
 import { DisplayNamePrompt } from "./onboarding/DisplayNamePrompt.js";
 import { BackupBanner } from "./onboarding/BackupBanner.js";
+import { decideAutoConnect } from "./auto-connect.js";
+import { TopologyGraph } from "./network/TopologyGraph.js";
+import { PeerSharingPanel } from "./PeerSharingPanel.js";
 
 const DEFAULT_GROUP_ID = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11";
 const ENV_RELAY_MULTIADDR = import.meta.env.VITE_RELAY_MULTIADDR as string | undefined;
@@ -56,6 +59,7 @@ export const App = () => {
   const [showNetworkPanel, setShowNetworkPanel] = createSignal(true);
   const [eventLog, setEventLog] = createSignal<readonly NetworkEvent[]>([]);
   const [showEventLog, setShowEventLog] = createSignal(true);
+  const [bootstrapAddrs, setBootstrapAddrs] = createSignal<readonly string[]>([]);
 
   const MAX_EVENTS = 200;
 
@@ -198,6 +202,7 @@ export const App = () => {
       const addr = relayAddr().trim();
       if (addr) saveRelayAddress(addr);
       const bootstrapPeers = addr ? [addr] : [];
+      setBootstrapAddrs(bootstrapPeers);
       chat = await createPlaintextChat({
         groupId: DEFAULT_GROUP_ID,
         bootstrapPeers,
@@ -229,6 +234,22 @@ export const App = () => {
     unsubscribeEvents?.();
     if (statusInterval) clearInterval(statusInterval);
     chat?.stop();
+  });
+
+  let autoConnectFired = false;
+
+  createEffect(() => {
+    const shouldConnect = decideAutoConnect({
+      onboardingStatus: onboardingState().status,
+      chatStatus: chatStatus(),
+      relayAddress: relayAddr(),
+    });
+
+    if (shouldConnect && !autoConnectFired) {
+      autoConnectFired = true;
+      const key = getCurrentAccountKey();
+      if (key) void startChat(key);
+    }
   });
 
   const sendMessage = async () => {
@@ -307,8 +328,8 @@ export const App = () => {
             />
           </Show>
 
-          {/* Connect panel */}
-          <Show when={chatStatus() === "connecting"}>
+          {/* Connect panel — shown when no relay or disconnected */}
+          <Show when={chatStatus() === "disconnected" || (chatStatus() === "connecting" && !relayAddr().trim())}>
             <div style={panelStyle}>
               <label style={{ display: "block", "margin-bottom": "6px", "font-weight": "bold", "font-size": "0.9em" }}>
                 Relay address
@@ -336,6 +357,67 @@ export const App = () => {
             </div>
           </Show>
 
+          {/* Messages */}
+          <div style={{
+            border: "1px solid #ccc",
+            "border-radius": "8px",
+            height: "350px",
+            "overflow-y": "auto",
+            padding: "12px",
+            "margin-bottom": "12px",
+          }}>
+            <For each={messages()} fallback={
+              <div style={{ ...dimText, "text-align": "center", padding: "40px 0" }}>
+                No messages yet. Send something!
+              </div>
+            }>
+              {(msg) => {
+                const isMe = () => chat?.peerId === msg.senderPeerId;
+                return (
+                  <div style={{ "margin-bottom": "8px" }}>
+                    <strong style={{ color: isMe() ? "#1565c0" : "#333" }}>
+                      {isMe() ? "You" : `${msg.senderPeerId.slice(0, 12)}...`}
+                    </strong>{" "}
+                    <span style={dimText}>
+                      {new Date(msg.timestamp).toLocaleTimeString()}
+                    </span>
+                    <div>{msg.text}</div>
+                  </div>
+                );
+              }}
+            </For>
+          </div>
+
+          {/* Input */}
+          <div style={{ display: "flex", gap: "8px", "margin-bottom": "16px" }}>
+            <input
+              type="text"
+              value={inputText()}
+              onInput={(e) => setInputText(e.currentTarget.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Type a message..."
+              disabled={chatStatus() !== "connected"}
+              style={{ flex: 1, padding: "8px", "border-radius": "4px", border: "1px solid #ccc" }}
+            />
+            <button
+              onClick={() => void sendMessage()}
+              disabled={chatStatus() !== "connected" || !inputText().trim()}
+              style={{ padding: "8px 16px", "border-radius": "4px", cursor: "pointer" }}
+            >
+              Send
+            </button>
+          </div>
+
+          {/* Peer sharing panel */}
+          <Show when={chatStatus() === "connected" ? chat : undefined}>
+            {(currentChat) => (
+              <PeerSharingPanel
+                ownPeerId={currentChat().peerId}
+                onConnect={(targetPeerId) => currentChat().connectToPeerId(targetPeerId)}
+              />
+            )}
+          </Show>
+
           {/* Network status panel */}
           <Show when={chatStatus() === "connected"}>
             <div style={{ ...panelStyle, "margin-bottom": "12px" }}>
@@ -361,6 +443,14 @@ export const App = () => {
               <Show when={showNetworkPanel() && networkStatus()}>
                 {(status) => (
                   <div style={{ ...mono }}>
+                    {/* Topology graph */}
+                    <div style={{ "margin-bottom": "10px", "padding-bottom": "10px", "border-bottom": "1px solid #e0e0e0" }}>
+                      <TopologyGraph
+                        networkStatus={status()}
+                        bootstrapAddrs={bootstrapAddrs()}
+                      />
+                    </div>
+
                     {/* Self info */}
                     <div style={{ "margin-bottom": "10px", "padding-bottom": "10px", "border-bottom": "1px solid #e0e0e0" }}>
                       <div style={{ "margin-bottom": "4px" }}>
@@ -535,57 +625,6 @@ export const App = () => {
               </Show>
             </div>
           </Show>
-
-          {/* Messages */}
-          <div style={{
-            border: "1px solid #ccc",
-            "border-radius": "8px",
-            height: "350px",
-            "overflow-y": "auto",
-            padding: "12px",
-            "margin-bottom": "12px",
-          }}>
-            <For each={messages()} fallback={
-              <div style={{ ...dimText, "text-align": "center", padding: "40px 0" }}>
-                No messages yet. Send something!
-              </div>
-            }>
-              {(msg) => {
-                const isMe = () => chat?.peerId === msg.senderPeerId;
-                return (
-                  <div style={{ "margin-bottom": "8px" }}>
-                    <strong style={{ color: isMe() ? "#1565c0" : "#333" }}>
-                      {isMe() ? "You" : `${msg.senderPeerId.slice(0, 12)}...`}
-                    </strong>{" "}
-                    <span style={dimText}>
-                      {new Date(msg.timestamp).toLocaleTimeString()}
-                    </span>
-                    <div>{msg.text}</div>
-                  </div>
-                );
-              }}
-            </For>
-          </div>
-
-          {/* Input */}
-          <div style={{ display: "flex", gap: "8px" }}>
-            <input
-              type="text"
-              value={inputText()}
-              onInput={(e) => setInputText(e.currentTarget.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Type a message..."
-              disabled={chatStatus() !== "connected"}
-              style={{ flex: 1, padding: "8px", "border-radius": "4px", border: "1px solid #ccc" }}
-            />
-            <button
-              onClick={() => void sendMessage()}
-              disabled={chatStatus() !== "connected" || !inputText().trim()}
-              style={{ padding: "8px 16px", "border-radius": "4px", cursor: "pointer" }}
-            >
-              Send
-            </button>
-          </div>
         </div>
       </Match>
     </Switch>

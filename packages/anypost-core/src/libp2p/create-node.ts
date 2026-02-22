@@ -9,6 +9,8 @@ import { yamux } from "@chainsafe/libp2p-yamux";
 import { gossipsub } from "@chainsafe/libp2p-gossipsub";
 import { identify } from "@libp2p/identify";
 import { dcutr } from "@libp2p/dcutr";
+import { kadDHT } from "@libp2p/kad-dht";
+import { ping } from "@libp2p/ping";
 import { bootstrap } from "@libp2p/bootstrap";
 import { IPFS_BOOTSTRAP_WSS_PEERS } from "./bootstrap-peers.js";
 
@@ -56,6 +58,8 @@ export const createBrowserNode = async (
         runOnLimitedConnection: true,
       }),
       dcutr: dcutr(),
+      ping: ping(),
+      dht: kadDHT({ clientMode: true }),
     },
   });
 };
