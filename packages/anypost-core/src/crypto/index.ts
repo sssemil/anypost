@@ -81,3 +81,14 @@ export type {
   EpochRecord,
   EpochTracker,
 } from "./epoch-key-retention.js";
+
+export {
+  deviceMlsIdentity,
+  addDeviceToGroups,
+  removeDeviceFromGroups,
+} from "./multi-device.js";
+
+export type {
+  AddDeviceToGroupsResult,
+  RemoveDeviceFromGroupsResult,
+} from "./multi-device.js";
