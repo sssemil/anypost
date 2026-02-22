@@ -27,6 +27,42 @@ export const getDisplayName = (doc: Y.Doc): string | null => {
   return result.success ? result.data.displayName : null;
 };
 
+type NotificationPreferenceKey = "messages" | "mentions" | "sounds";
+
+type NotificationPreferences = {
+  readonly messages: boolean;
+  readonly mentions: boolean;
+  readonly sounds: boolean;
+};
+
+const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
+  messages: true,
+  mentions: true,
+  sounds: true,
+};
+
+export const setNotificationPreference = (
+  doc: Y.Doc,
+  key: NotificationPreferenceKey,
+  value: boolean,
+): void => {
+  doc.transact(() => {
+    const notificationsMap = doc.getMap("notifications");
+    notificationsMap.set(key, value);
+  });
+};
+
+export const getNotificationPreferences = (
+  doc: Y.Doc,
+): NotificationPreferences => {
+  const notificationsMap = doc.getMap("notifications");
+  return {
+    messages: (notificationsMap.get("messages") as boolean | undefined) ?? DEFAULT_NOTIFICATION_PREFERENCES.messages,
+    mentions: (notificationsMap.get("mentions") as boolean | undefined) ?? DEFAULT_NOTIFICATION_PREFERENCES.mentions,
+    sounds: (notificationsMap.get("sounds") as boolean | undefined) ?? DEFAULT_NOTIFICATION_PREFERENCES.sounds,
+  };
+};
+
 export const formatUserDisplay = (
   displayName: string,
   accountPublicKey: Uint8Array,

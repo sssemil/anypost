@@ -5,6 +5,8 @@ import {
   setDisplayName,
   getDisplayName,
   formatUserDisplay,
+  setNotificationPreference,
+  getNotificationPreferences,
 } from "./settings-document.js";
 
 const TEST_ACCOUNT_PUBLIC_KEY = new Uint8Array([
@@ -96,6 +98,51 @@ describe("Settings Document", () => {
       const result = formatUserDisplay("Bob", TEST_ACCOUNT_PUBLIC_KEY);
 
       expect(result).toBe("Bob (..191a1b1c)");
+    });
+  });
+
+  describe("notification preferences", () => {
+    it("should return default preferences when none set", () => {
+      const doc = createSettingsDocument(TEST_ACCOUNT_PUBLIC_KEY);
+
+      const prefs = getNotificationPreferences(doc);
+
+      expect(prefs.messages).toBe(true);
+      expect(prefs.mentions).toBe(true);
+      expect(prefs.sounds).toBe(true);
+    });
+
+    it("should store and retrieve a notification preference", () => {
+      const doc = createSettingsDocument(TEST_ACCOUNT_PUBLIC_KEY);
+
+      setNotificationPreference(doc, "sounds", false);
+
+      const prefs = getNotificationPreferences(doc);
+      expect(prefs.sounds).toBe(false);
+      expect(prefs.messages).toBe(true);
+    });
+
+    it("should overwrite an existing preference", () => {
+      const doc = createSettingsDocument(TEST_ACCOUNT_PUBLIC_KEY);
+
+      setNotificationPreference(doc, "messages", false);
+      setNotificationPreference(doc, "messages", true);
+
+      const prefs = getNotificationPreferences(doc);
+      expect(prefs.messages).toBe(true);
+    });
+
+    it("should sync notification preferences between devices via Yjs", () => {
+      const doc1 = createSettingsDocument(TEST_ACCOUNT_PUBLIC_KEY);
+      const doc2 = createSettingsDocument(TEST_ACCOUNT_PUBLIC_KEY);
+
+      setNotificationPreference(doc1, "sounds", false);
+
+      const update = Y.encodeStateAsUpdate(doc1);
+      Y.applyUpdate(doc2, update);
+
+      const prefs = getNotificationPreferences(doc2);
+      expect(prefs.sounds).toBe(false);
     });
   });
 

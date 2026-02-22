@@ -21,6 +21,8 @@ export {
   setDisplayName,
   getDisplayName,
   formatUserDisplay,
+  setNotificationPreference,
+  getNotificationPreferences,
 } from "./settings-document.js";
 
 export {
