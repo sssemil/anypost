@@ -68,6 +68,25 @@ type AcceptInviteResult = {
   readonly groupDoc: Y.Doc;
 };
 
+type StartDMOptions = {
+  readonly context: MlsContext;
+  readonly groupId: GroupId;
+  readonly initiatorKeyPackage: MlsKeyPackageBundle;
+  readonly initiatorIdentity: Uint8Array;
+  readonly initiatorAccountPublicKey: AccountPublicKey;
+  readonly initiatorPeerId: PeerId;
+  readonly recipientKeyPackage: KeyPackage;
+  readonly recipientIdentity: Uint8Array;
+  readonly recipientAccountPublicKey: AccountPublicKey;
+};
+
+type StartDMResult = {
+  readonly groupDoc: Y.Doc;
+  readonly stewardState: StewardState;
+  readonly welcome: Welcome;
+  readonly commit: MlsFramedMessage;
+};
+
 type LeaveGroupOptions = {
   readonly stewardState: StewardState;
   readonly groupDoc: Y.Doc;
@@ -118,6 +137,70 @@ export const createGroup = async (
   createChannelInGroup(groupDoc, { name: "general", type: "text" });
 
   return { groupDoc, stewardState };
+};
+
+export const startDM = async (
+  options: StartDMOptions,
+): Promise<StartDMResult> => {
+  const now = Date.now();
+  const groupIdBytes = new TextEncoder().encode(options.groupId);
+
+  const mlsGroupState = await createMlsGroup({
+    context: options.context,
+    groupId: groupIdBytes,
+    keyPackage: options.initiatorKeyPackage,
+  });
+
+  const stewardState = createStewardState({
+    context: options.context,
+    groupState: mlsGroupState,
+    stewardIdentity: options.initiatorIdentity,
+  });
+
+  const addResult = await processStewardProposal({
+    state: stewardState,
+    proposal: {
+      kind: "add",
+      keyPackage: options.recipientKeyPackage,
+      identity: options.recipientIdentity,
+    },
+    senderIdentity: options.initiatorIdentity,
+  });
+
+  if (!addResult.welcomeMessage) {
+    throw new Error("DM creation did not produce a welcome message");
+  }
+
+  const groupDoc = createGroupDocument(options.groupId);
+
+  const metadata: GroupMetadata = {
+    name: "DM",
+    description: "",
+    createdAt: now,
+    stewardPeerId: options.initiatorPeerId,
+    isDM: true,
+  };
+  setGroupMetadata(groupDoc, metadata);
+
+  const initiatorMember: Member = {
+    accountPublicKey: options.initiatorAccountPublicKey,
+    role: "owner",
+    joinedAt: now,
+  };
+  const recipientMember: Member = {
+    accountPublicKey: options.recipientAccountPublicKey,
+    role: "member",
+    joinedAt: now,
+  };
+  addMember(groupDoc, initiatorMember);
+  addMember(groupDoc, recipientMember);
+
+  return {
+    groupDoc,
+    stewardState: addResult.newState,
+    welcome: addResult.welcomeMessage.welcome,
+    commit: addResult.commitBroadcast.commit,
+  };
 };
 
 export const inviteMember = async (

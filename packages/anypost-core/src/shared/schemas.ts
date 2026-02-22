@@ -101,6 +101,7 @@ export const GroupMetadataSchema = z.object({
   description: z.string(),
   createdAt: z.number(),
   stewardPeerId: PeerIdSchema,
+  isDM: z.boolean().optional(),
 });
 
 export type GroupMetadata = z.infer<typeof GroupMetadataSchema>;

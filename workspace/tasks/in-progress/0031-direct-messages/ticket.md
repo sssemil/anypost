@@ -33,3 +33,4 @@ Implement direct messages as 2-member MLS groups. DMs appear in a separate DM li
 ## History
 
 - 2026-02-22 Created from brutal-plan PLAN-0001
+- 2026-02-22 13:54 Started work on this task

@@ -4,6 +4,7 @@ import {
   inviteMember,
   acceptInvite,
   leaveGroup,
+  startDM,
 } from "./group-management.js";
 import {
   initMlsContext,
@@ -12,7 +13,8 @@ import {
 } from "./crypto/mls-manager.js";
 import type { MlsContext } from "./crypto/mls-manager.js";
 import { deviceMlsIdentity } from "./crypto/multi-device.js";
-import { getGroupMetadata, getMembers, getChannels } from "./data/group-document.js";
+import { getGroupMetadata, getMembers, getChannels, getChannelMessages, appendMessage } from "./data/group-document.js";
+import { createMessageRef } from "./shared/factories.js";
 import { getStewardMembers } from "./crypto/steward.js";
 
 const setupContext = async (): Promise<MlsContext> => initMlsContext();
@@ -220,6 +222,78 @@ describe("Group management", () => {
       ).rejects.toThrow("not a group member");
 
       expect(getMembers(groupDoc)).toHaveLength(1);
+    });
+  });
+
+  describe("startDM", () => {
+    const setupDM = async () => {
+      const context = await setupContext();
+      const initiator = setupIdentity("12D3KooWInitiator");
+      const recipient = setupIdentity("12D3KooWRecipient");
+      const initiatorKp = await setupKeyPackage(context, initiator.identity);
+      const recipientKp = await setupKeyPackage(context, recipient.identity);
+
+      const result = await startDM({
+        context,
+        groupId: "b1eebc99-9c0b-4ef8-bb6d-6bb9bd380a22",
+        initiatorKeyPackage: initiatorKp,
+        initiatorIdentity: initiator.identity,
+        initiatorAccountPublicKey: initiator.accountPublicKey,
+        initiatorPeerId: initiator.peerId,
+        recipientKeyPackage: recipientKp.publicPackage,
+        recipientIdentity: recipient.identity,
+        recipientAccountPublicKey: recipient.accountPublicKey,
+      });
+
+      return { context, initiator, recipient, initiatorKp, recipientKp, ...result };
+    };
+
+    it("should create a 2-member MLS group", async () => {
+      const { stewardState } = await setupDM();
+
+      expect(getMemberCount(stewardState.groupState)).toBe(2);
+    });
+
+    it("should mark metadata as isDM", async () => {
+      const { groupDoc } = await setupDM();
+
+      const metadata = getGroupMetadata(groupDoc);
+      expect(metadata).not.toBeNull();
+      expect(metadata!.isDM).toBe(true);
+    });
+
+    it("should have exactly 2 members in Yjs doc", async () => {
+      const { groupDoc, initiator, recipient } = await setupDM();
+
+      const members = getMembers(groupDoc);
+      expect(members).toHaveLength(2);
+
+      const keys = members.map((m) => m.accountPublicKey);
+      expect(keys).toContain(initiator.accountPublicKey);
+      expect(keys).toContain(recipient.accountPublicKey);
+    });
+
+    it("should not create channels (DMs use implicit single channel)", async () => {
+      const { groupDoc } = await setupDM();
+
+      const channels = getChannels(groupDoc);
+      expect(channels).toHaveLength(0);
+    });
+
+    it("should produce a welcome message for the recipient", async () => {
+      const { welcome } = await setupDM();
+
+      expect(welcome).toBeDefined();
+    });
+
+    it("should encrypt DM messages for exactly 2 members", async () => {
+      const { groupDoc } = await setupDM();
+      const dmChannelId = groupDoc.guid;
+
+      appendMessage(groupDoc, dmChannelId, createMessageRef());
+      const messages = getChannelMessages(groupDoc, dmChannelId);
+
+      expect(messages).toHaveLength(1);
     });
   });
 });
