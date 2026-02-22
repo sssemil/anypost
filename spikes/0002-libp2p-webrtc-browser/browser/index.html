@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spike: libp2p WebRTC Browser</title>
+  <style>
+    body { font-family: monospace; padding: 20px; background: #1a1a1a; color: #e0e0e0; max-width: 900px; margin: 0 auto; }
+    h1 { color: #4fc3f7; font-size: 1.2em; }
+    .section { margin: 10px 0; padding: 10px; background: #2a2a2a; border-radius: 6px; }
+    .pass { color: #81c784; }
+    .fail { color: #e57373; }
+    .info { color: #fff176; }
+    input, button { font-family: monospace; padding: 6px 12px; border: 1px solid #555; background: #333; color: #e0e0e0; border-radius: 4px; }
+    button { cursor: pointer; }
+    button:hover { background: #444; }
+    #log { max-height: 60vh; overflow-y: auto; font-size: 0.85em; }
+    .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+    .status { padding: 4px 8px; border-radius: 4px; font-size: 0.85em; }
+    .status-connected { background: #2e7d32; }
+    .status-disconnected { background: #c62828; }
+    .status-connecting { background: #f57f17; }
+    #msg-input { flex: 1; min-width: 200px; }
+  </style>
+</head>
+<body>
+  <h1>libp2p WebRTC Browser Spike</h1>
+
+  <div class="section">
+    <div>PeerId: <span id="peer-id">initializing...</span></div>
+    <div>Status: <span id="status" class="status status-disconnected">disconnected</span></div>
+    <div>Connections: <span id="conn-count">0</span></div>
+    <div>Addresses: <pre id="addresses" style="font-size: 0.8em; margin: 4px 0;"></pre></div>
+  </div>
+
+  <div class="controls">
+    <input id="relay-addr" placeholder="Relay multiaddr (/ip4/127.0.0.1/tcp/9001/ws/p2p/...)" style="flex:1;min-width:400px;" />
+    <button id="btn-connect-relay">Connect to Relay</button>
+  </div>
+
+  <div class="controls">
+    <input id="peer-addr" placeholder="Peer multiaddr (circuit relay address)" style="flex:1;min-width:400px;" />
+    <button id="btn-dial-peer">Dial Peer</button>
+  </div>
+
+  <div class="controls">
+    <input id="msg-input" placeholder="Message to send via GossipSub" />
+    <button id="btn-send">Send</button>
+  </div>
+
+  <div id="log"></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
