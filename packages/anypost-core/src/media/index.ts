@@ -28,3 +28,11 @@ export {
   isMuted as isVideoMuted,
   isCameraEnabled,
 } from "./video-call.js";
+
+export {
+  createScreenShareState,
+  startScreenShare,
+  stopScreenShare,
+  isSharing,
+  getPreviousCameraEnabled,
+} from "./screen-share.js";
