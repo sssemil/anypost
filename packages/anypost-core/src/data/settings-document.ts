@@ -52,14 +52,22 @@ export const setNotificationPreference = (
   });
 };
 
+const readBooleanPref = (
+  notificationsMap: Y.Map<unknown>,
+  key: NotificationPreferenceKey,
+): boolean => {
+  const raw = notificationsMap.get(key);
+  return typeof raw === "boolean" ? raw : DEFAULT_NOTIFICATION_PREFERENCES[key];
+};
+
 export const getNotificationPreferences = (
   doc: Y.Doc,
 ): NotificationPreferences => {
   const notificationsMap = doc.getMap("notifications");
   return {
-    messages: (notificationsMap.get("messages") as boolean | undefined) ?? DEFAULT_NOTIFICATION_PREFERENCES.messages,
-    mentions: (notificationsMap.get("mentions") as boolean | undefined) ?? DEFAULT_NOTIFICATION_PREFERENCES.mentions,
-    sounds: (notificationsMap.get("sounds") as boolean | undefined) ?? DEFAULT_NOTIFICATION_PREFERENCES.sounds,
+    messages: readBooleanPref(notificationsMap, "messages"),
+    mentions: readBooleanPref(notificationsMap, "mentions"),
+    sounds: readBooleanPref(notificationsMap, "sounds"),
   };
 };
 
