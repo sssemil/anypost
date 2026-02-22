@@ -10,12 +10,12 @@ Implement connection resilience: auto-reconnect to relay after disconnect, fall 
 
 ## Acceptance Criteria
 
-- [ ] Node auto-reconnects to relay after disconnect
-- [ ] Node falls back to relay when WebRTC fails
-- [ ] Node re-establishes GossipSub subscriptions after reconnect
-- [ ] Exponential backoff for reconnection attempts
-- [ ] Connection state UI updates during reconnection
-- [ ] All tests pass via TDD
+- [x] Node auto-reconnects to relay after disconnect
+- [x] Node falls back to relay when WebRTC fails
+- [x] Node re-establishes GossipSub subscriptions after reconnect
+- [x] Exponential backoff for reconnection attempts
+- [x] Connection state UI updates during reconnection
+- [x] All tests pass via TDD
 
 ## Implementation Notes
 
@@ -35,3 +35,11 @@ Implement connection resilience: auto-reconnect to relay after disconnect, fall 
 ## History
 
 - 2026-02-22 Created from brutal-plan PLAN-0001
+- 2026-02-22 15:16 Started work on this task
+- 2026-02-22 15:18 Implementation complete
+- 2026-02-22 15:19 Self-review #1: 0 CRITICAL, 2 MAJOR — weak cap test, no input validation
+- 2026-02-22 15:21 Fixed: validation, jitter, cap test
+- 2026-02-22 15:22 Self-review #2: 0 CRITICAL, 1 MAJOR — missing cross-field validation
+- 2026-02-22 15:22 Fixed: maxDelayMs >= baseDelayMs guard
+- 2026-02-22 15:24 Self-review #3: 0 CRITICAL, 0 MAJOR — APPROVED
+- 2026-02-22 15:24 Task completed. Final review passed with 0 CRITICAL, 0 MAJOR findings.
