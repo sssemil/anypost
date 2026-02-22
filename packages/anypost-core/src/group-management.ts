@@ -142,6 +142,10 @@ export const createGroup = async (
 export const startDM = async (
   options: StartDMOptions,
 ): Promise<StartDMResult> => {
+  if (options.initiatorAccountPublicKey === options.recipientAccountPublicKey) {
+    throw new Error("Cannot start a DM with yourself");
+  }
+
   const now = Date.now();
   const groupIdBytes = new TextEncoder().encode(options.groupId);
 

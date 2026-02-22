@@ -91,6 +91,14 @@ describe("Group management", () => {
       expect(channels[0].sortOrder).toBe(0);
     });
 
+    it("should not set isDM flag on regular groups", async () => {
+      const { groupDoc } = await setupGroup();
+
+      const metadata = getGroupMetadata(groupDoc);
+      expect(metadata).not.toBeNull();
+      expect(metadata!.isDM).toBeUndefined();
+    });
+
     it("should set the owner as initial steward", async () => {
       const { groupDoc, stewardState, creator } = await setupGroup();
 
@@ -286,7 +294,7 @@ describe("Group management", () => {
       expect(welcome).toBeDefined();
     });
 
-    it("should encrypt DM messages for exactly 2 members", async () => {
+    it("should store messages using the group doc guid as implicit DM channel", async () => {
       const { groupDoc } = await setupDM();
       const dmChannelId = groupDoc.guid;
 
@@ -294,6 +302,26 @@ describe("Group management", () => {
       const messages = getChannelMessages(groupDoc, dmChannelId);
 
       expect(messages).toHaveLength(1);
+    });
+
+    it("should reject starting a DM with yourself", async () => {
+      const context = await setupContext();
+      const self = setupIdentity("12D3KooWSelf");
+      const selfKp = await setupKeyPackage(context, self.identity);
+
+      await expect(
+        startDM({
+          context,
+          groupId: "c2eebc99-9c0b-4ef8-bb6d-6bb9bd380a33",
+          initiatorKeyPackage: selfKp,
+          initiatorIdentity: self.identity,
+          initiatorAccountPublicKey: self.accountPublicKey,
+          initiatorPeerId: self.peerId,
+          recipientKeyPackage: selfKp.publicPackage,
+          recipientIdentity: self.identity,
+          recipientAccountPublicKey: self.accountPublicKey,
+        }),
+      ).rejects.toThrow("Cannot start a DM with yourself");
     });
   });
 });
