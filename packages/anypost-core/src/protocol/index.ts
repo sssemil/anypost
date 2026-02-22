@@ -20,3 +20,15 @@ export {
   getTypingMembers,
   pruneExpired,
 } from "./presence.js";
+export {
+  createConnectionState,
+  transitionTo,
+  connectionQuality,
+} from "./connection-state.js";
+export {
+  createOutbox,
+  createPendingMessage,
+  confirmMessage,
+  failMessage,
+  getPendingMessages,
+} from "./optimistic-send.js";
