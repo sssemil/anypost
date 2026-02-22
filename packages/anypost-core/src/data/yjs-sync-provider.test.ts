@@ -85,6 +85,9 @@ describe("Yjs Sync Provider", () => {
 
       expect(docB.getArray("messages").length).toBe(2);
       expect(docB.getArray("messages").get(0)).toEqual({ id: "m1", text: "Before connect" });
+
+      providerA.stop();
+      providerB.stop();
     } finally {
       docA.destroy();
       docB.destroy();
@@ -120,6 +123,9 @@ describe("Yjs Sync Provider", () => {
 
       expect(docB.getArray("messages").length).toBe(2);
       expect(docB.getArray("messages").get(1)).toEqual({ id: "m2", text: "Second (only on A)" });
+
+      providerA.stop();
+      providerB.stop();
     } finally {
       docA.destroy();
       docB.destroy();
@@ -201,6 +207,50 @@ describe("Yjs Sync Provider", () => {
       expect(docB.getArray("messages").length).toBe(3);
       expect(docB.getArray("messages").get(1)).toEqual({ id: "m2", text: "While offline" });
       expect(docB.getArray("messages").get(2)).toEqual({ id: "m3", text: "Also offline" });
+
+      providerA.stop();
+      providerB.stop();
+    } finally {
+      docA.destroy();
+      docB.destroy();
+      await nodeA.stop();
+      await nodeB.stop();
+    }
+  });
+
+  it("should sync bidirectionally when both peers have diverged", async () => {
+    const nodeA = await createTestNode();
+    const nodeB = await createTestNode();
+    const docA = new Y.Doc();
+    const docB = new Y.Doc();
+
+    try {
+      docA.getArray("messages").push([{ id: "shared", text: "Shared" }]);
+      const sharedUpdate = Y.encodeStateAsUpdate(docA);
+      Y.applyUpdate(docB, sharedUpdate);
+
+      docA.getArray("messages").push([{ id: "onlyA", text: "Only on A" }]);
+      docB.getArray("messages").push([{ id: "onlyB", text: "Only on B" }]);
+
+      await nodeA.dial(nodeB.getMultiaddrs()[0]);
+
+      const providerA = createYjsSyncProvider({ node: nodeA, doc: docA, groupId: TEST_GROUP_ID });
+      const providerB = createYjsSyncProvider({ node: nodeB, doc: docB, groupId: TEST_GROUP_ID });
+      providerA.start();
+      providerB.start();
+
+      await wait(500);
+
+      await providerB.syncWithPeer(nodeA.peerId);
+      await wait(100);
+
+      expect(docB.getArray("messages").length).toBe(3);
+      expect(docA.getArray("messages").length).toBe(3);
+
+      const idsA = docA.getArray<{ id: string }>("messages").toArray().map((m) => m.id).sort();
+      const idsB = docB.getArray<{ id: string }>("messages").toArray().map((m) => m.id).sort();
+      expect(idsA).toEqual(["onlyA", "onlyB", "shared"]);
+      expect(idsB).toEqual(["onlyA", "onlyB", "shared"]);
 
       providerA.stop();
       providerB.stop();
