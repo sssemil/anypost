@@ -9,7 +9,7 @@ import type { GroupId } from "../shared/schemas.js";
 
 const GROUP_A = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" as GroupId;
 const GROUP_B = "b1ffbc99-9c0b-4ef8-bb6d-6bb9bd380a22" as GroupId;
-const GROUP_C = "c2ggcc99-9c0b-4ef8-bb6d-6bb9bd380a33" as GroupId;
+const GROUP_C = "c2ffcc99-9c0b-4ef8-bb6d-6bb9bd380a33" as GroupId;
 
 describe("detectStateLoss", () => {
   it("should return empty result when all groups have MLS state", () => {
