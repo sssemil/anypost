@@ -99,6 +99,7 @@ export {
   recordStewardHeartbeat,
   isStewardOffline,
   electNewSteward,
+  applyNewSteward,
   updateOnlineMembers,
   getCurrentSteward,
   getOnlineMembers,

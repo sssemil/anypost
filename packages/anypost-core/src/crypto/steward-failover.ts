@@ -39,6 +39,16 @@ export const electNewSteward = (
   return [...candidates].sort()[0];
 };
 
+export const applyNewSteward = (
+  state: StewardFailoverState,
+  newSteward: AccountPublicKey,
+  now: number,
+): StewardFailoverState => ({
+  ...state,
+  currentSteward: newSteward,
+  lastHeartbeat: now,
+});
+
 export const updateOnlineMembers = (
   state: StewardFailoverState,
   members: readonly AccountPublicKey[],

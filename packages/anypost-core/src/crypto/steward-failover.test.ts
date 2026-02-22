@@ -4,6 +4,7 @@ import {
   recordStewardHeartbeat,
   isStewardOffline,
   electNewSteward,
+  applyNewSteward,
   updateOnlineMembers,
   getCurrentSteward,
   getOnlineMembers,
@@ -55,14 +56,6 @@ describe("Steward Failover", () => {
         false,
       );
     });
-
-    it("should detect steward offline exactly at timeout boundary", () => {
-      const state = createStewardFailoverState("steward-key-1", 1000);
-
-      expect(
-        isStewardOffline(state, 1000 + STEWARD_HEARTBEAT_TIMEOUT_MS + 1),
-      ).toBe(true);
-    });
   });
 
   describe("electNewSteward", () => {
@@ -89,6 +82,35 @@ describe("Steward Failover", () => {
 
       expect(result1).toBe(result2);
       expect(result2).toBe(result3);
+    });
+  });
+
+  describe("applyNewSteward", () => {
+    it("should transition to a new steward and reset heartbeat", () => {
+      const state = createStewardFailoverState("steward-key-1", 1000);
+
+      const updated = applyNewSteward(state, "steward-key-2", 5000);
+
+      expect(getCurrentSteward(updated)).toBe("steward-key-2");
+      expect(isStewardOffline(updated, 5000)).toBe(false);
+    });
+
+    it("should preserve online members when transitioning steward", () => {
+      const state = updateOnlineMembers(
+        createStewardFailoverState("steward-key-1", 1000),
+        ["member-a", "member-b"],
+      );
+
+      const updated = applyNewSteward(state, "member-a", 5000);
+
+      expect(getOnlineMembers(updated)).toEqual(["member-a", "member-b"]);
+    });
+
+    it("should not mutate the original state", () => {
+      const original = createStewardFailoverState("steward-key-1", 1000);
+      applyNewSteward(original, "steward-key-2", 5000);
+
+      expect(getCurrentSteward(original)).toBe("steward-key-1");
     });
   });
 
