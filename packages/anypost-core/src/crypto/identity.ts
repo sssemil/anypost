@@ -1,6 +1,6 @@
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { randomBytes } from "@noble/hashes/utils.js";
-import { generateMnemonic, mnemonicToEntropy, entropyToMnemonic, validateMnemonic } from "@scure/bip39";
+import { mnemonicToEntropy, entropyToMnemonic, validateMnemonic } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english.js";
 
 export type AccountKey = {
@@ -11,8 +11,6 @@ export type AccountKey = {
 export type ExportedAccountKey = {
   readonly seedPhrase: string;
 };
-
-const ENTROPY_BITS = 256;
 
 const keyFromSeed = (seed: Uint8Array): AccountKey => ({
   publicKey: ed25519.getPublicKey(seed),
