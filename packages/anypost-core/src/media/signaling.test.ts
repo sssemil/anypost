@@ -10,85 +10,83 @@ import type { SignalMessage } from "./signaling.js";
 
 const createOfferMessage = (
   overrides?: Partial<Extract<SignalMessage, { type: "offer" }>>,
-): SignalMessage => ({
-  type: "offer",
-  sdp: "v=0\r\no=- 123 456 IN IP4 0.0.0.0\r\n",
-  ...overrides,
-});
+): SignalMessage =>
+  SignalMessageSchema.parse({
+    type: "offer",
+    sdp: "v=0\r\no=- 123 456 IN IP4 0.0.0.0\r\n",
+    ...overrides,
+  });
 
 const createAnswerMessage = (
   overrides?: Partial<Extract<SignalMessage, { type: "answer" }>>,
-): SignalMessage => ({
-  type: "answer",
-  sdp: "v=0\r\no=- 789 012 IN IP4 0.0.0.0\r\n",
-  ...overrides,
-});
+): SignalMessage =>
+  SignalMessageSchema.parse({
+    type: "answer",
+    sdp: "v=0\r\no=- 789 012 IN IP4 0.0.0.0\r\n",
+    ...overrides,
+  });
 
 const createIceCandidateMessage = (
   overrides?: Partial<Extract<SignalMessage, { type: "ice-candidate" }>>,
-): SignalMessage => ({
-  type: "ice-candidate",
-  candidate: "candidate:842163049 1 udp 1677729535 192.168.0.1 3478 typ srflx",
-  sdpMLineIndex: 0,
-  sdpMid: "0",
-  ...overrides,
-});
+): SignalMessage =>
+  SignalMessageSchema.parse({
+    type: "ice-candidate",
+    candidate:
+      "candidate:842163049 1 udp 1677729535 192.168.0.1 3478 typ srflx",
+    sdpMLineIndex: 0,
+    sdpMid: "0",
+    ...overrides,
+  });
 
-const createHangupMessage = (): SignalMessage => ({
-  type: "hangup",
-});
+const createHangupMessage = (): SignalMessage =>
+  SignalMessageSchema.parse({ type: "hangup" });
 
 describe("SDP Signaling", () => {
   describe("SignalMessageSchema", () => {
     it("should validate an SDP offer message", () => {
       const message = createOfferMessage();
-      const result = SignalMessageSchema.safeParse(message);
 
-      expect(result.success).toBe(true);
-      if (result.success && result.data.type === "offer") {
-        expect(result.data.sdp).toContain("v=0");
-      }
+      expect(message.type).toBe("offer");
     });
 
     it("should validate an SDP answer message", () => {
       const message = createAnswerMessage();
-      const result = SignalMessageSchema.safeParse(message);
 
-      expect(result.success).toBe(true);
-      if (result.success && result.data.type === "answer") {
-        expect(result.data.sdp).toContain("v=0");
-      }
+      expect(message.type).toBe("answer");
     });
 
     it("should validate an ICE candidate message", () => {
       const message = createIceCandidateMessage();
-      const result = SignalMessageSchema.safeParse(message);
 
-      expect(result.success).toBe(true);
-      if (result.success && result.data.type === "ice-candidate") {
-        expect(result.data.candidate).toContain("candidate:");
-      }
+      expect(message.type).toBe("ice-candidate");
     });
 
     it("should validate a hangup message", () => {
       const message = createHangupMessage();
-      const result = SignalMessageSchema.safeParse(message);
 
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.type).toBe("hangup");
-      }
+      expect(message.type).toBe("hangup");
     });
 
     it("should reject messages with unknown type", () => {
-      const message = { type: "unknown", sdp: "something" };
-      const result = SignalMessageSchema.safeParse(message);
+      const result = SignalMessageSchema.safeParse({
+        type: "unknown",
+        sdp: "something",
+      });
 
       expect(result.success).toBe(false);
     });
 
     it("should reject offer without sdp field", () => {
       const result = SignalMessageSchema.safeParse({ type: "offer" });
+
+      expect(result.success).toBe(false);
+    });
+
+    it("should reject offer with empty sdp", () => {
+      const result = SignalMessageSchema.safeParse({
+        type: "offer",
+        sdp: "",
+      });
 
       expect(result.success).toBe(false);
     });
@@ -102,6 +100,48 @@ describe("SDP Signaling", () => {
 
       expect(result.success).toBe(false);
     });
+
+    it("should accept ice-candidate with null sdpMid", () => {
+      const result = SignalMessageSchema.safeParse({
+        type: "ice-candidate",
+        candidate: "candidate:1 1 udp 1 192.168.0.1 3478 typ host",
+        sdpMLineIndex: 0,
+        sdpMid: null,
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("should accept ice-candidate with null sdpMLineIndex", () => {
+      const result = SignalMessageSchema.safeParse({
+        type: "ice-candidate",
+        candidate: "candidate:1 1 udp 1 192.168.0.1 3478 typ host",
+        sdpMLineIndex: null,
+        sdpMid: "0",
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("should reject ice-candidate with both sdpMid and sdpMLineIndex null", () => {
+      const result = SignalMessageSchema.safeParse({
+        type: "ice-candidate",
+        candidate: "candidate:1 1 udp 1 192.168.0.1 3478 typ host",
+        sdpMLineIndex: null,
+        sdpMid: null,
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it("should reject sdp exceeding max length", () => {
+      const result = SignalMessageSchema.safeParse({
+        type: "offer",
+        sdp: "x".repeat(65_537),
+      });
+
+      expect(result.success).toBe(false);
+    });
   });
 
   describe("encodeSignalMessage", () => {
@@ -110,7 +150,7 @@ describe("SDP Signaling", () => {
       const encoded = encodeSignalMessage(message);
 
       expect(encoded).toBeInstanceOf(Uint8Array);
-      expect(encoded.length).toBeGreaterThan(0);
+      expect(encoded.byteLength).toBeGreaterThan(0);
     });
   });
 
@@ -121,10 +161,8 @@ describe("SDP Signaling", () => {
       const result = decodeSignalMessage(encoded);
 
       expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.type).toBe("offer");
-        expect(result.data).toEqual(original);
-      }
+      if (!result.success) throw new Error("Expected success");
+      expect(result.data).toEqual(original);
     });
 
     it("should round-trip all signal message types", () => {
@@ -140,9 +178,8 @@ describe("SDP Signaling", () => {
         const result = decodeSignalMessage(encoded);
 
         expect(result.success).toBe(true);
-        if (result.success) {
-          expect(result.data).toEqual(original);
-        }
+        if (!result.success) throw new Error("Expected success");
+        expect(result.data).toEqual(original);
       }
     });
 
@@ -151,6 +188,9 @@ describe("SDP Signaling", () => {
       const result = decodeSignalMessage(garbage);
 
       expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toBeInstanceOf(Error);
+      }
     });
 
     it("should return failure for valid CBOR with wrong shape", () => {
@@ -158,6 +198,9 @@ describe("SDP Signaling", () => {
       const result = decodeSignalMessage(wrongShape);
 
       expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toBeInstanceOf(Error);
+      }
     });
   });
 

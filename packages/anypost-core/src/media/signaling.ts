@@ -4,21 +4,29 @@ import { Result } from "../shared/result.js";
 
 export const MEDIA_SIGNAL_PROTOCOL = "/anypost/media-signal/1.0.0";
 
+const MAX_SDP_LENGTH = 65_536;
+const MAX_CANDIDATE_LENGTH = 4_096;
+
 export const SignalMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("offer"),
-    sdp: z.string().min(1),
+    sdp: z.string().min(1).max(MAX_SDP_LENGTH),
   }),
   z.object({
     type: z.literal("answer"),
-    sdp: z.string().min(1),
+    sdp: z.string().min(1).max(MAX_SDP_LENGTH),
   }),
-  z.object({
-    type: z.literal("ice-candidate"),
-    candidate: z.string().min(1),
-    sdpMLineIndex: z.number().int().nonnegative(),
-    sdpMid: z.string(),
-  }),
+  z
+    .object({
+      type: z.literal("ice-candidate"),
+      candidate: z.string().min(1).max(MAX_CANDIDATE_LENGTH),
+      sdpMLineIndex: z.number().int().nonnegative().max(65535).nullable(),
+      sdpMid: z.string().min(1).nullable(),
+    })
+    .refine(
+      (data) => data.sdpMid !== null || data.sdpMLineIndex !== null,
+      { message: "At least one of sdpMid or sdpMLineIndex must be non-null" },
+    ),
   z.object({
     type: z.literal("hangup"),
   }),
