@@ -32,3 +32,19 @@ export {
   failMessage,
   getPendingMessages,
 } from "./optimistic-send.js";
+export {
+  DEFAULT_BASE_DELAY_MS,
+  DEFAULT_MAX_DELAY_MS,
+  createBackoffState,
+  recordFailure,
+  recordSuccess,
+  getNextDelay,
+  getAttemptCount,
+} from "./reconnect-backoff.js";
+export {
+  createSubscriptionTracker,
+  addSubscription,
+  removeSubscription,
+  clearSubscriptions,
+  getSubscriptions,
+} from "./subscription-tracker.js";
