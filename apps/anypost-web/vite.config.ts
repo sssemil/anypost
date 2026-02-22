@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import solidPlugin from "vite-plugin-solid";
 
-const base = process.env.GITHUB_ACTIONS ? "/anypost/" : "/";
+const base = "/";
 
 export default defineConfig({
   base,
