@@ -10,11 +10,11 @@ Wire the MLS encryption into the message flow: encrypt before sending, decrypt o
 
 ## Acceptance Criteria
 
-- [ ] Message is MLS-encrypted before CRDT insertion
-- [ ] Receiving peer MLS-decrypts after CRDT sync
-- [ ] Non-member peer subscribed to GossipSub cannot decrypt
-- [ ] Messages buffered when epoch key hasn't arrived yet, decrypted when key becomes available
-- [ ] All tests pass via TDD
+- [x] Message is MLS-encrypted before CRDT insertion
+- [x] Receiving peer MLS-decrypts after CRDT sync
+- [x] Non-member peer subscribed to GossipSub cannot decrypt
+- [x] Messages buffered when epoch key hasn't arrived yet, decrypted when key becomes available
+- [x] All tests pass via TDD
 
 ## Implementation Notes
 
@@ -42,3 +42,10 @@ Wire the MLS encryption into the message flow: encrypt before sending, decrypt o
 ## History
 
 - 2026-02-22 Created from brutal-plan PLAN-0001
+- 2026-02-22 11:41 Started work on this task
+- 2026-02-22 12:48 Implementation complete, starting code reduction
+- 2026-02-22 12:49 Code reduction complete, starting self-review
+- 2026-02-22 12:52 Self-review #1: 0 CRITICAL, 3 MAJOR, 1 MINOR, 0 NIT
+- 2026-02-22 12:54 Fixed all 4 findings
+- 2026-02-22 12:56 Self-review #2: 0 CRITICAL, 0 MAJOR, 0 MINOR, 0 NIT — APPROVED
+- 2026-02-22 12:56 Task completed. Final review passed with 0 CRITICAL, 0 MAJOR findings.
