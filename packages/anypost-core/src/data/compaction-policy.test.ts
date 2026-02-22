@@ -23,13 +23,26 @@ describe("createCompactionPolicy", () => {
     expect(getLastCompactionTime(policy)).toBe(null);
   });
 
-  it("should accept custom thresholds", () => {
+  it("should use custom message threshold", () => {
     const policy = createCompactionPolicy({
       messageThreshold: 5000,
       retainedMessageCount: 500,
     });
 
-    expect(getCompactionCount(policy)).toBe(0);
+    expect(isCompactionNeeded(policy, 4999)).toBe(false);
+    expect(isCompactionNeeded(policy, 5000)).toBe(true);
+  });
+
+  it("should use custom retained message count", () => {
+    const policy = createCompactionPolicy({
+      messageThreshold: 5000,
+      retainedMessageCount: 500,
+    });
+
+    const window = calculateRetainedWindow(policy, 5000);
+
+    expect(window.startIndex).toBe(4500);
+    expect(window.count).toBe(500);
   });
 });
 
@@ -108,6 +121,12 @@ describe("calculateRetainedWindow", () => {
     expect(window.startIndex).toBe(0);
     expect(window.count).toBe(0);
   });
+
+  it("should reject negative totalMessageCount", () => {
+    const policy = createCompactionPolicy();
+
+    expect(() => calculateRetainedWindow(policy, -1)).toThrow(RangeError);
+  });
 });
 
 describe("recordCompaction", () => {
@@ -158,6 +177,14 @@ describe("input validation", () => {
 
   it("should reject non-positive retainedMessageCount", () => {
     expect(() => createCompactionPolicy({ retainedMessageCount: 0 })).toThrow(RangeError);
+  });
+
+  it("should reject non-integer messageThreshold", () => {
+    expect(() => createCompactionPolicy({ messageThreshold: 500.5 })).toThrow(RangeError);
+  });
+
+  it("should reject non-integer retainedMessageCount", () => {
+    expect(() => createCompactionPolicy({ retainedMessageCount: 100.5 })).toThrow(RangeError);
   });
 
   it("should reject retainedMessageCount greater than messageThreshold", () => {

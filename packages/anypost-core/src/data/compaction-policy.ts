@@ -26,14 +26,14 @@ export const createCompactionPolicy = (
   const retainedMessageCount =
     options?.retainedMessageCount ?? DEFAULT_RETAINED_MESSAGE_COUNT;
 
-  if (!Number.isFinite(messageThreshold) || messageThreshold < 1) {
+  if (!Number.isInteger(messageThreshold) || messageThreshold < 1) {
     throw new RangeError(
-      `messageThreshold must be a positive finite number, got ${messageThreshold}`,
+      `messageThreshold must be a positive integer, got ${messageThreshold}`,
     );
   }
-  if (!Number.isFinite(retainedMessageCount) || retainedMessageCount < 1) {
+  if (!Number.isInteger(retainedMessageCount) || retainedMessageCount < 1) {
     throw new RangeError(
-      `retainedMessageCount must be a positive finite number, got ${retainedMessageCount}`,
+      `retainedMessageCount must be a positive integer, got ${retainedMessageCount}`,
     );
   }
   if (retainedMessageCount > messageThreshold) {
@@ -59,6 +59,11 @@ export const calculateRetainedWindow = (
   policy: CompactionPolicy,
   totalMessageCount: number,
 ): RetainedWindow => {
+  if (!Number.isInteger(totalMessageCount) || totalMessageCount < 0) {
+    throw new RangeError(
+      `totalMessageCount must be a non-negative integer, got ${totalMessageCount}`,
+    );
+  }
   if (totalMessageCount <= policy.retainedMessageCount) {
     return { startIndex: 0, count: totalMessageCount };
   }
