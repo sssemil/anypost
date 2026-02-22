@@ -52,3 +52,16 @@ export type {
   ProposalQueue,
   MemberRecord,
 } from "./steward.js";
+
+export {
+  encryptContent,
+  decryptContent,
+  createMessageBuffer,
+  bufferMessage,
+  drainMessageBuffer,
+} from "./encrypted-message-flow.js";
+
+export type {
+  BufferedMessage,
+  MessageBuffer,
+} from "./encrypted-message-flow.js";
