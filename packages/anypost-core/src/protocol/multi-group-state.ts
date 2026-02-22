@@ -6,6 +6,7 @@ export type GroupEntry = {
   readonly topic: string;
   readonly messages: readonly ChatMessageEvent[];
   readonly unreadCount: number;
+  readonly seenPeerIds: ReadonlySet<string>;
 };
 
 export type MultiGroupState = {
@@ -38,6 +39,7 @@ const handleGroupJoined = (
     topic: groupTopic(groupId),
     messages: [],
     unreadCount: 0,
+    seenPeerIds: new Set(),
   };
 
   const groups = new Map(state.groups);
@@ -92,6 +94,9 @@ const addMessageToGroup = (
   if (!group) return state;
 
   const isActive = state.activeGroupId === groupId;
+  const updatedSeenPeerIds = group.seenPeerIds.has(message.senderPeerId)
+    ? group.seenPeerIds
+    : new Set([...group.seenPeerIds, message.senderPeerId]);
   const groups = new Map(state.groups);
   groups.set(groupId, {
     ...group,
@@ -99,6 +104,7 @@ const addMessageToGroup = (
     unreadCount: incrementUnread && !isActive
       ? group.unreadCount + 1
       : group.unreadCount,
+    seenPeerIds: updatedSeenPeerIds,
   });
 
   return { ...state, groups };
@@ -142,6 +148,12 @@ export const getGroupList = (
   state.joinOrder
     .map((id) => state.groups.get(id))
     .filter((g): g is GroupEntry => g !== undefined);
+
+export const getSeenPeerIds = (
+  state: MultiGroupState,
+  groupId: string,
+): ReadonlySet<string> =>
+  state.groups.get(groupId)?.seenPeerIds ?? new Set();
 
 export const hasGroup = (
   state: MultiGroupState,

@@ -106,6 +106,7 @@ export {
   getActiveGroup,
   getActiveMessages,
   getGroupList,
+  getSeenPeerIds,
   hasGroup,
 } from "./multi-group-state.js";
 export type {

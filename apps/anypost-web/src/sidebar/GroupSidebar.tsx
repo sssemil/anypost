@@ -9,6 +9,7 @@ import {
 type GroupItem = {
   readonly groupId: string;
   readonly unreadCount: number;
+  readonly seenPeerCount: number;
   readonly lastMessage?: { readonly text: string; readonly timestamp: number };
 };
 
@@ -149,8 +150,15 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
 
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center justify-between">
-                    <span class="font-mono text-sm text-tg-text truncate">
-                      {group.groupId.slice(0, 8)}...
+                    <span class="flex items-center gap-1.5 min-w-0">
+                      <span class="font-mono text-sm text-tg-text truncate">
+                        {group.groupId.slice(0, 8)}...
+                      </span>
+                      <Show when={group.seenPeerCount > 0}>
+                        <span class="text-[10px] text-tg-text-dim shrink-0">
+                          {group.seenPeerCount} {group.seenPeerCount === 1 ? "peer" : "peers"}
+                        </span>
+                      </Show>
                     </span>
                     <Show when={group.lastMessage}>
                       <span class="text-[10px] text-tg-text-dim ml-2 shrink-0">

@@ -363,10 +363,16 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
       </svg>
 
       <div class="flex gap-3 flex-wrap mt-1.5 text-[11px] text-tg-text-dim">
-        <span><span style={{ color: "#2196F3" }}>●</span> You</span>
-        <span><span style={{ color: "#FF9800" }}>●</span> Relay</span>
-        <span><span style={{ color: "#4CAF50" }}>●</span> Peer</span>
-        <span><span style={{ color: "#9E9E9E" }}>●</span> Bootstrap</span>
+        {(["self", "relay", "peer", "bootstrap"] as const).map((type) => {
+          const count = () => layout().nodes.filter((n) => n.nodeType === type).length;
+          return (
+            <span>
+              <span style={{ color: nodeColor(type) }}>●</span>{" "}
+              {nodeTypeLabel(type)}{" "}
+              <span class="text-tg-text-dim/60">{count()}</span>
+            </span>
+          );
+        })}
         <span class="border-l border-tg-border pl-3">
           <span style={{ color: "#4CAF50" }}>―</span> WebRTC
           {" "}

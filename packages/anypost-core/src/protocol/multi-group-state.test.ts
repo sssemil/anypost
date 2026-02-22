@@ -6,6 +6,7 @@ import {
   getActiveGroup,
   getActiveMessages,
   getGroupList,
+  getSeenPeerIds,
   hasGroup,
 } from "./multi-group-state.js";
 
@@ -391,6 +392,90 @@ describe("Multi-group state machine", () => {
 
       const list = getGroupList(state);
       expect(list.map((g) => g.groupId)).toEqual(["group-c", "group-a", "group-b"]);
+    });
+  });
+
+  describe("seen peer IDs per group", () => {
+    it("should start with an empty set of seen peers", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, { type: "group-joined", groupId: "group-1" });
+
+      expect(getSeenPeerIds(state, "group-1")).toEqual(new Set());
+    });
+
+    it("should track sender peer ID from received messages", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, { type: "group-joined", groupId: "group-1" });
+
+      state = transitionMultiGroup(state, {
+        type: "message-received",
+        groupId: "group-1",
+        message: createTestMessage({ senderPeerId: "peer-alice" }),
+      });
+
+      expect(getSeenPeerIds(state, "group-1")).toEqual(new Set(["peer-alice"]));
+    });
+
+    it("should track sender peer ID from sent messages", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, { type: "group-joined", groupId: "group-1" });
+
+      state = transitionMultiGroup(state, {
+        type: "message-sent",
+        groupId: "group-1",
+        message: createTestMessage({ senderPeerId: "peer-self" }),
+      });
+
+      expect(getSeenPeerIds(state, "group-1")).toEqual(new Set(["peer-self"]));
+    });
+
+    it("should accumulate unique peer IDs across multiple messages", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, { type: "group-joined", groupId: "group-1" });
+
+      state = transitionMultiGroup(state, {
+        type: "message-received",
+        groupId: "group-1",
+        message: createTestMessage({ senderPeerId: "peer-alice" }),
+      });
+      state = transitionMultiGroup(state, {
+        type: "message-received",
+        groupId: "group-1",
+        message: createTestMessage({ senderPeerId: "peer-bob" }),
+      });
+      state = transitionMultiGroup(state, {
+        type: "message-received",
+        groupId: "group-1",
+        message: createTestMessage({ senderPeerId: "peer-alice" }),
+      });
+
+      expect(getSeenPeerIds(state, "group-1")).toEqual(new Set(["peer-alice", "peer-bob"]));
+    });
+
+    it("should track peers independently per group", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, { type: "group-joined", groupId: "group-1" });
+      state = transitionMultiGroup(state, { type: "group-joined", groupId: "group-2" });
+
+      state = transitionMultiGroup(state, {
+        type: "message-received",
+        groupId: "group-1",
+        message: createTestMessage({ senderPeerId: "peer-alice" }),
+      });
+      state = transitionMultiGroup(state, {
+        type: "message-received",
+        groupId: "group-2",
+        message: createTestMessage({ senderPeerId: "peer-bob" }),
+      });
+
+      expect(getSeenPeerIds(state, "group-1")).toEqual(new Set(["peer-alice"]));
+      expect(getSeenPeerIds(state, "group-2")).toEqual(new Set(["peer-bob"]));
+    });
+
+    it("should return empty set for unknown group", () => {
+      const state = createMultiGroupState();
+
+      expect(getSeenPeerIds(state, "nonexistent")).toEqual(new Set());
     });
   });
 

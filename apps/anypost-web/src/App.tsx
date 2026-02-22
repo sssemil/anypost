@@ -6,6 +6,7 @@ import {
   getActiveGroup,
   getActiveMessages,
   getGroupList,
+  getSeenPeerIds,
 } from "anypost-core/protocol";
 import type { MultiGroupChat, MultiGroupState, NetworkStatus, NetworkEvent } from "anypost-core/protocol";
 import {
@@ -410,6 +411,7 @@ export const App = () => {
       return {
         groupId: g.groupId,
         unreadCount: g.unreadCount,
+        seenPeerCount: getSeenPeerIds(groupState(), g.groupId).size,
         lastMessage: lastMsg
           ? { text: lastMsg.text, timestamp: lastMsg.timestamp }
           : undefined,
