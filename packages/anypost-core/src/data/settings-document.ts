@@ -3,8 +3,11 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import {
   UserProfileSchema,
   NotificationPreferencesSchema,
-  type NotificationPreferenceKey,
-  type NotificationPreferences,
+  NotificationPreferenceKeySchema,
+} from "../shared/schemas.js";
+import type {
+  NotificationPreferenceKey,
+  NotificationPreferences,
 } from "../shared/schemas.js";
 
 export const createSettingsDocument = (
@@ -43,6 +46,7 @@ export const setNotificationPreference = (
   key: NotificationPreferenceKey,
   value: boolean,
 ): void => {
+  NotificationPreferenceKeySchema.parse(key);
   doc.transact(() => {
     const notificationsMap = doc.getMap("notifications");
     notificationsMap.set(key, value);
