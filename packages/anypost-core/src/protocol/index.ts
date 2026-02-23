@@ -151,6 +151,7 @@ export {
 export type {
   ActionPayload,
   ActionRole,
+  JoinPolicy,
   SignableAction,
   SignedAction,
   SignedActionEnvelope,
@@ -161,6 +162,7 @@ export {
   createSignedActionEnvelope,
   verifyAndDecodeAction,
 } from "./action-signing.js";
+export { JoinPolicySchema } from "./action-chain.js";
 export {
   createActionDagState,
   appendAction,

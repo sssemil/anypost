@@ -522,6 +522,7 @@ describe("MultiGroupChat", () => {
     const joiner = await createTestNode();
 
     const { groupId, genesisEnvelope } = await admin.chat.createGroup("Auto Approve Invite Test");
+    await admin.chat.setJoinPolicy(groupId, "auto_with_invite");
     await joiner.chat.connectTo(admin.chat.multiaddrs[0]);
     await waitFor(500);
 
@@ -551,6 +552,14 @@ describe("MultiGroupChat", () => {
     const joinerState = joiner.chat.getActionChainState(groupId);
     expect(joinerState).not.toBeNull();
     expect(joinerState!.members.size).toBe(2);
+  });
+
+  it("should keep default join policy as manual on group creation", async () => {
+    const admin = await createTestNode();
+    const { groupId } = await admin.chat.createGroup("Policy Default");
+    const state = admin.chat.getActionChainState(groupId);
+    expect(state).not.toBeNull();
+    expect(state!.joinPolicy).toBe("manual");
   });
 
   it("should stop join retries when approval is received", async () => {

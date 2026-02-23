@@ -10,6 +10,7 @@ export const createActionChainGroupState = (
 ): ActionChainGroupState => ({
   groupId,
   groupName: "",
+  joinPolicy: "manual",
   createdAt: 0,
   members: new Map(),
   pendingJoins: new Map(),
@@ -37,6 +38,8 @@ export const applyAction = (
       return applyRoleChanged(state, action, authorHex);
     case "group-renamed":
       return applyGroupRenamed(state, action, authorHex);
+    case "join-policy-changed":
+      return applyJoinPolicyChanged(state, action, authorHex);
     case "message":
       return applyMessage(state, authorHex);
     case "read-receipt":
@@ -69,7 +72,10 @@ const applyGroupCreated = (
     return Result.failure(new Error("Group already created"));
   }
 
-  const payload = action.payload as { readonly groupName: string };
+  const payload = action.payload as {
+    readonly groupName: string;
+    readonly joinPolicy?: "manual" | "auto_with_invite";
+  };
   const members = new Map(state.members);
   members.set(authorHex, {
     publicKeyHex: authorHex,
@@ -81,6 +87,7 @@ const applyGroupCreated = (
   return Result.success({
     ...state,
     groupName: payload.groupName,
+    joinPolicy: payload.joinPolicy ?? "manual",
     createdAt: action.timestamp,
     members,
   });
@@ -209,6 +216,21 @@ const applyGroupRenamed = (
   const payload = action.payload as { readonly newName: string };
 
   return Result.success({ ...state, groupName: payload.newName });
+};
+
+const applyJoinPolicyChanged = (
+  state: ActionChainGroupState,
+  action: SignedAction,
+  authorHex: string,
+): Result<ActionChainGroupState, Error> => {
+  if (!isAdmin(state, authorHex)) {
+    return Result.failure(new Error("Only admins can change join policy"));
+  }
+
+  const payload = action.payload as {
+    readonly joinPolicy: "manual" | "auto_with_invite";
+  };
+  return Result.success({ ...state, joinPolicy: payload.joinPolicy });
 };
 
 const applyMessage = (

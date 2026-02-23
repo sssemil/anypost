@@ -8,11 +8,14 @@ const ActionIdSchema = z.string().uuid();
 export const ActionRoleSchema = z.enum(["admin", "member"]);
 
 export type ActionRole = z.infer<typeof ActionRoleSchema>;
+export const JoinPolicySchema = z.enum(["manual", "auto_with_invite"]);
+export type JoinPolicy = z.infer<typeof JoinPolicySchema>;
 
 export const ActionPayloadSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("group-created"),
     groupName: z.string().min(1),
+    joinPolicy: JoinPolicySchema.optional(),
   }),
   z.object({
     type: z.literal("join-request"),
@@ -39,6 +42,10 @@ export const ActionPayloadSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("group-renamed"),
     newName: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal("join-policy-changed"),
+    joinPolicy: JoinPolicySchema,
   }),
   z.object({
     type: z.literal("message"),
@@ -91,6 +98,7 @@ export type GroupMember = {
 export type ActionChainGroupState = {
   readonly groupId: string;
   readonly groupName: string;
+  readonly joinPolicy: JoinPolicy;
   readonly createdAt: number;
   readonly members: ReadonlyMap<string, GroupMember>;
   readonly pendingJoins: ReadonlyMap<string, Uint8Array>;

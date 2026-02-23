@@ -10,6 +10,7 @@ import type {
   ConnectionMetrics,
   PeerDiscoveryMetrics,
   JoinRetryEntry,
+  JoinPolicy,
 } from "anypost-core/protocol";
 
 export type PendingJoinRequest = {
@@ -37,6 +38,7 @@ type GroupInfoPanelProps = {
   readonly activeGroupDiscoveryMetrics: PeerDiscoveryMetrics | null;
   readonly joinRetryEntry: JoinRetryEntry | null;
   readonly pendingJoins: readonly PendingJoinRequest[];
+  readonly joinPolicy: JoinPolicy;
   readonly isAdmin: boolean;
   readonly ownPublicKeyHex: string;
   readonly ownDisplayName: string;
@@ -49,6 +51,7 @@ type GroupInfoPanelProps = {
   readonly onRetryJoinNow: () => void;
   readonly onCancelJoinRetry: () => void;
   readonly onCreateInvite: ((options: InviteCreateOptions) => string | null) | null;
+  readonly onSetJoinPolicy: ((joinPolicy: JoinPolicy) => Promise<string | null>) | null;
 };
 
 const truncatePeerId = (peerId: string): string =>
@@ -80,7 +83,7 @@ const ENVELOPES_PER_PAGE = 10;
 const summarizePayload = (payload: ActionPayload): string => {
   switch (payload.type) {
     case "group-created":
-      return `Group created: "${payload.groupName}"`;
+      return `Group created: "${payload.groupName}" (${payload.joinPolicy ?? "manual"})`;
     case "join-request":
       return `Join request from ${truncateHex(toHex(payload.requesterPublicKey))}`;
     case "member-approved":
@@ -93,6 +96,8 @@ const summarizePayload = (payload: ActionPayload): string => {
       return `Role changed to ${payload.newRole}: ${truncateHex(toHex(payload.memberPublicKey))}`;
     case "group-renamed":
       return `Group renamed to "${payload.newName}"`;
+    case "join-policy-changed":
+      return `Join policy changed: ${payload.joinPolicy}`;
     case "message":
       return `Message: ${payload.text.slice(0, 80)}${payload.text.length > 80 ? "..." : ""}`;
     case "read-receipt":
@@ -123,6 +128,7 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
   const [inviteExpiresMinutesInput, setInviteExpiresMinutesInput] = createSignal("");
   const [inviteMaxJoinersInput, setInviteMaxJoinersInput] = createSignal("");
   const [inviteError, setInviteError] = createSignal("");
+  const [joinPolicyError, setJoinPolicyError] = createSignal("");
   const [envelopePage, setEnvelopePage] = createSignal(0);
   const [nowMs, setNowMs] = createSignal(Date.now());
 
@@ -243,6 +249,14 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
     setAddPeerIdInput("");
   };
 
+  const handleSetJoinPolicy = (joinPolicy: JoinPolicy) => {
+    if (!props.onSetJoinPolicy) return;
+    setJoinPolicyError("");
+    props.onSetJoinPolicy(joinPolicy).then((error) => {
+      if (error) setJoinPolicyError(error);
+    }).catch(() => setJoinPolicyError("Failed to update join policy"));
+  };
+
   return (
     <div class="space-y-4">
       <div>
@@ -331,6 +345,42 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
           </button>
           <Show when={inviteError()}>
             <p class="text-[10px] text-red-400">{inviteError()}</p>
+          </Show>
+        </div>
+      </Show>
+
+      <Show when={props.isAdmin}>
+        <div class="rounded border border-tg-border bg-tg-hover px-2 py-2 space-y-2">
+          <h4 class="text-xs font-medium text-tg-text-dim uppercase tracking-wider">
+            Join Policy
+          </h4>
+          <div class="flex gap-2">
+            <button
+              class="text-xs px-2.5 py-1 rounded border cursor-pointer"
+              classList={{
+                "border-tg-accent text-tg-accent": props.joinPolicy === "manual",
+                "border-tg-border text-tg-text-dim hover:text-tg-text": props.joinPolicy !== "manual",
+              }}
+              onClick={() => handleSetJoinPolicy("manual")}
+            >
+              Manual Approval
+            </button>
+            <button
+              class="text-xs px-2.5 py-1 rounded border cursor-pointer"
+              classList={{
+                "border-tg-accent text-tg-accent": props.joinPolicy === "auto_with_invite",
+                "border-tg-border text-tg-text-dim hover:text-tg-text": props.joinPolicy !== "auto_with_invite",
+              }}
+              onClick={() => handleSetJoinPolicy("auto_with_invite")}
+            >
+              Auto w/ Invite
+            </button>
+          </div>
+          <p class="text-[10px] text-tg-text-dim">
+            Auto mode approves valid invite-token joins when an admin device is online.
+          </p>
+          <Show when={joinPolicyError()}>
+            <p class="text-[10px] text-red-400">{joinPolicyError()}</p>
           </Show>
         </div>
       </Show>

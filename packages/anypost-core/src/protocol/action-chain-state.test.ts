@@ -48,6 +48,7 @@ describe("Action chain state", () => {
 
       expect(state.groupId).toBe(DEFAULT_GROUP_ID);
       expect(state.groupName).toBe("");
+      expect(state.joinPolicy).toBe("manual");
       expect(state.members.size).toBe(0);
       expect(state.pendingJoins.size).toBe(0);
       expect(state.readReceipts.size).toBe(0);

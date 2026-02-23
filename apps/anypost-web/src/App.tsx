@@ -26,6 +26,7 @@ import type {
   RelayReservationState,
   JoinRetryEntry,
   JoinRetryState,
+  JoinPolicy,
 } from "anypost-core/protocol";
 import { getCandidatesByRtt } from "anypost-core/protocol";
 import {
@@ -594,7 +595,7 @@ export const App = () => {
       });
 
       unsubscribeJoinRequests = chat.onJoinRequest((evt) => {
-        if (evt.autoApproved) return;
+        if (evt.autoApproved || evt.alreadyMember) return;
         const pubKeyHex = toHex(new Uint8Array(evt.requesterPublicKey));
         setPendingJoinsMap((prev) => {
           const existing = prev.get(evt.groupId) ?? [];
@@ -836,6 +837,19 @@ export const App = () => {
     }).catch(() => {});
   };
 
+  const handleSetJoinPolicy = async (joinPolicy: JoinPolicy): Promise<string | null> => {
+    const currentChat = chat;
+    const activeId = groupState().activeGroupId;
+    if (!currentChat || !activeId) return "No active group";
+    try {
+      await currentChat.setJoinPolicy(activeId, joinPolicy);
+      refreshActionChainState();
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : "Failed to update join policy";
+    }
+  };
+
   const handleAddByPeerId = (targetPeerId: string): string | null => {
     const currentChat = chat;
     const activeId = groupState().activeGroupId;
@@ -1013,6 +1027,7 @@ export const App = () => {
                 activeGroupDiscoveryMetrics={activeGroupDiscoveryMetrics()}
                 joinRetryEntry={activeJoinRetryEntry()}
                 pendingJoins={pendingJoinsMap().get(groupState().activeGroupId ?? "") ?? []}
+                joinPolicy={actionChainState()?.joinPolicy ?? "manual"}
                 isAdmin={isCurrentUserAdmin()}
                 ownPublicKeyHex={ownPublicKeyHex()}
                 ownDisplayName={displayName()}
@@ -1029,6 +1044,7 @@ export const App = () => {
                     ? handleCreateInvite
                     : null
                 }
+                onSetJoinPolicy={isCurrentUserAdmin() ? handleSetJoinPolicy : null}
               />
             }
             mobileView={mobileView().currentView}

@@ -33,7 +33,7 @@ import { IPFS_BOOTSTRAP_WSS_PEERS } from "../libp2p/bootstrap-peers.js";
 import type { ChatMessageEvent, PeerInfo, NetworkStatus, NetworkEvent } from "./plaintext-chat.js";
 import type { AccountKey } from "../crypto/identity.js";
 import { GENESIS_HASH, toHex } from "./action-chain.js";
-import type { ActionChainGroupState, SignedActionEnvelope, SignedAction } from "./action-chain.js";
+import type { ActionChainGroupState, SignedActionEnvelope, SignedAction, JoinPolicy } from "./action-chain.js";
 import { createSignedActionEnvelope, verifyAndDecodeAction } from "./action-signing.js";
 import { createActionDagState, appendAction, getTips, topologicalOrder } from "./action-dag.js";
 import type { ActionDagState } from "./action-dag.js";
@@ -80,6 +80,7 @@ export type JoinRequestEvent = {
   readonly inviteTokenId?: string;
   readonly inviteValidationError?: string;
   readonly autoApproved: boolean;
+  readonly alreadyMember: boolean;
 };
 
 type JoinRequestListener = (event: JoinRequestEvent) => void;
@@ -133,6 +134,7 @@ export type MultiGroupChat = {
     memberPublicKey: Uint8Array,
     options?: { readonly inviteTokenId?: string },
   ) => Promise<void>;
+  readonly setJoinPolicy: (groupId: string, joinPolicy: JoinPolicy) => Promise<void>;
   readonly removeMember: (groupId: string, memberPublicKey: Uint8Array) => Promise<void>;
   readonly requestJoin: (groupId: string) => Promise<void>;
   readonly getActionChainState: (groupId: string) => ActionChainGroupState | null;
@@ -608,6 +610,14 @@ export const createMultiGroupChat = async (
     await pubsub.publish(topic, encodeWireMessage(wireMessage));
   };
 
+  const replayActionChainToTopic = async (groupId: string): Promise<void> => {
+    const envelopes = actionEnvelopes.get(groupId);
+    if (!envelopes || envelopes.length === 0) return;
+    for (const envelope of envelopes) {
+      await publishEnvelope(groupId, envelope);
+    }
+  };
+
   const publishJoinRequest = async (
     groupId: string,
     inviteGrant?: InviteGrantProof,
@@ -895,9 +905,7 @@ export const createMultiGroupChat = async (
       const envelopes = actionEnvelopes.get(groupId);
       if (!envelopes || envelopes.length === 0) continue;
 
-      for (const envelope of envelopes) {
-        publishEnvelope(groupId, envelope).catch(() => {});
-      }
+      replayActionChainToTopic(groupId).catch(() => {});
       emit("sync", `Synced ${envelopes.length} action(s) to ${peerId(detail.peerId)}... for group ${groupId.slice(0, 8)}...`);
     }
   });
@@ -1250,6 +1258,7 @@ export const createMultiGroupChat = async (
         notifyPublicKeyToPeerIdChange();
       }
 
+      const requesterAlreadyMember = actionChainStates.get(matchedGroupId)?.members.has(requesterHex) ?? false;
       let inviteTokenId: string | undefined;
       let inviteValidationError: string | undefined;
       let autoApproved = false;
@@ -1275,8 +1284,10 @@ export const createMultiGroupChat = async (
         }
       }
 
+      const currentJoinPolicy = actionChainStates.get(matchedGroupId)?.joinPolicy ?? "manual";
       if (
         isOwnAdminOfGroup(matchedGroupId) &&
+        currentJoinPolicy === "auto_with_invite" &&
         inviteTokenId !== undefined &&
         !actionChainStates.get(matchedGroupId)?.members.has(requesterHex)
       ) {
@@ -1284,6 +1295,11 @@ export const createMultiGroupChat = async (
         performApproveJoin(matchedGroupId, wireMessage.requesterPublicKey, { inviteTokenId }).catch(() => {
           autoApproved = false;
         });
+      }
+
+      if (isOwnAdminOfGroup(matchedGroupId) && requesterAlreadyMember) {
+        replayActionChainToTopic(matchedGroupId).catch(() => {});
+        emit("sync", `Replayed action chain for already-approved member ${requesterHex.slice(0, 12)}...`);
       }
 
       emit("pubsub-message", `Join request for group ${matchedGroupId.slice(0, 8)}...`);
@@ -1295,6 +1311,7 @@ export const createMultiGroupChat = async (
           inviteTokenId,
           inviteValidationError,
           autoApproved,
+          alreadyMember: requesterAlreadyMember,
         }),
       );
       return;
@@ -1589,7 +1606,7 @@ export const createMultiGroupChat = async (
         accountKey,
         groupId,
         parentHashes: [GENESIS_HASH],
-        payload: { type: "group-created", groupName: name },
+        payload: { type: "group-created", groupName: name, joinPolicy: "manual" },
       });
 
       processSignedAction(groupId, envelope);
@@ -1661,6 +1678,25 @@ export const createMultiGroupChat = async (
       options?: { readonly inviteTokenId?: string },
     ): Promise<void> =>
       performApproveJoin(groupId, memberPublicKey, options),
+    setJoinPolicy: async (groupId: string, joinPolicy: JoinPolicy): Promise<void> => {
+      const dag = actionDags.get(groupId);
+      if (!dag) throw new Error("No action chain for this group");
+
+      const tips = getTips(dag);
+      const parentHashes = tips.length > 0 ? tips : [GENESIS_HASH];
+      const envelope = createSignedActionEnvelope({
+        accountKey,
+        groupId,
+        parentHashes,
+        payload: {
+          type: "join-policy-changed",
+          joinPolicy,
+        },
+      });
+      processSignedAction(groupId, envelope);
+      await publishEnvelope(groupId, envelope);
+      emit("info", `Join policy set to ${joinPolicy} for group ${groupId.slice(0, 8)}...`);
+    },
     removeMember: async (groupId: string, memberPublicKey: Uint8Array): Promise<void> => {
       const dag = actionDags.get(groupId);
       if (!dag) throw new Error("No action chain for this group");

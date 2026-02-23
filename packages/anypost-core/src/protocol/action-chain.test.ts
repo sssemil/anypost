@@ -90,6 +90,15 @@ describe("Action chain schemas", () => {
       expect(payload.type).toBe("group-renamed");
     });
 
+    it("should accept join-policy-changed payload", () => {
+      const payload = ActionPayloadSchema.parse({
+        type: "join-policy-changed",
+        joinPolicy: "auto_with_invite",
+      });
+
+      expect(payload.type).toBe("join-policy-changed");
+    });
+
     it("should accept message payload", () => {
       const payload = ActionPayloadSchema.parse({
         type: "message",
