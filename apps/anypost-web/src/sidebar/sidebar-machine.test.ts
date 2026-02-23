@@ -14,6 +14,10 @@ describe("Sidebar machine", () => {
       expect(state.joinInput).toBe("");
       expect(state.joinError).toBeNull();
       expect(state.isJoining).toBe(false);
+      expect(state.isCreateFormOpen).toBe(false);
+      expect(state.createInput).toBe("");
+      expect(state.createError).toBeNull();
+      expect(state.isCreating).toBe(false);
     });
   });
 
@@ -39,6 +43,7 @@ describe("Sidebar machine", () => {
       expect(next.joinInput).toBe("");
       expect(next.joinError).toBeNull();
       expect(next.isJoining).toBe(false);
+      expect(next.isCreateFormOpen).toBe(false);
     });
   });
 
@@ -109,6 +114,32 @@ describe("Sidebar machine", () => {
       expect(next.joinInput).toBe("");
       expect(next.joinError).toBeNull();
       expect(next.isJoining).toBe(false);
+    });
+  });
+
+  describe("create form", () => {
+    it("should open create form and close join form", () => {
+      let state = createSidebarState();
+      state = transitionSidebar(state, { type: "join-form-opened" });
+      const next = transitionSidebar(state, { type: "create-form-opened" });
+      expect(next.isCreateFormOpen).toBe(true);
+      expect(next.isJoinFormOpen).toBe(false);
+    });
+
+    it("should handle create lifecycle", () => {
+      let state = createSidebarState();
+      state = transitionSidebar(state, { type: "create-form-opened" });
+      state = transitionSidebar(state, { type: "create-input-changed", value: "My Group" });
+      state = transitionSidebar(state, { type: "create-started" });
+      expect(state.isCreating).toBe(true);
+      state = transitionSidebar(state, { type: "create-failed", error: "boom" });
+      expect(state.isCreating).toBe(false);
+      expect(state.createError).toBe("boom");
+      state = transitionSidebar(state, { type: "create-succeeded" });
+      expect(state.isCreateFormOpen).toBe(false);
+      expect(state.createInput).toBe("");
+      expect(state.createError).toBeNull();
+      expect(state.isCreating).toBe(false);
     });
   });
 

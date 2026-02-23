@@ -63,8 +63,8 @@ describe("createWireMessage", () => {
       type: "sync_request",
       payload: {
         groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
-        stateVector: new Uint8Array([1, 2, 3]),
         senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
+        knownHash: new Uint8Array([1, 2, 3]),
       },
     });
 

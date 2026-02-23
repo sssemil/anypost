@@ -21,7 +21,7 @@ type GroupSidebarProps = {
   readonly topBanners?: JSX.Element;
   readonly onSelectGroup: (groupId: string) => void;
   readonly onJoinViaInvite: (invite: GroupInvite) => Promise<string | null>;
-  readonly onCreateGroup: () => void;
+  readonly onCreateGroup: (name: string) => Promise<string | null>;
   readonly onLeaveGroup: (groupId: string) => void;
 };
 
@@ -85,6 +85,32 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
     }
   };
 
+  const handleCreateSubmit = async () => {
+    if (state().isCreating) return;
+    const name = state().createInput.trim();
+    if (!name) {
+      dispatch({ type: "create-failed", error: "Enter a group name" });
+      return;
+    }
+    dispatch({ type: "create-started" });
+    const error = await props.onCreateGroup(name);
+    if (error) {
+      dispatch({ type: "create-failed", error });
+      return;
+    }
+    dispatch({ type: "create-succeeded" });
+  };
+
+  const handleCreateKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void handleCreateSubmit();
+    }
+    if (e.key === "Escape") {
+      dispatch({ type: "create-form-closed" });
+    }
+  };
+
   return (
     <div class="flex flex-col h-full bg-tg-sidebar">
       {props.topBanners}
@@ -97,7 +123,7 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
           Join
         </button>
         <button
-          onClick={props.onCreateGroup}
+          onClick={() => dispatch({ type: "create-form-opened" })}
           class="flex-1 py-1.5 px-3 rounded-lg bg-tg-accent text-white text-sm hover:bg-tg-accent/80 cursor-pointer"
         >
           Create
@@ -130,6 +156,40 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
             <button
               onClick={() => dispatch({ type: "join-form-closed" })}
               disabled={state().isJoining}
+              class="py-1 px-2 rounded-lg border border-tg-border text-tg-text text-xs cursor-pointer hover:bg-tg-hover"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </Show>
+
+      <Show when={state().isCreateFormOpen}>
+        <div class="px-3 py-2.5 border-b border-tg-border bg-tg-chat">
+          <input
+            type="text"
+            value={state().createInput}
+            onInput={(e) => dispatch({ type: "create-input-changed", value: e.currentTarget.value })}
+            onKeyDown={handleCreateKeyDown}
+            placeholder="Group name..."
+            autofocus
+            disabled={state().isCreating}
+            class="w-full px-2.5 py-1.5 rounded-lg bg-tg-sidebar border border-tg-border text-tg-text text-xs mb-2 box-border placeholder:text-tg-text-dim"
+          />
+          <Show when={state().createError}>
+            <div class="text-tg-danger text-xs mb-2">{state().createError}</div>
+          </Show>
+          <div class="flex gap-2">
+            <button
+              onClick={() => void handleCreateSubmit()}
+              disabled={!state().createInput.trim() || state().isCreating}
+              class="flex-1 py-1 px-2 rounded-lg bg-tg-success text-white text-xs cursor-pointer disabled:opacity-50"
+            >
+              {state().isCreating ? "Creating..." : "Create"}
+            </button>
+            <button
+              onClick={() => dispatch({ type: "create-form-closed" })}
+              disabled={state().isCreating}
               class="py-1 px-2 rounded-lg border border-tg-border text-tg-text text-xs cursor-pointer hover:bg-tg-hover"
             >
               Cancel

@@ -87,8 +87,34 @@ describe("round-trip", () => {
       type: "sync_request",
       payload: {
         groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
-        stateVector: new Uint8Array([5, 6, 7, 8]),
         senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
+        targetPeerId: "12D3KooWQkVLLv8c9r7y9ZwzhsMvy4c8h6ivm8xv3vN4K8n9sYf2",
+        knownHash: new Uint8Array([5, 6, 7, 8]),
+      },
+    };
+    const encoded = encodeWireMessage(message);
+    const result = decodeWireMessage(encoded);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toEqual(message);
+    }
+  });
+
+  it("should round-trip sync_response type", () => {
+    const message: WireMessage = {
+      type: "sync_response",
+      payload: {
+        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+        senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
+        targetPeerId: "12D3KooWQkVLLv8c9r7y9ZwzhsMvy4c8h6ivm8xv3vN4K8n9sYf2",
+        requestKnownHash: new Uint8Array([1, 2, 3]),
+        headHash: new Uint8Array([4, 5, 6]),
+        envelopes: [{
+          signedBytes: new Uint8Array([10, 20, 30]),
+          signature: new Uint8Array(64).fill(1),
+          hash: new Uint8Array(32).fill(2),
+        }],
       },
     };
     const encoded = encodeWireMessage(message);

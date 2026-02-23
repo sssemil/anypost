@@ -2,6 +2,7 @@ import type { WireMessage, EncryptedMessage, GroupId } from "../shared/schemas.j
 
 type MlsCommitPayload = Extract<WireMessage, { type: "mls_commit" }>["payload"];
 type SyncRequestPayload = Extract<WireMessage, { type: "sync_request" }>["payload"];
+type SyncResponsePayload = Extract<WireMessage, { type: "sync_response" }>["payload"];
 
 type SignedActionPayload = {
   readonly signedBytes: Uint8Array;
@@ -18,6 +19,7 @@ export type MessageHandler = {
   readonly onEncryptedMessage: (payload: EncryptedMessage) => void;
   readonly onMlsCommit: (payload: MlsCommitPayload) => void;
   readonly onSyncRequest: (payload: SyncRequestPayload) => void;
+  readonly onSyncResponse: (payload: SyncResponsePayload) => void;
   readonly onSignedAction: (payload: SignedActionPayload) => void;
   readonly onJoinRequest: (payload: JoinRequestPayload) => void;
 };
@@ -37,6 +39,9 @@ export const createRouter = (handlers: MessageHandler): Router => ({
         break;
       case "sync_request":
         handlers.onSyncRequest(message.payload);
+        break;
+      case "sync_response":
+        handlers.onSyncResponse(message.payload);
         break;
       case "signed_action":
         handlers.onSignedAction({

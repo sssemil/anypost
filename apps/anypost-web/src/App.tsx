@@ -777,17 +777,24 @@ export const App = () => {
     }
   };
 
-  const handleCreateGroup = () => {
+  const handleCreateGroup = async (name: string): Promise<string | null> => {
     const currentChat = chat;
-    if (!currentChat) return;
+    if (!currentChat) return "Not connected";
+    const trimmed = name.trim();
+    if (trimmed.length === 0) return "Group name cannot be empty";
 
-    currentChat.createGroup("New Group").then(({ groupId }) => {
-      dispatchGroupEvent({ type: "group-created", groupId, groupName: "New Group" });
+    try {
+      const { groupId } = await currentChat.createGroup(trimmed);
+      const groupName = currentChat.getActionChainState(groupId)?.groupName ?? trimmed;
+      dispatchGroupEvent({ type: "group-created", groupId, groupName });
       dispatchGroupEvent({ type: "group-selected", groupId });
       refreshActionChainState();
       dispatchMobileView({ type: "group-selected" });
       dispatchMobileView({ type: "group-info-toggled" });
-    }).catch(() => {});
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : "Failed to create group";
+    }
   };
 
   const handleLeaveGroup = (groupId: string) => {

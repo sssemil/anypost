@@ -12,6 +12,7 @@ const createMockHandlers = (): MessageHandler => ({
   onEncryptedMessage: vi.fn(),
   onMlsCommit: vi.fn(),
   onSyncRequest: vi.fn(),
+  onSyncResponse: vi.fn(),
   onSignedAction: vi.fn(),
   onJoinRequest: vi.fn(),
 });
@@ -54,14 +55,32 @@ describe("createRouter", () => {
       type: "sync_request",
       payload: {
         groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
-        stateVector: new Uint8Array([5, 6, 7]),
         senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
+        knownHash: new Uint8Array([5, 6, 7]),
       },
     };
 
     router.handleMessage(message);
 
     expect(handlers.onSyncRequest).toHaveBeenCalledWith(message.payload);
+  });
+
+  it("should dispatch sync_response to sync response handler", () => {
+    const handlers = createMockHandlers();
+    const router = createRouter(handlers);
+    const message: WireMessage = {
+      type: "sync_response",
+      payload: {
+        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+        senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
+        targetPeerId: "12D3KooWQkVLLv8c9r7y9ZwzhsMvy4c8h6ivm8xv3vN4K8n9sYf2",
+        envelopes: [],
+      },
+    };
+
+    router.handleMessage(message);
+
+    expect(handlers.onSyncResponse).toHaveBeenCalledWith(message.payload);
   });
 
   it("should dispatch signed_action to signed action handler", () => {
@@ -110,6 +129,7 @@ describe("createRouter", () => {
     expect(handlers.onEncryptedMessage).toHaveBeenCalledTimes(1);
     expect(handlers.onMlsCommit).not.toHaveBeenCalled();
     expect(handlers.onSyncRequest).not.toHaveBeenCalled();
+    expect(handlers.onSyncResponse).not.toHaveBeenCalled();
     expect(handlers.onSignedAction).not.toHaveBeenCalled();
     expect(handlers.onJoinRequest).not.toHaveBeenCalled();
   });

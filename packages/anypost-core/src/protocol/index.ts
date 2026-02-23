@@ -137,6 +137,7 @@ export type {
   DiscoveryProfile,
   PeerDiscoveryMetrics,
   ConnectionMetrics,
+  SyncPeerProgress,
   JoinRetryEntry,
   JoinRetryState,
 } from "./multi-group-chat.js";

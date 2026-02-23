@@ -535,6 +535,28 @@ describe("MultiGroupChat", () => {
     await expect(joiner.chat.joinViaInvite(invite)).rejects.toThrow("Invite rejected for this peer");
   });
 
+  it("should not surface member messages to a pending non-member", async () => {
+    const admin = await createTestNode();
+    const joiner = await createTestNode();
+
+    const { groupId, genesisEnvelope } = await admin.chat.createGroup("Pending Visibility");
+    await joiner.chat.connectTo(admin.chat.multiaddrs[0]);
+    await waitFor(400);
+
+    const invite: GroupInvite = {
+      genesisEnvelope,
+      relayAddr: admin.chat.multiaddrs[0].toString(),
+      adminPeerId: admin.peerId,
+    };
+    await joiner.chat.joinViaInvite(invite);
+    await waitFor(400);
+
+    await admin.chat.sendMessage(groupId, "members-only");
+    await waitFor(600);
+
+    expect(joiner.messages.some((message) => message.text === "members-only")).toBe(false);
+  });
+
   it("should auto-approve a valid targeted invite join request", async () => {
     const admin = await createTestNode();
     const joiner = await createTestNode();
@@ -823,6 +845,11 @@ describe("MultiGroupChat", () => {
     for (let i = 0; i < 10; i++) {
       expect(bob2.messages.some((m) => m.text === `missed-${i}`)).toBe(true);
     }
+
+    const syncState = bob2.chat.getSyncProgressState();
+    const byPeer = syncState.get(groupId);
+    expect(byPeer?.get(alice.peerId)?.lastRequestedAtMs).not.toBeNull();
+    expect(byPeer?.get(alice.peerId)?.lastReceivedEnvelopeCount).toBeGreaterThan(0);
   });
 
   it("should map admin publicKey to peerId immediately on joinViaInvite", async () => {

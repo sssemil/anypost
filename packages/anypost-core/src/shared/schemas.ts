@@ -55,8 +55,27 @@ const MlsCommitPayloadSchema = z.object({
 
 const SyncRequestPayloadSchema = z.object({
   groupId: GroupIdSchema,
-  stateVector: Uint8ArraySchema,
   senderPeerId: PeerIdSchema,
+  targetPeerId: PeerIdSchema.optional(),
+  // Legacy field kept for backward compatibility with old peers.
+  stateVector: Uint8ArraySchema.optional(),
+  // Cursor hash for action-chain sync.
+  knownHash: Uint8ArraySchema.optional(),
+});
+
+const SignedActionEnvelopeWireSchema = z.object({
+  signedBytes: Uint8ArraySchema,
+  signature: Uint8ArraySchema,
+  hash: Uint8ArraySchema,
+});
+
+const SyncResponsePayloadSchema = z.object({
+  groupId: GroupIdSchema,
+  senderPeerId: PeerIdSchema,
+  targetPeerId: PeerIdSchema,
+  requestKnownHash: Uint8ArraySchema.optional(),
+  headHash: Uint8ArraySchema.optional(),
+  envelopes: z.array(SignedActionEnvelopeWireSchema),
 });
 
 const InviteGrantClaimsSchema = z.discriminatedUnion("kind", [
@@ -98,6 +117,10 @@ export const WireMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("sync_request"),
     payload: SyncRequestPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("sync_response"),
+    payload: SyncResponsePayloadSchema,
   }),
   z.object({
     type: z.literal("signed_action"),
