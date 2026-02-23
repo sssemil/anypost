@@ -28,6 +28,7 @@ import type {
   RelayReservationState,
   JoinRetryEntry,
   JoinRetryState,
+  SyncProgressState,
   JoinPolicy,
 } from "anypost-core/protocol";
 import { getCandidatesByRtt } from "anypost-core/protocol";
@@ -547,12 +548,15 @@ export const App = () => {
         readonly savePeerPathCache?: (cache: ReadonlyMap<string, readonly string[]>) => Promise<void>;
         readonly getJoinRetryState?: () => Promise<JoinRetryState>;
         readonly saveJoinRetryState?: (state: JoinRetryState) => Promise<void>;
+        readonly getSyncProgressState?: () => Promise<SyncProgressState>;
+        readonly saveSyncProgressState?: (state: SyncProgressState) => Promise<void>;
       };
 
       const store = await openAccountStore();
       let peerPrivateKey: Uint8Array | undefined;
       let initialPeerPathCache: ReadonlyMap<string, readonly string[]> = new Map();
       let initialJoinRetryState: JoinRetryState = new Map();
+      let initialSyncProgressState: SyncProgressState = new Map();
       try {
         const savedKey = await store.getPeerPrivateKey();
         if (savedKey) peerPrivateKey = savedKey;
@@ -562,6 +566,9 @@ export const App = () => {
         }
         if (typeof compatStore.getJoinRetryState === "function") {
           initialJoinRetryState = await compatStore.getJoinRetryState();
+        }
+        if (typeof compatStore.getSyncProgressState === "function") {
+          initialSyncProgressState = await compatStore.getSyncProgressState();
         }
       } finally {
         store.close();
@@ -598,12 +605,27 @@ export const App = () => {
         })();
       };
 
+      const persistSyncProgressState = (state: SyncProgressState) => {
+        void (async () => {
+          const stateStore = await openAccountStore();
+          try {
+            const compatStore = stateStore as AccountStore & PeerPathCacheStoreCompat;
+            if (typeof compatStore.saveSyncProgressState === "function") {
+              await compatStore.saveSyncProgressState(state);
+            }
+          } finally {
+            stateStore.close();
+          }
+        })();
+      };
+
       chat = await createMultiGroupChat({
         accountKey,
         peerPrivateKey,
         initialPublicKeyToPeerId,
         initialPeerPathCache,
         initialJoinRetryState,
+        initialSyncProgressState,
         initialRelayHints,
         bootstrapPeers,
         discoveryProfile: "aggressive",
@@ -632,6 +654,9 @@ export const App = () => {
         onJoinRetryStateChange: (state) => {
           setJoinRetryState(state);
           persistJoinRetryState(state);
+        },
+        onSyncProgressStateChange: (state) => {
+          persistSyncProgressState(state);
         },
         onApprovalReceived: (groupId) => {
           dispatchGroupEvent({ type: "approval-received", groupId });

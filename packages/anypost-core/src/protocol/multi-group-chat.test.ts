@@ -4,6 +4,7 @@ import type {
   MultiGroupChat,
   MultiGroupChatMessageEvent,
   JoinRequestEvent,
+  SyncProgressState,
 } from "./multi-group-chat.js";
 import type { NetworkEvent } from "./plaintext-chat.js";
 import type { RelayPoolState } from "./relay-pool.js";
@@ -349,6 +350,37 @@ describe("MultiGroupChat", () => {
     expect(chat.peerId).toMatch(/^12D3KooW/);
     expect(states.length).toBeGreaterThan(0);
     expect(chat.getJoinRetryState().has("group-a")).toBe(true);
+  });
+
+  it("should accept initialSyncProgressState and onSyncProgressStateChange options without error", async () => {
+    const states: SyncProgressState[] = [];
+    const chat = await createMultiGroupChat({
+      accountKey: generateAccountKey(),
+      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+      useTransports: "tcp",
+      initialSyncProgressState: new Map([
+        ["group-a", new Map([
+          ["12D3KooWPeerA", {
+            lastRequestedAtMs: 100,
+            lastRequestKnownHashHex: "aa",
+            lastServedAtMs: 200,
+            lastServedKnownHashHex: "bb",
+            lastServedHeadHashHex: "cc",
+            lastServedEnvelopeCount: 2,
+            lastReceivedAtMs: 300,
+            lastReceivedHashHex: "dd",
+            lastReceivedEnvelopeCount: 4,
+          }],
+        ])],
+      ]),
+      onSyncProgressStateChange: (state) => states.push(state),
+    });
+    instances.push(chat);
+
+    expect(chat.peerId).toMatch(/^12D3KooW/);
+    expect(states.length).toBeGreaterThan(0);
+    expect(chat.getSyncProgressState().get("group-a")?.get("12D3KooWPeerA")?.lastReceivedEnvelopeCount)
+      .toBe(4);
   });
 
   it("should expose retryJoinNow and cancelJoinRetry methods", async () => {

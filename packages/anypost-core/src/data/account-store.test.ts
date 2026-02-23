@@ -3,6 +3,7 @@ import "fake-indexeddb/auto";
 import { openAccountStore } from "./account-store.js";
 import { generateAccountKey } from "../crypto/identity.js";
 import type { JoinRetryState } from "../protocol/join-retry-queue.js";
+import type { SyncProgressState } from "../protocol/multi-group-chat.js";
 
 describe("Account Store", () => {
   describe("account key persistence", () => {
@@ -261,6 +262,75 @@ describe("Account Store", () => {
       const store2 = await openAccountStore();
       try {
         const retrieved = await store2.getJoinRetryState();
+        expect(retrieved).toEqual(original);
+      } finally {
+        await store2.destroy();
+      }
+    });
+  });
+
+  describe("sync progress state persistence", () => {
+    it("should return empty state when no sync progress state exists", async () => {
+      const store = await openAccountStore();
+      try {
+        const state = await store.getSyncProgressState();
+        expect(state.size).toBe(0);
+      } finally {
+        await store.destroy();
+      }
+    });
+
+    it("should store and retrieve sync progress state", async () => {
+      const store = await openAccountStore();
+      try {
+        const original: SyncProgressState = new Map([
+          ["group-a", new Map([
+            ["12D3KooWPeerA", {
+              lastRequestedAtMs: 1_000,
+              lastRequestKnownHashHex: "abc",
+              lastServedAtMs: 2_000,
+              lastServedKnownHashHex: "def",
+              lastServedHeadHashHex: "ghi",
+              lastServedEnvelopeCount: 2,
+              lastReceivedAtMs: 3_000,
+              lastReceivedHashHex: "jkl",
+              lastReceivedEnvelopeCount: 4,
+            }],
+          ])],
+        ]);
+
+        await store.saveSyncProgressState(original);
+        const retrieved = await store.getSyncProgressState();
+
+        expect(retrieved).toEqual(original);
+      } finally {
+        await store.destroy();
+      }
+    });
+
+    it("should persist sync progress state across store instances", async () => {
+      const store1 = await openAccountStore();
+      const original: SyncProgressState = new Map([
+        ["group-z", new Map([
+          ["12D3KooWPeerB", {
+            lastRequestedAtMs: null,
+            lastRequestKnownHashHex: null,
+            lastServedAtMs: 5_000,
+            lastServedKnownHashHex: null,
+            lastServedHeadHashHex: "head",
+            lastServedEnvelopeCount: 7,
+            lastReceivedAtMs: null,
+            lastReceivedHashHex: null,
+            lastReceivedEnvelopeCount: 0,
+          }],
+        ])],
+      ]);
+      await store1.saveSyncProgressState(original);
+      store1.close();
+
+      const store2 = await openAccountStore();
+      try {
+        const retrieved = await store2.getSyncProgressState();
         expect(retrieved).toEqual(original);
       } finally {
         await store2.destroy();

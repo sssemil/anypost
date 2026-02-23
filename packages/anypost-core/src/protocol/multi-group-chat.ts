@@ -128,6 +128,8 @@ export type SyncPeerProgress = {
   readonly lastReceivedEnvelopeCount: number;
 };
 
+export type SyncProgressState = ReadonlyMap<string, ReadonlyMap<string, SyncPeerProgress>>;
+
 export type {
   JoinRetryState,
   JoinRetryEntry,
@@ -163,7 +165,7 @@ export type MultiGroupChat = {
   readonly loadActionChain: (groupId: string, envelopes: readonly SignedActionEnvelope[]) => void;
   readonly getPublicKeyToPeerId: () => ReadonlyMap<string, string>;
   readonly getJoinRetryState: () => JoinRetryState;
-  readonly getSyncProgressState: () => ReadonlyMap<string, ReadonlyMap<string, SyncPeerProgress>>;
+  readonly getSyncProgressState: () => SyncProgressState;
   readonly onMessage: (listener: MessageListener) => () => void;
   readonly onJoinRequest: (listener: JoinRequestListener) => () => void;
   readonly onPeerChange: (listener: (count: number) => void) => () => void;
@@ -184,6 +186,7 @@ type CreateMultiGroupChatOptions = {
   readonly initialPublicKeyToPeerId?: ReadonlyMap<string, string>;
   readonly initialPeerPathCache?: ReadonlyMap<string, readonly string[]>;
   readonly initialJoinRetryState?: JoinRetryState;
+  readonly initialSyncProgressState?: SyncProgressState;
   readonly listenAddresses?: readonly string[];
   readonly bootstrapPeers?: readonly string[];
   readonly useTransports?: "tcp" | "websocket";
@@ -198,6 +201,7 @@ type CreateMultiGroupChatOptions = {
   readonly onConnectionMetricsChange?: (metrics: ConnectionMetrics) => void;
   readonly onRelayReservationStateChange?: (state: RelayReservationState) => void;
   readonly onJoinRetryStateChange?: (state: JoinRetryState) => void;
+  readonly onSyncProgressStateChange?: (state: SyncProgressState) => void;
   readonly onApprovalReceived?: (groupId: string) => void;
 };
 
@@ -232,6 +236,7 @@ export const createMultiGroupChat = async (
     initialPublicKeyToPeerId,
     initialPeerPathCache,
     initialJoinRetryState,
+    initialSyncProgressState,
     listenAddresses = [],
     bootstrapPeers: initialBootstrapPeers = [],
     useTransports = "websocket",
@@ -246,6 +251,7 @@ export const createMultiGroupChat = async (
     onConnectionMetricsChange,
     onRelayReservationStateChange,
     onJoinRetryStateChange,
+    onSyncProgressStateChange,
     onApprovalReceived,
   } = options;
 
@@ -380,13 +386,17 @@ export const createMultiGroupChat = async (
     return nextCount > maxEvents;
   };
 
-  const cloneSyncProgressState = (): ReadonlyMap<string, ReadonlyMap<string, SyncPeerProgress>> =>
+  const cloneSyncProgressState = (): SyncProgressState =>
     new Map(
       [...syncProgressByGroup.entries()].map(([groupId, peerMap]) => [
         groupId,
         new Map(peerMap),
       ]),
     );
+
+  const emitSyncProgressState = () => {
+    onSyncProgressStateChange?.(cloneSyncProgressState());
+  };
 
   const defaultSyncPeerProgress = (): SyncPeerProgress => ({
     lastRequestedAtMs: null,
@@ -409,7 +419,28 @@ export const createMultiGroupChat = async (
     const current = byPeer.get(peerId) ?? defaultSyncPeerProgress();
     byPeer.set(peerId, { ...current, ...patch });
     syncProgressByGroup.set(groupId, byPeer);
+    emitSyncProgressState();
   };
+
+  for (const [groupId, peerMap] of initialSyncProgressState ?? []) {
+    const byPeer = new Map<string, SyncPeerProgress>();
+    for (const [peerId, progress] of peerMap) {
+      byPeer.set(peerId, {
+        lastRequestedAtMs: progress.lastRequestedAtMs ?? null,
+        lastRequestKnownHashHex: progress.lastRequestKnownHashHex ?? null,
+        lastServedAtMs: progress.lastServedAtMs ?? null,
+        lastServedKnownHashHex: progress.lastServedKnownHashHex ?? null,
+        lastServedHeadHashHex: progress.lastServedHeadHashHex ?? null,
+        lastServedEnvelopeCount: progress.lastServedEnvelopeCount ?? 0,
+        lastReceivedAtMs: progress.lastReceivedAtMs ?? null,
+        lastReceivedHashHex: progress.lastReceivedHashHex ?? null,
+        lastReceivedEnvelopeCount: progress.lastReceivedEnvelopeCount ?? 0,
+      });
+    }
+    if (byPeer.size > 0) {
+      syncProgressByGroup.set(groupId, byPeer);
+    }
+  }
 
   const getInviteGrantApprovalCount = (groupId: string, tokenId: string): number => {
     const dag = actionDags.get(groupId);
@@ -681,6 +712,7 @@ export const createMultiGroupChat = async (
   }
   emitConnectionMetrics();
   emitJoinRetryState();
+  emitSyncProgressState();
 
   const getOrCreateDag = (groupId: string): ActionDagState => {
     const existing = actionDags.get(groupId);
@@ -2079,6 +2111,7 @@ export const createMultiGroupChat = async (
     actionChainStates.delete(groupId);
     actionEnvelopes.delete(groupId);
     syncProgressByGroup.delete(groupId);
+    emitSyncProgressState();
     peerDiscoveryMetrics.delete(groupId);
     joinInviteGrantByGroup.delete(groupId);
     pendingJoinInviteGrantsByGroup.delete(groupId);
@@ -2384,7 +2417,7 @@ export const createMultiGroupChat = async (
     },
     getPublicKeyToPeerId: (): ReadonlyMap<string, string> => new Map(publicKeyToPeerId),
     getJoinRetryState: (): JoinRetryState => createJoinRetryState(joinRetryState),
-    getSyncProgressState: (): ReadonlyMap<string, ReadonlyMap<string, SyncPeerProgress>> =>
+    getSyncProgressState: (): SyncProgressState =>
       cloneSyncProgressState(),
     onMessage: (listener: MessageListener) => {
       messageListeners.push(listener);
@@ -2490,6 +2523,7 @@ export const createMultiGroupChat = async (
       actionChainStates.clear();
       actionEnvelopes.clear();
       syncProgressByGroup.clear();
+      emitSyncProgressState();
       incomingJoinRequestRate.clear();
       incomingSyncRequestRate.clear();
       outgoingJoinRequestRate.clear();
