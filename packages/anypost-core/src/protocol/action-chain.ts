@@ -5,7 +5,8 @@ const Uint8ArraySchema = z.instanceof(Uint8Array);
 
 const ActionIdSchema = z.string().uuid();
 
-export const ActionRoleSchema = z.enum(["admin", "member"]);
+export const ActionRoleSchema = z.enum(["owner", "admin", "member"]);
+const ApprovableRoleSchema = z.enum(["admin", "member"]);
 
 export type ActionRole = z.infer<typeof ActionRoleSchema>;
 export const JoinPolicySchema = z.enum(["manual", "auto_with_invite"]);
@@ -24,7 +25,7 @@ export const ActionPayloadSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("member-approved"),
     memberPublicKey: Uint8ArraySchema,
-    role: ActionRoleSchema,
+    role: ApprovableRoleSchema,
     inviteTokenId: z.string().uuid().optional(),
   }),
   z.object({

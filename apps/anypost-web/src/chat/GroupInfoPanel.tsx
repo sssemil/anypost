@@ -106,15 +106,16 @@ const summarizePayload = (payload: ActionPayload): string => {
   }
 };
 
-const RoleBadge = (props: { readonly role: "admin" | "member" }) => (
+const RoleBadge = (props: { readonly role: "owner" | "admin" | "member" }) => (
   <span
     class="text-[10px] font-medium px-1.5 py-0.5 rounded"
     classList={{
+      "bg-amber-400/20 text-amber-300": props.role === "owner",
       "bg-tg-accent/20 text-tg-accent": props.role === "admin",
       "bg-tg-text-dim/20 text-tg-text-dim": props.role === "member",
     }}
   >
-    {props.role === "admin" ? "Admin" : "Member"}
+    {props.role === "owner" ? "Owner" : props.role === "admin" ? "Admin" : "Member"}
   </span>
 );
 

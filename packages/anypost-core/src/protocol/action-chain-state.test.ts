@@ -56,7 +56,7 @@ describe("Action chain state", () => {
   });
 
   describe("applyAction — group-created", () => {
-    it("should make the author an admin on group creation", () => {
+    it("should make the author the owner on group creation", () => {
       const creator = generateAccountKey();
       const action = makeAction({
         accountKey: creator,
@@ -78,7 +78,7 @@ describe("Action chain state", () => {
 
       const member = result.data.members.get(toHex(creator.publicKey));
       expect(member).toBeDefined();
-      expect(member!.role).toBe("admin");
+      expect(member!.role).toBe("owner");
       expect(member!.joinedAt).toBe(1000);
     });
 
@@ -454,7 +454,7 @@ describe("Action chain state", () => {
       expect(result.success).toBe(false);
     });
 
-    it("should transfer admin role to earliest joined remaining member when admin leaves", () => {
+    it("should transfer owner role to earliest joined remaining member when owner leaves", () => {
       const creator = generateAccountKey();
       const memberA = generateAccountKey();
       const memberB = generateAccountKey();
@@ -533,7 +533,7 @@ describe("Action chain state", () => {
       if (!result.success) return;
 
       expect(result.data.members.has(toHex(creator.publicKey))).toBe(false);
-      expect(result.data.members.get(toHex(memberA.publicKey))?.role).toBe("admin");
+      expect(result.data.members.get(toHex(memberA.publicKey))?.role).toBe("owner");
       expect(result.data.members.get(toHex(memberB.publicKey))?.role).toBe("member");
     });
   });

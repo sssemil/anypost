@@ -14,13 +14,13 @@ const DEFAULT_PUBLIC_KEY = new Uint8Array(32).fill(1);
 
 describe("Action chain schemas", () => {
   describe("ActionRoleSchema", () => {
-    it("should accept admin and member roles", () => {
+    it("should accept owner, admin and member roles", () => {
+      expect(ActionRoleSchema.parse("owner")).toBe("owner");
       expect(ActionRoleSchema.parse("admin")).toBe("admin");
       expect(ActionRoleSchema.parse("member")).toBe("member");
     });
 
     it("should reject invalid roles", () => {
-      expect(() => ActionRoleSchema.parse("owner")).toThrow();
       expect(() => ActionRoleSchema.parse("")).toThrow();
     });
   });
@@ -52,6 +52,16 @@ describe("Action chain schemas", () => {
       });
 
       expect(payload.type).toBe("member-approved");
+    });
+
+    it("should reject member-approved payload with owner role", () => {
+      expect(() =>
+        ActionPayloadSchema.parse({
+          type: "member-approved",
+          memberPublicKey: DEFAULT_PUBLIC_KEY,
+          role: "owner",
+        }),
+      ).toThrow();
     });
 
     it("should accept member-left payload", () => {

@@ -706,7 +706,8 @@ export const createMultiGroupChat = async (
   const isOwnAdminOfGroup = (groupId: string): boolean => {
     const state = actionChainStates.get(groupId);
     if (!state) return false;
-    return state.members.get(ownPublicKeyHex)?.role === "admin";
+    const role = state.members.get(ownPublicKeyHex)?.role;
+    return role === "admin" || role === "owner";
   };
 
   const isPeerMemberOfGroup = (groupId: string, peerIdValue: string): boolean => {

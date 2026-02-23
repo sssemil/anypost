@@ -834,7 +834,8 @@ export const App = () => {
     const state = actionChainState();
     if (!state) return false;
     const hex = ownPublicKeyHex();
-    return state.members.get(hex)?.role === "admin";
+    const role = state.members.get(hex)?.role;
+    return role === "admin" || role === "owner";
   };
 
   const getBestRelayAddress = (): string | null => {

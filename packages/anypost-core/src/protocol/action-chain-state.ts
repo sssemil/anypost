@@ -80,7 +80,7 @@ const applyGroupCreated = (
   members.set(authorHex, {
     publicKeyHex: authorHex,
     publicKey: action.authorPublicKey,
-    role: "admin",
+    role: "owner",
     joinedAt: action.timestamp,
   });
 
@@ -151,17 +151,7 @@ const applyMemberLeft = (
 
   const members = new Map(state.members);
   members.delete(authorHex);
-
-  const hasAdmin = [...members.values()].some((member) => member.role === "admin");
-  if (!hasAdmin && members.size > 0 && leavingMember.role === "admin") {
-    const nextOwner = [...members.values()].sort((a, b) => {
-      if (a.joinedAt !== b.joinedAt) return a.joinedAt - b.joinedAt;
-      return a.publicKeyHex.localeCompare(b.publicKeyHex);
-    })[0];
-    members.set(nextOwner.publicKeyHex, { ...nextOwner, role: "admin" });
-  }
-
-  return Result.success({ ...state, members });
+  return Result.success({ ...state, members: normalizeOwnerInvariant(members) });
 };
 
 const applyMemberRemoved = (
@@ -177,11 +167,19 @@ const applyMemberRemoved = (
     readonly memberPublicKey: Uint8Array;
   };
   const targetHex = toHex(payload.memberPublicKey);
+  const actor = state.members.get(authorHex);
+  const target = state.members.get(targetHex);
+  if (!target) {
+    return Result.failure(new Error("Target is not a member"));
+  }
+  if (target.role === "owner" && actor?.role !== "owner") {
+    return Result.failure(new Error("Only owner can remove owner"));
+  }
 
   const members = new Map(state.members);
   members.delete(targetHex);
 
-  return Result.success({ ...state, members });
+  return Result.success({ ...state, members: normalizeOwnerInvariant(members) });
 };
 
 const applyRoleChanged = (
@@ -195,7 +193,7 @@ const applyRoleChanged = (
 
   const payload = action.payload as {
     readonly memberPublicKey: Uint8Array;
-    readonly newRole: "admin" | "member";
+    readonly newRole: "owner" | "admin" | "member";
   };
   const targetHex = toHex(payload.memberPublicKey);
 
@@ -203,15 +201,36 @@ const applyRoleChanged = (
     return Result.failure(new Error("Cannot change own role"));
   }
 
+  const actor = state.members.get(authorHex);
+  if (!actor) {
+    return Result.failure(new Error("Only admins can change roles"));
+  }
+
   const existing = state.members.get(targetHex);
   if (!existing) {
     return Result.failure(new Error("Target is not a member"));
   }
 
-  const members = new Map(state.members);
-  members.set(targetHex, { ...existing, role: payload.newRole });
+  if (payload.newRole === "owner" && actor.role !== "owner") {
+    return Result.failure(new Error("Only owner can transfer ownership"));
+  }
 
-  return Result.success({ ...state, members });
+  if (actor.role !== "owner" && existing.role === "owner") {
+    return Result.failure(new Error("Only owner can change owner role"));
+  }
+
+  const members = new Map(state.members);
+  if (payload.newRole === "owner") {
+    const currentOwner = getCurrentOwner(members);
+    if (currentOwner && currentOwner.publicKeyHex !== targetHex) {
+      members.set(currentOwner.publicKeyHex, { ...currentOwner, role: "admin" });
+    }
+    members.set(targetHex, { ...existing, role: "owner" });
+  } else {
+    members.set(targetHex, { ...existing, role: payload.newRole });
+  }
+
+  return Result.success({ ...state, members: normalizeOwnerInvariant(members) });
 };
 
 const applyGroupRenamed = (
@@ -272,8 +291,69 @@ const applyReadReceipt = (
 
 const isAdmin = (state: ActionChainGroupState, publicKeyHex: string): boolean => {
   const member = state.members.get(publicKeyHex);
-  return member?.role === "admin";
+  return member?.role === "admin" || member?.role === "owner";
 };
 
 const isMember = (state: ActionChainGroupState, publicKeyHex: string): boolean =>
   state.members.has(publicKeyHex);
+
+const sortMembersByJoinOrder = (
+  a: { readonly joinedAt: number; readonly publicKeyHex: string },
+  b: { readonly joinedAt: number; readonly publicKeyHex: string },
+): number => {
+  if (a.joinedAt !== b.joinedAt) return a.joinedAt - b.joinedAt;
+  return a.publicKeyHex.localeCompare(b.publicKeyHex);
+};
+
+const getCurrentOwner = (
+  members: ReadonlyMap<string, {
+    readonly publicKeyHex: string;
+    readonly publicKey: Uint8Array;
+    readonly role: "owner" | "admin" | "member";
+    readonly joinedAt: number;
+  }>,
+): {
+  readonly publicKeyHex: string;
+  readonly publicKey: Uint8Array;
+  readonly role: "owner" | "admin" | "member";
+  readonly joinedAt: number;
+} | null => {
+  const owners = [...members.values()].filter((member) => member.role === "owner");
+  if (owners.length === 0) return null;
+  owners.sort(sortMembersByJoinOrder);
+  return owners[0] ?? null;
+};
+
+const normalizeOwnerInvariant = (
+  members: ReadonlyMap<string, {
+    readonly publicKeyHex: string;
+    readonly publicKey: Uint8Array;
+    readonly role: "owner" | "admin" | "member";
+    readonly joinedAt: number;
+  }>,
+): Map<string, {
+  readonly publicKeyHex: string;
+  readonly publicKey: Uint8Array;
+  readonly role: "owner" | "admin" | "member";
+  readonly joinedAt: number;
+}> => {
+  const normalized = new Map(members);
+  if (normalized.size === 0) return normalized;
+
+  const owners = [...normalized.values()]
+    .filter((member) => member.role === "owner")
+    .sort(sortMembersByJoinOrder);
+
+  if (owners.length === 0) {
+    const promoted = [...normalized.values()].sort(sortMembersByJoinOrder)[0];
+    normalized.set(promoted.publicKeyHex, { ...promoted, role: "owner" });
+    return normalized;
+  }
+
+  const canonicalOwner = owners[0];
+  for (const duplicateOwner of owners.slice(1)) {
+    normalized.set(duplicateOwner.publicKeyHex, { ...duplicateOwner, role: "admin" });
+  }
+  normalized.set(canonicalOwner.publicKeyHex, { ...canonicalOwner, role: "owner" });
+  return normalized;
+};
