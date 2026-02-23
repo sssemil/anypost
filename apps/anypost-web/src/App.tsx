@@ -279,24 +279,6 @@ export const App = () => {
       const decoded = verifyAndDecodeAction(envelope);
       if (!decoded.success) continue;
       const action = decoded.data;
-      if (action.payload.type === "message") {
-        if (existingIds.has(action.id)) continue;
-        const authorHex = toHex(action.authorPublicKey);
-        dispatchGroupEvent({
-          type: "message-received",
-          groupId,
-          message: {
-            id: action.id,
-            senderPeerId: pubKeyMap.get(authorHex) ?? "unknown",
-            senderDisplayName: undefined,
-            text: action.payload.text,
-            timestamp: action.timestamp,
-          },
-        });
-        existingIds.add(action.id);
-        continue;
-      }
-
       if (action.payload.type === "member-approved") {
         const indicatorId = `join:${action.id}`;
         if (existingIds.has(indicatorId)) continue;

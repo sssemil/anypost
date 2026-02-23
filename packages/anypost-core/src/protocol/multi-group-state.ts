@@ -130,6 +130,9 @@ const addMessageToGroup = (
 ): MultiGroupState => {
   const group = state.groups.get(groupId);
   if (!group) return state;
+  if (group.messages.some((m) => m.id === message.id)) {
+    return state;
+  }
 
   const isActive = state.activeGroupId === groupId;
   const updatedSeenPeerIds = group.seenPeerIds.has(message.senderPeerId)

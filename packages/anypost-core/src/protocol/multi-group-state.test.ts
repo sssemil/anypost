@@ -203,6 +203,26 @@ describe("Multi-group state machine", () => {
 
       expect(next).toBe(state);
     });
+
+    it("should ignore duplicate message ids for a group", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, { type: "group-joined", groupId: "group-1" });
+
+      const msg = createTestMessage({ id: "dup-1", text: "hello once" });
+      state = transitionMultiGroup(state, {
+        type: "message-received",
+        groupId: "group-1",
+        message: msg,
+      });
+      const next = transitionMultiGroup(state, {
+        type: "message-received",
+        groupId: "group-1",
+        message: msg,
+      });
+
+      expect(next).toBe(state);
+      expect(getActiveMessages(next)).toHaveLength(1);
+    });
   });
 
   describe("display name preservation", () => {
