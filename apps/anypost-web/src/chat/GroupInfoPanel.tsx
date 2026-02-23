@@ -5,6 +5,7 @@ import {
 } from "anypost-core/protocol";
 import type {
   ActionPayload,
+  ActionRole,
   GroupMember,
   SignedActionEnvelope,
   ConnectionMetrics,
@@ -40,6 +41,7 @@ type GroupInfoPanelProps = {
   readonly pendingJoins: readonly PendingJoinRequest[];
   readonly joinPolicy: JoinPolicy;
   readonly isAdmin: boolean;
+  readonly ownRole: ActionRole | null;
   readonly ownPublicKeyHex: string;
   readonly ownDisplayName: string;
   readonly publicKeyToPeerId: ReadonlyMap<string, string>;
@@ -47,6 +49,7 @@ type GroupInfoPanelProps = {
   readonly latencyMap: ReadonlyMap<string, number>;
   readonly onApproveJoin: (memberPublicKey: Uint8Array) => void;
   readonly onRemoveMember: (memberPublicKey: Uint8Array) => void;
+  readonly onChangeMemberRole: ((memberPublicKey: Uint8Array, newRole: ActionRole) => Promise<string | null>) | null;
   readonly onAddByPeerId: (peerId: string) => string | null;
   readonly onRetryJoinNow: () => void;
   readonly onCancelJoinRetry: () => void;
@@ -134,6 +137,8 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
   const [inviteMaxJoinersInput, setInviteMaxJoinersInput] = createSignal("");
   const [inviteError, setInviteError] = createSignal("");
   const [joinPolicyError, setJoinPolicyError] = createSignal("");
+  const [roleActionError, setRoleActionError] = createSignal("");
+  const [roleActionTargetHex, setRoleActionTargetHex] = createSignal<string | null>(null);
   const [envelopePage, setEnvelopePage] = createSignal(0);
   const [nowMs, setNowMs] = createSignal(Date.now());
 
@@ -280,6 +285,17 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
       if (error) setRenameError(error);
     }).catch(() => setRenameError("Failed to rename group")).finally(() => {
       setRenaming(false);
+    });
+  };
+
+  const handleChangeMemberRole = (member: GroupMember, newRole: ActionRole) => {
+    if (!props.onChangeMemberRole) return;
+    setRoleActionError("");
+    setRoleActionTargetHex(member.publicKeyHex);
+    props.onChangeMemberRole(member.publicKey, newRole).then((error) => {
+      if (error) setRoleActionError(error);
+    }).catch(() => setRoleActionError("Failed to update member role")).finally(() => {
+      setRoleActionTargetHex(null);
     });
   };
 
@@ -466,7 +482,17 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
                 const pid = peerId();
                 return pid ? props.latencyMap.get(pid) : undefined;
               };
-              const canRemove = () => props.isAdmin && !isOwn() && member.role !== "admin";
+              const canManageRoles = () => props.ownRole === "owner" && !isOwn();
+              const canPromoteToAdmin = () => canManageRoles() && member.role === "member";
+              const canDemoteToMember = () => canManageRoles() && member.role === "admin";
+              const canTransferOwner = () => canManageRoles() && member.role !== "owner";
+              const canRemove = () =>
+                props.ownRole === "owner"
+                  ? !isOwn()
+                  : props.ownRole === "admin"
+                    ? !isOwn() && member.role === "member"
+                    : false;
+              const roleActionPending = () => roleActionTargetHex() === member.publicKeyHex;
 
               return (
                 <div class="flex items-center justify-between py-1.5 px-2 rounded hover:bg-tg-hover">
@@ -495,6 +521,33 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
                       <span class="text-[10px] text-tg-text-dim">{latency()}ms</span>
                     </Show>
                     <RoleBadge role={member.role} />
+                    <Show when={canPromoteToAdmin()}>
+                      <button
+                        class="text-[10px] text-tg-accent hover:text-tg-accent/80 px-1.5 py-0.5 rounded hover:bg-tg-accent/10 cursor-pointer disabled:opacity-50"
+                        disabled={roleActionPending()}
+                        onClick={() => handleChangeMemberRole(member, "admin")}
+                      >
+                        Promote
+                      </button>
+                    </Show>
+                    <Show when={canDemoteToMember()}>
+                      <button
+                        class="text-[10px] text-tg-text-dim hover:text-tg-text px-1.5 py-0.5 rounded hover:bg-tg-text-dim/10 cursor-pointer disabled:opacity-50"
+                        disabled={roleActionPending()}
+                        onClick={() => handleChangeMemberRole(member, "member")}
+                      >
+                        Demote
+                      </button>
+                    </Show>
+                    <Show when={canTransferOwner()}>
+                      <button
+                        class="text-[10px] text-amber-300 hover:text-amber-200 px-1.5 py-0.5 rounded hover:bg-amber-400/10 cursor-pointer disabled:opacity-50"
+                        disabled={roleActionPending()}
+                        onClick={() => handleChangeMemberRole(member, "owner")}
+                      >
+                        Make Owner
+                      </button>
+                    </Show>
                     <Show when={canRemove()}>
                       <button
                         class="text-[10px] text-red-400 hover:text-red-300 px-1.5 py-0.5 rounded hover:bg-red-400/10 cursor-pointer"
@@ -510,6 +563,9 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
           </For>
         </div>
       </div>
+      <Show when={roleActionError()}>
+        <p class="text-[10px] text-red-400 mt-1">{roleActionError()}</p>
+      </Show>
 
       <Show when={props.isAdmin && props.pendingJoins.length > 0}>
         <div>

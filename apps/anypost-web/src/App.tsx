@@ -838,6 +838,13 @@ export const App = () => {
     return role === "admin" || role === "owner";
   };
 
+  const ownRole = () => {
+    const state = actionChainState();
+    if (!state) return null;
+    const hex = ownPublicKeyHex();
+    return state.members.get(hex)?.role ?? null;
+  };
+
   const getBestRelayAddress = (): string | null => {
     const pool = relayPoolState();
     if (pool?.relays?.[0]?.address) return pool.relays[0].address;
@@ -944,6 +951,22 @@ export const App = () => {
     currentChat.removeMember(activeId, memberPublicKey).then(() => {
       refreshActionChainState();
     }).catch(() => {});
+  };
+
+  const handleChangeMemberRole = async (
+    memberPublicKey: Uint8Array,
+    newRole: "owner" | "admin" | "member",
+  ): Promise<string | null> => {
+    const currentChat = chat;
+    const activeId = groupState().activeGroupId;
+    if (!currentChat || !activeId) return "No active group";
+    try {
+      await currentChat.changeMemberRole(activeId, memberPublicKey, newRole);
+      refreshActionChainState();
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : "Failed to change role";
+    }
   };
 
   const handleSetJoinPolicy = async (joinPolicy: JoinPolicy): Promise<string | null> => {
@@ -1157,6 +1180,7 @@ export const App = () => {
                 pendingJoins={pendingJoinsMap().get(groupState().activeGroupId ?? "") ?? []}
                 joinPolicy={actionChainState()?.joinPolicy ?? "manual"}
                 isAdmin={isCurrentUserAdmin()}
+                ownRole={ownRole()}
                 ownPublicKeyHex={ownPublicKeyHex()}
                 ownDisplayName={displayName()}
                 publicKeyToPeerId={publicKeyToPeerIdMap()}
@@ -1164,6 +1188,7 @@ export const App = () => {
                 latencyMap={latencyMap()}
                 onApproveJoin={handleApproveJoin}
                 onRemoveMember={handleRemoveMember}
+                onChangeMemberRole={isCurrentUserAdmin() ? handleChangeMemberRole : null}
                 onAddByPeerId={handleAddByPeerId}
                 onRetryJoinNow={handleRetryJoinNow}
                 onCancelJoinRetry={handleCancelJoinRetry}

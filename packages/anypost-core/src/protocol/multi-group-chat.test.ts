@@ -667,6 +667,36 @@ describe("MultiGroupChat", () => {
     expect(joinerState!.members.size).toBe(1);
   });
 
+  it("should allow owner to change roles including ownership transfer", async () => {
+    const owner = await createTestNode();
+    const joiner = await createTestNode();
+
+    const { groupId, genesisEnvelope } = await owner.chat.createGroup("Role Change Test");
+    await joiner.chat.connectTo(owner.chat.multiaddrs[0]);
+    await waitFor(500);
+
+    const joinRequestReceived = new Promise<JoinRequestEvent>((resolve) => {
+      owner.chat.onJoinRequest((evt) => resolve(evt));
+    });
+    const invite: GroupInvite = {
+      genesisEnvelope,
+      relayAddr: owner.chat.multiaddrs[0].toString(),
+      adminPeerId: owner.peerId,
+    };
+    await joiner.chat.joinViaInvite(invite);
+    const joinRequest = await joinRequestReceived;
+    await owner.chat.approveJoin(groupId, joinRequest.requesterPublicKey);
+    await waitUntil(() => owner.chat.getActionChainState(groupId)!.members.size === 2);
+
+    await owner.chat.changeMemberRole(groupId, joinRequest.requesterPublicKey, "admin");
+    await waitUntil(() =>
+      owner.chat.getActionChainState(groupId)!.members.get(toHex(joiner.accountKey.publicKey))?.role === "admin");
+
+    await owner.chat.changeMemberRole(groupId, joinRequest.requesterPublicKey, "owner");
+    await waitUntil(() =>
+      owner.chat.getActionChainState(groupId)!.members.get(toHex(joiner.accountKey.publicKey))?.role === "owner");
+  });
+
   it("should publish member-left so other members see a clean leave", async () => {
     const admin = await createTestNode();
     const joiner = await createTestNode();

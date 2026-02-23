@@ -753,6 +753,104 @@ describe("Action chain state", () => {
       expect(result.success).toBe(false);
     });
 
+    it("should reject role change by admin who is not owner", () => {
+      const creator = generateAccountKey();
+      const admin = generateAccountKey();
+      const member = generateAccountKey();
+
+      const genesis = makeAction({
+        accountKey: creator,
+        parentHashes: [GENESIS_HASH],
+        payload: { type: "group-created", groupName: "Group" },
+      });
+      let state = applyAction(
+        createActionChainGroupState(DEFAULT_GROUP_ID),
+        genesis,
+      );
+      if (!state.success) throw new Error("Setup failed");
+
+      const approveAdmin = makeAction({
+        accountKey: creator,
+        parentHashes: [genesis.hash],
+        payload: {
+          type: "member-approved",
+          memberPublicKey: pubKey(admin),
+          role: "admin",
+        },
+      });
+      state = applyAction(state.data, approveAdmin);
+      if (!state.success) throw new Error("Setup failed");
+
+      const approveMember = makeAction({
+        accountKey: creator,
+        parentHashes: [approveAdmin.hash],
+        payload: {
+          type: "member-approved",
+          memberPublicKey: pubKey(member),
+          role: "member",
+        },
+      });
+      state = applyAction(state.data, approveMember);
+      if (!state.success) throw new Error("Setup failed");
+
+      const unauthorizedRoleChange = makeAction({
+        accountKey: admin,
+        parentHashes: [approveMember.hash],
+        payload: {
+          type: "role-changed",
+          memberPublicKey: pubKey(member),
+          newRole: "admin",
+        },
+      });
+      const result = applyAction(state.data, unauthorizedRoleChange);
+
+      expect(result.success).toBe(false);
+    });
+
+    it("should transfer ownership and demote previous owner to admin", () => {
+      const creator = generateAccountKey();
+      const member = generateAccountKey();
+
+      const genesis = makeAction({
+        accountKey: creator,
+        parentHashes: [GENESIS_HASH],
+        payload: { type: "group-created", groupName: "Group" },
+      });
+      let state = applyAction(
+        createActionChainGroupState(DEFAULT_GROUP_ID),
+        genesis,
+      );
+      if (!state.success) throw new Error("Setup failed");
+
+      const approveMember = makeAction({
+        accountKey: creator,
+        parentHashes: [genesis.hash],
+        payload: {
+          type: "member-approved",
+          memberPublicKey: pubKey(member),
+          role: "member",
+        },
+      });
+      state = applyAction(state.data, approveMember);
+      if (!state.success) throw new Error("Setup failed");
+
+      const transferOwnership = makeAction({
+        accountKey: creator,
+        parentHashes: [approveMember.hash],
+        payload: {
+          type: "role-changed",
+          memberPublicKey: pubKey(member),
+          newRole: "owner",
+        },
+      });
+      const result = applyAction(state.data, transferOwnership);
+
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.data.members.get(toHex(member.publicKey))?.role).toBe("owner");
+      expect(result.data.members.get(toHex(creator.publicKey))?.role).toBe("admin");
+    });
+
     it("should allow promoted admin to approve new members", () => {
       const creator = generateAccountKey();
       const promotee = generateAccountKey();

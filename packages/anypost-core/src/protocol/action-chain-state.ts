@@ -187,10 +187,6 @@ const applyRoleChanged = (
   action: SignedAction,
   authorHex: string,
 ): Result<ActionChainGroupState, Error> => {
-  if (!isAdmin(state, authorHex)) {
-    return Result.failure(new Error("Only admins can change roles"));
-  }
-
   const payload = action.payload as {
     readonly memberPublicKey: Uint8Array;
     readonly newRole: "owner" | "admin" | "member";
@@ -203,20 +199,15 @@ const applyRoleChanged = (
 
   const actor = state.members.get(authorHex);
   if (!actor) {
-    return Result.failure(new Error("Only admins can change roles"));
+    return Result.failure(new Error("Only owner can change roles"));
+  }
+  if (actor.role !== "owner") {
+    return Result.failure(new Error("Only owner can change roles"));
   }
 
   const existing = state.members.get(targetHex);
   if (!existing) {
     return Result.failure(new Error("Target is not a member"));
-  }
-
-  if (payload.newRole === "owner" && actor.role !== "owner") {
-    return Result.failure(new Error("Only owner can transfer ownership"));
-  }
-
-  if (actor.role !== "owner" && existing.role === "owner") {
-    return Result.failure(new Error("Only owner can change owner role"));
   }
 
   const members = new Map(state.members);

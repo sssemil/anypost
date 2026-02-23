@@ -33,7 +33,7 @@ import { IPFS_BOOTSTRAP_WSS_PEERS } from "../libp2p/bootstrap-peers.js";
 import type { ChatMessageEvent, PeerInfo, NetworkStatus, NetworkEvent } from "./plaintext-chat.js";
 import type { AccountKey } from "../crypto/identity.js";
 import { GENESIS_HASH, toHex } from "./action-chain.js";
-import type { ActionChainGroupState, SignedActionEnvelope, SignedAction, JoinPolicy } from "./action-chain.js";
+import type { ActionChainGroupState, SignedActionEnvelope, SignedAction, JoinPolicy, ActionRole } from "./action-chain.js";
 import { createSignedActionEnvelope, verifyAndDecodeAction } from "./action-signing.js";
 import { createActionDagState, appendAction, getTips, topologicalOrder } from "./action-dag.js";
 import type { ActionDagState } from "./action-dag.js";
@@ -148,6 +148,11 @@ export type MultiGroupChat = {
     options?: { readonly inviteTokenId?: string },
   ) => Promise<void>;
   readonly setJoinPolicy: (groupId: string, joinPolicy: JoinPolicy) => Promise<void>;
+  readonly changeMemberRole: (
+    groupId: string,
+    memberPublicKey: Uint8Array,
+    newRole: ActionRole,
+  ) => Promise<void>;
   readonly removeMember: (groupId: string, memberPublicKey: Uint8Array) => Promise<void>;
   readonly requestJoin: (groupId: string) => Promise<void>;
   readonly getActionChainState: (groupId: string) => ActionChainGroupState | null;
@@ -2010,6 +2015,39 @@ export const createMultiGroupChat = async (
       processSignedAction(groupId, envelope);
       await publishEnvelope(groupId, envelope);
       emit("info", `Join policy set to ${joinPolicy} for group ${groupId.slice(0, 8)}...`);
+    },
+    changeMemberRole: async (
+      groupId: string,
+      memberPublicKey: Uint8Array,
+      newRole: ActionRole,
+    ): Promise<void> => {
+      const dag = actionDags.get(groupId);
+      if (!dag) throw new Error("No action chain for this group");
+      if (newRole === "owner" && toHex(memberPublicKey) === ownPublicKeyHex) {
+        throw new Error("Cannot transfer ownership to yourself");
+      }
+
+      const tips = getTips(dag);
+      const parentHashes = tips.length > 0 ? tips : [GENESIS_HASH];
+      const envelope = createSignedActionEnvelope({
+        accountKey,
+        groupId,
+        parentHashes,
+        payload: {
+          type: "role-changed",
+          memberPublicKey: new Uint8Array(memberPublicKey),
+          newRole,
+        },
+      });
+      const action = processSignedAction(groupId, envelope);
+      if (!action) {
+        throw new Error("Role change rejected by local policy");
+      }
+      await publishEnvelope(groupId, envelope);
+      emit(
+        "info",
+        `Changed member role to ${newRole} in group ${groupId.slice(0, 8)}...`,
+      );
     },
     removeMember: async (groupId: string, memberPublicKey: Uint8Array): Promise<void> => {
       const dag = actionDags.get(groupId);
