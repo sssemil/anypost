@@ -124,7 +124,7 @@ export type MultiGroupChat = {
   readonly multiaddrs: readonly Multiaddr[];
   readonly getPeerPrivateKey: () => Uint8Array;
   readonly joinGroup: (groupId: string) => void;
-  readonly leaveGroup: (groupId: string) => void;
+  readonly leaveGroup: (groupId: string) => Promise<void>;
   readonly getJoinedGroups: () => readonly string[];
   readonly sendMessage: (groupId: string, text: string, displayName?: string) => Promise<void>;
   readonly createGroup: (name: string) => Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }>;
@@ -1518,6 +1518,26 @@ export const createMultiGroupChat = async (
     emit("info", `Approved member ${toHex(memberPublicKey).slice(0, 16)}... in group ${groupId.slice(0, 8)}...`);
   };
 
+  const performLocalLeaveCleanup = (groupId: string) => {
+    const idx = joinedGroups.indexOf(groupId);
+    if (idx === -1) return;
+    const topic = groupTopic(groupId);
+    pubsub.unsubscribe(topic);
+    topicToGroupId.delete(topic);
+    joinedGroups.splice(idx, 1);
+    actionDags.delete(groupId);
+    actionChainStates.delete(groupId);
+    actionEnvelopes.delete(groupId);
+    peerDiscoveryMetrics.delete(groupId);
+    joinInviteGrantByGroup.delete(groupId);
+    pendingJoinInviteGrantsByGroup.delete(groupId);
+    joinRetryState = removeJoinRetry(joinRetryState, groupId);
+    emitJoinRetryState();
+    groupDiscoveryManager?.leaveGroup(groupId);
+    reconcilePeerPathCache(true);
+    emit("info", `Left group ${groupId.slice(0, 8)}...`);
+  };
+
   const MEMBER_RECONNECT_INTERVAL = 30_000;
 
   const reconnectDisconnectedMembers = () => {
@@ -1553,24 +1573,30 @@ export const createMultiGroupChat = async (
       reconcilePeerPathCache();
       emit("info", `Joined group ${groupId.slice(0, 8)}... (topic: ${topic})`);
     },
-    leaveGroup: (groupId: string) => {
-      const idx = joinedGroups.indexOf(groupId);
-      if (idx === -1) return;
-      const topic = groupTopic(groupId);
-      pubsub.unsubscribe(topic);
-      topicToGroupId.delete(topic);
-      joinedGroups.splice(idx, 1);
-      actionDags.delete(groupId);
-      actionChainStates.delete(groupId);
-      actionEnvelopes.delete(groupId);
-      peerDiscoveryMetrics.delete(groupId);
-      joinInviteGrantByGroup.delete(groupId);
-      pendingJoinInviteGrantsByGroup.delete(groupId);
-      joinRetryState = removeJoinRetry(joinRetryState, groupId);
-      emitJoinRetryState();
-      groupDiscoveryManager?.leaveGroup(groupId);
-      reconcilePeerPathCache(true);
-      emit("info", `Left group ${groupId.slice(0, 8)}...`);
+    leaveGroup: async (groupId: string) => {
+      if (!joinedGroups.includes(groupId)) return;
+
+      const dag = actionDags.get(groupId);
+      if (dag) {
+        const tips = getTips(dag);
+        const parentHashes = tips.length > 0 ? tips : [GENESIS_HASH];
+        const leaveEnvelope = createSignedActionEnvelope({
+          accountKey,
+          groupId,
+          parentHashes,
+          payload: { type: "member-left" },
+        });
+        processSignedAction(groupId, leaveEnvelope);
+        try {
+          await publishEnvelope(groupId, leaveEnvelope);
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          emit("info", `Published leave action for ${groupId.slice(0, 8)}...`);
+        } catch {
+          emit("info", `Failed to publish leave action for ${groupId.slice(0, 8)}..., leaving locally`);
+        }
+      }
+
+      performLocalLeaveCleanup(groupId);
     },
     getJoinedGroups: () => [...joinedGroups],
     sendMessage: async (groupId: string, text: string, _displayName?: string) => {

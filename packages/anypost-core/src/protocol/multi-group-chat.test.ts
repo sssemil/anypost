@@ -125,7 +125,7 @@ describe("MultiGroupChat", () => {
 
     const groupA = crypto.randomUUID();
     chat.joinGroup(groupA);
-    chat.leaveGroup(groupA);
+    await chat.leaveGroup(groupA);
 
     expect(chat.getJoinedGroups()).toEqual([]);
   });
@@ -186,7 +186,7 @@ describe("MultiGroupChat", () => {
     await node1.chat.connectTo(node2.chat.multiaddrs[0]);
     await waitFor(500);
 
-    node2.chat.leaveGroup(groupA);
+    await node2.chat.leaveGroup(groupA);
     await waitFor(200);
 
     await node1.chat.sendMessage(groupA, "Should not arrive");
@@ -285,7 +285,7 @@ describe("MultiGroupChat", () => {
     const { groupId } = await chat.createGroup("Test Group");
     expect(chat.getActionChainEnvelopes(groupId).length).toBe(1);
 
-    chat.leaveGroup(groupId);
+    await chat.leaveGroup(groupId);
     expect(chat.getActionChainEnvelopes(groupId)).toEqual([]);
   });
 
@@ -643,6 +643,35 @@ describe("MultiGroupChat", () => {
 
     const joinerState = joiner.chat.getActionChainState(groupId);
     expect(joinerState!.members.size).toBe(1);
+  });
+
+  it("should publish member-left so other members see a clean leave", async () => {
+    const admin = await createTestNode();
+    const joiner = await createTestNode();
+
+    const { groupId, genesisEnvelope } = await admin.chat.createGroup("Leave Test");
+    await joiner.chat.connectTo(admin.chat.multiaddrs[0]);
+    await waitFor(500);
+
+    const joinRequestReceived = new Promise<JoinRequestEvent>((resolve) => {
+      admin.chat.onJoinRequest((evt) => resolve(evt));
+    });
+    const invite: GroupInvite = {
+      genesisEnvelope,
+      relayAddr: admin.chat.multiaddrs[0].toString(),
+      adminPeerId: admin.peerId,
+    };
+    await joiner.chat.joinViaInvite(invite);
+    const joinRequest = await joinRequestReceived;
+    await admin.chat.approveJoin(groupId, joinRequest.requesterPublicKey);
+    await waitUntil(() => admin.chat.getActionChainState(groupId)!.members.size === 2);
+
+    await joiner.chat.leaveGroup(groupId);
+    await waitUntil(() => admin.chat.getActionChainState(groupId)!.members.size === 1);
+
+    const adminState = admin.chat.getActionChainState(groupId);
+    expect(adminState).not.toBeNull();
+    expect(adminState!.members.size).toBe(1);
   });
 
   it("should produce a stable peer ID when given the same peerPrivateKey", async () => {

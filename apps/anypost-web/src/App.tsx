@@ -274,6 +274,12 @@ export const App = () => {
       (groupState().groups.get(groupId)?.messages ?? []).map((m) => m.id),
     );
     const pubKeyMap = publicKeyToPeerIdMap();
+    const memberLabelFromPublicKey = (publicKey: Uint8Array): string => {
+      const memberHex = toHex(publicKey);
+      const memberPeerId = pubKeyMap.get(memberHex);
+      if (memberPeerId) return `${memberPeerId.slice(0, 12)}...${memberPeerId.slice(-6)}`;
+      return `${memberHex.slice(0, 8)}...${memberHex.slice(-8)}`;
+    };
 
     for (const envelope of envelopes) {
       const decoded = verifyAndDecodeAction(envelope);
@@ -282,11 +288,7 @@ export const App = () => {
       if (action.payload.type === "member-approved") {
         const indicatorId = `join:${action.id}`;
         if (existingIds.has(indicatorId)) continue;
-        const joinedHex = toHex(action.payload.memberPublicKey);
-        const joinedPeerId = pubKeyMap.get(joinedHex);
-        const joinedLabel = joinedPeerId
-          ? `${joinedPeerId.slice(0, 12)}...${joinedPeerId.slice(-6)}`
-          : `${joinedHex.slice(0, 8)}...${joinedHex.slice(-8)}`;
+        const joinedLabel = memberLabelFromPublicKey(action.payload.memberPublicKey);
         dispatchGroupEvent({
           type: "message-received",
           groupId,
@@ -295,6 +297,44 @@ export const App = () => {
             senderPeerId: SYSTEM_SENDER_ID,
             senderDisplayName: "system",
             text: `${joinedLabel} joined the group`,
+            timestamp: action.timestamp,
+          },
+        });
+        existingIds.add(indicatorId);
+        continue;
+      }
+
+      if (action.payload.type === "member-left") {
+        const indicatorId = `left:${action.id}`;
+        if (existingIds.has(indicatorId)) continue;
+        const leftLabel = memberLabelFromPublicKey(action.authorPublicKey);
+        dispatchGroupEvent({
+          type: "message-received",
+          groupId,
+          message: {
+            id: indicatorId,
+            senderPeerId: SYSTEM_SENDER_ID,
+            senderDisplayName: "system",
+            text: `${leftLabel} left the group`,
+            timestamp: action.timestamp,
+          },
+        });
+        existingIds.add(indicatorId);
+        continue;
+      }
+
+      if (action.payload.type === "member-removed") {
+        const indicatorId = `kicked:${action.id}`;
+        if (existingIds.has(indicatorId)) continue;
+        const kickedLabel = memberLabelFromPublicKey(action.payload.memberPublicKey);
+        dispatchGroupEvent({
+          type: "message-received",
+          groupId,
+          message: {
+            id: indicatorId,
+            senderPeerId: SYSTEM_SENDER_ID,
+            senderDisplayName: "system",
+            text: `${kickedLabel} was kicked from the group`,
             timestamp: action.timestamp,
           },
         });
@@ -751,8 +791,9 @@ export const App = () => {
   };
 
   const handleLeaveGroup = (groupId: string) => {
-    chat?.leaveGroup(groupId);
-    dispatchGroupEvent({ type: "group-left", groupId });
+    chat?.leaveGroup(groupId).catch(() => {}).finally(() => {
+      dispatchGroupEvent({ type: "group-left", groupId });
+    });
   };
 
   const handleSelectGroup = (groupId: string) => {
