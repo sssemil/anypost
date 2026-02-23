@@ -8,6 +8,7 @@ import type {
 import type { NetworkEvent } from "./plaintext-chat.js";
 import type { RelayPoolState } from "./relay-pool.js";
 import type { GroupInvite } from "./group-invite.js";
+import { createInviteGrant } from "./invite-grant.js";
 import { generateAccountKey } from "../crypto/identity.js";
 import type { AccountKey } from "../crypto/identity.js";
 import { toHex } from "./action-chain.js";
@@ -307,6 +308,43 @@ describe("MultiGroupChat", () => {
     expect(chat.peerId).toMatch(/^12D3KooW/);
   });
 
+  it("should accept initialJoinRetryState and onJoinRetryStateChange options without error", async () => {
+    const states: ReadonlyMap<string, unknown>[] = [];
+    const chat = await createMultiGroupChat({
+      accountKey: generateAccountKey(),
+      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+      useTransports: "tcp",
+      initialJoinRetryState: new Map([
+        ["group-a", {
+          groupId: "group-a",
+          createdAt: 1_000,
+          lastAttemptAt: 1_500,
+          nextAttemptAt: 6_500,
+          attemptCount: 1,
+          status: "active",
+        }],
+      ]),
+      onJoinRetryStateChange: (state) => states.push(state as ReadonlyMap<string, unknown>),
+    });
+    instances.push(chat);
+
+    expect(chat.peerId).toMatch(/^12D3KooW/);
+    expect(states.length).toBeGreaterThan(0);
+    expect(chat.getJoinRetryState().has("group-a")).toBe(true);
+  });
+
+  it("should expose retryJoinNow and cancelJoinRetry methods", async () => {
+    const { chat } = await createTestNode();
+    const groupId = crypto.randomUUID();
+    chat.joinGroup(groupId);
+
+    await chat.retryJoinNow(groupId);
+    expect(chat.getJoinRetryState().has(groupId)).toBe(true);
+
+    chat.cancelJoinRetry(groupId);
+    expect(chat.getJoinRetryState().get(groupId)?.status).toBe("cancelled");
+  });
+
   it("should emit connection metrics and relay reservation state callbacks", async () => {
     const metrics: Array<{ timeToFirstPeerMs: number | null; reservationAttempts: number }> = [];
     const reservationStates: Array<{ entries: number; targetActive: number }> = [];
@@ -455,6 +493,92 @@ describe("MultiGroupChat", () => {
 
     const adminKeyHex = toHex(new Uint8Array(admin.accountKey.publicKey));
     expect(joiner.publicKeyToPeerId.get(adminKeyHex)).toBe(admin.peerId);
+  });
+
+  it("should reject joinViaInvite when invite targets a different peer ID", async () => {
+    const admin = await createTestNode();
+    const joiner = await createTestNode();
+
+    const { groupId, genesisEnvelope } = await admin.chat.createGroup("Targeted Invite Test");
+    const invite: GroupInvite = {
+      genesisEnvelope,
+      relayAddr: admin.chat.multiaddrs[0].toString(),
+      adminPeerId: admin.peerId,
+      inviteGrant: createInviteGrant({
+        accountKey: admin.accountKey,
+        groupId,
+        policy: {
+          kind: "targeted-peer",
+          targetPeerId: "12D3KooWAnotherPeer",
+        },
+      }),
+    };
+
+    await expect(joiner.chat.joinViaInvite(invite)).rejects.toThrow("Invite rejected for this peer");
+  });
+
+  it("should auto-approve a valid targeted invite join request", async () => {
+    const admin = await createTestNode();
+    const joiner = await createTestNode();
+
+    const { groupId, genesisEnvelope } = await admin.chat.createGroup("Auto Approve Invite Test");
+    await joiner.chat.connectTo(admin.chat.multiaddrs[0]);
+    await waitFor(500);
+
+    const invite: GroupInvite = {
+      genesisEnvelope,
+      relayAddr: admin.chat.multiaddrs[0].toString(),
+      adminPeerId: admin.peerId,
+      inviteGrant: createInviteGrant({
+        accountKey: admin.accountKey,
+        groupId,
+        policy: {
+          kind: "targeted-peer",
+          targetPeerId: joiner.peerId,
+        },
+      }),
+    };
+
+    await joiner.chat.joinViaInvite(invite);
+
+    await waitUntil(() => {
+      const joinerState = joiner.chat.getActionChainState(groupId);
+      if (!joinerState) return false;
+      const joinerKeyHex = toHex(new Uint8Array(joiner.accountKey.publicKey));
+      return joinerState.members.has(joinerKeyHex);
+    });
+
+    const joinerState = joiner.chat.getActionChainState(groupId);
+    expect(joinerState).not.toBeNull();
+    expect(joinerState!.members.size).toBe(2);
+  });
+
+  it("should stop join retries when approval is received", async () => {
+    const admin = await createTestNode();
+    const joiner = await createTestNode();
+
+    const { groupId, genesisEnvelope } = await admin.chat.createGroup("Retry Stop Test");
+
+    await joiner.chat.connectTo(admin.chat.multiaddrs[0]);
+    await waitFor(500);
+
+    const joinRequestReceived = new Promise<JoinRequestEvent>((resolve) => {
+      admin.chat.onJoinRequest((evt) => resolve(evt));
+    });
+
+    const invite: GroupInvite = {
+      genesisEnvelope,
+      relayAddr: admin.chat.multiaddrs[0].toString(),
+      adminPeerId: admin.peerId,
+    };
+    await joiner.chat.joinViaInvite(invite);
+
+    await waitUntil(() => joiner.chat.getJoinRetryState().has(groupId));
+
+    const joinRequest = await joinRequestReceived;
+    await admin.chat.approveJoin(groupId, joinRequest.requesterPublicKey);
+
+    await waitUntil(() => !joiner.chat.getJoinRetryState().has(groupId));
   });
 
   it("should remove a member from the group when admin calls removeMember", async () => {

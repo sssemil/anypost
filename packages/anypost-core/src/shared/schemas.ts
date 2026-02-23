@@ -59,6 +59,33 @@ const SyncRequestPayloadSchema = z.object({
   senderPeerId: PeerIdSchema,
 });
 
+const InviteGrantClaimsSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("targeted-peer"),
+    tokenId: z.string().uuid(),
+    groupId: GroupIdSchema,
+    issuedAt: z.number(),
+    targetPeerId: PeerIdSchema,
+  }),
+  z.object({
+    kind: z.literal("open"),
+    tokenId: z.string().uuid(),
+    groupId: GroupIdSchema,
+    issuedAt: z.number(),
+    expiresAt: z.number().optional(),
+    maxJoiners: z.number().int().positive().optional(),
+  }),
+]);
+
+const InviteGrantProofSchema = z.object({
+  claims: InviteGrantClaimsSchema,
+  issuerPublicKey: Uint8ArraySchema,
+  signature: Uint8ArraySchema,
+});
+
+export type InviteGrantClaimsWire = z.infer<typeof InviteGrantClaimsSchema>;
+export type InviteGrantProofWire = z.infer<typeof InviteGrantProofSchema>;
+
 export const WireMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("encrypted_message"),
@@ -82,6 +109,7 @@ export const WireMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("join_request"),
     groupId: GroupIdSchema,
     requesterPublicKey: Uint8ArraySchema,
+    inviteGrant: InviteGrantProofSchema.optional(),
   }),
 ]);
 

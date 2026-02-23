@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import "fake-indexeddb/auto";
 import { openAccountStore } from "./account-store.js";
 import { generateAccountKey } from "../crypto/identity.js";
+import type { JoinRetryState } from "../protocol/join-retry-queue.js";
 
 describe("Account Store", () => {
   describe("account key persistence", () => {
@@ -193,6 +194,73 @@ describe("Account Store", () => {
       const store2 = await openAccountStore();
       try {
         const retrieved = await store2.getPeerPathCache();
+        expect(retrieved).toEqual(original);
+      } finally {
+        await store2.destroy();
+      }
+    });
+  });
+
+  describe("join retry state persistence", () => {
+    it("should return empty state when no join retry state exists", async () => {
+      const store = await openAccountStore();
+      try {
+        const state = await store.getJoinRetryState();
+        expect(state.size).toBe(0);
+      } finally {
+        await store.destroy();
+      }
+    });
+
+    it("should store and retrieve join retry state", async () => {
+      const store = await openAccountStore();
+      try {
+        const original: JoinRetryState = new Map([
+          ["group-a", {
+            groupId: "group-a",
+            createdAt: 1_000,
+            lastAttemptAt: 2_000,
+            nextAttemptAt: 7_000,
+            attemptCount: 2,
+            status: "active",
+          }],
+          ["group-b", {
+            groupId: "group-b",
+            createdAt: 5_000,
+            lastAttemptAt: null,
+            nextAttemptAt: 5_000,
+            attemptCount: 0,
+            status: "cancelled",
+          }],
+        ]);
+
+        await store.saveJoinRetryState(original);
+        const retrieved = await store.getJoinRetryState();
+
+        expect(retrieved).toEqual(original);
+      } finally {
+        await store.destroy();
+      }
+    });
+
+    it("should persist join retry state across store instances", async () => {
+      const store1 = await openAccountStore();
+      const original: JoinRetryState = new Map([
+        ["group-a", {
+          groupId: "group-a",
+          createdAt: 1_000,
+          lastAttemptAt: 1_500,
+          nextAttemptAt: 6_500,
+          attemptCount: 1,
+          status: "active",
+        }],
+      ]);
+      await store1.saveJoinRetryState(original);
+      store1.close();
+
+      const store2 = await openAccountStore();
+      try {
+        const retrieved = await store2.getJoinRetryState();
         expect(retrieved).toEqual(original);
       } finally {
         await store2.destroy();

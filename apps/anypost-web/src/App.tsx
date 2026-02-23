@@ -9,6 +9,7 @@ import {
   getSeenPeerIds,
   toHex,
   encodeGroupInvite,
+  createInviteGrant,
 } from "anypost-core/protocol";
 import type {
   MultiGroupChat,
@@ -23,6 +24,8 @@ import type {
   PeerDiscoveryMetrics,
   ConnectionMetrics,
   RelayReservationState,
+  JoinRetryEntry,
+  JoinRetryState,
 } from "anypost-core/protocol";
 import { getCandidatesByRtt } from "anypost-core/protocol";
 import {
@@ -56,7 +59,7 @@ import { MessageInput } from "./chat/MessageInput.js";
 import { NetworkPanel } from "./network/NetworkPanel.js";
 import { EventLog } from "./network/EventLog.js";
 import { GroupInfoPanel } from "./chat/GroupInfoPanel.js";
-import type { PendingJoinRequest } from "./chat/GroupInfoPanel.js";
+import type { PendingJoinRequest, InviteCreateOptions } from "./chat/GroupInfoPanel.js";
 import {
   createMobileViewState,
   transitionMobileView,
@@ -205,6 +208,7 @@ export const App = () => {
   const [latencyMap, setLatencyMap] = createSignal<ReadonlyMap<string, number>>(new Map());
   const [connectionMetrics, setConnectionMetrics] = createSignal<ConnectionMetrics | null>(null);
   const [peerDiscoveryMetricsByGroup, setPeerDiscoveryMetricsByGroup] = createSignal<ReadonlyMap<string, PeerDiscoveryMetrics>>(new Map());
+  const [joinRetryState, setJoinRetryState] = createSignal<JoinRetryState>(new Map());
   const [mobileView, setMobileView] = createSignal(createMobileViewState());
   const [actionChainState, setActionChainState] = createSignal<ActionChainGroupState | null>(null);
   const [pendingJoinsMap, setPendingJoinsMap] = createSignal<ReadonlyMap<string, readonly PendingJoinRequest[]>>(new Map());
@@ -260,6 +264,12 @@ export const App = () => {
     const activeId = groupState().activeGroupId;
     if (!activeId) return null;
     return peerDiscoveryMetricsByGroup().get(activeId) ?? null;
+  };
+
+  const activeJoinRetryEntry = (): JoinRetryEntry | null => {
+    const activeId = groupState().activeGroupId;
+    if (!activeId) return null;
+    return joinRetryState().get(activeId) ?? null;
   };
 
   createEffect(() => {
@@ -450,17 +460,23 @@ export const App = () => {
       type PeerPathCacheStoreCompat = {
         readonly getPeerPathCache?: () => Promise<ReadonlyMap<string, readonly string[]>>;
         readonly savePeerPathCache?: (cache: ReadonlyMap<string, readonly string[]>) => Promise<void>;
+        readonly getJoinRetryState?: () => Promise<JoinRetryState>;
+        readonly saveJoinRetryState?: (state: JoinRetryState) => Promise<void>;
       };
 
       const store = await openAccountStore();
       let peerPrivateKey: Uint8Array | undefined;
       let initialPeerPathCache: ReadonlyMap<string, readonly string[]> = new Map();
+      let initialJoinRetryState: JoinRetryState = new Map();
       try {
         const savedKey = await store.getPeerPrivateKey();
         if (savedKey) peerPrivateKey = savedKey;
         const compatStore = store as AccountStore & PeerPathCacheStoreCompat;
         if (typeof compatStore.getPeerPathCache === "function") {
           initialPeerPathCache = await compatStore.getPeerPathCache();
+        }
+        if (typeof compatStore.getJoinRetryState === "function") {
+          initialJoinRetryState = await compatStore.getJoinRetryState();
         }
       } finally {
         store.close();
@@ -483,11 +499,26 @@ export const App = () => {
         })();
       };
 
+      const persistJoinRetryState = (state: JoinRetryState) => {
+        void (async () => {
+          const stateStore = await openAccountStore();
+          try {
+            const compatStore = stateStore as AccountStore & PeerPathCacheStoreCompat;
+            if (typeof compatStore.saveJoinRetryState === "function") {
+              await compatStore.saveJoinRetryState(state);
+            }
+          } finally {
+            stateStore.close();
+          }
+        })();
+      };
+
       chat = await createMultiGroupChat({
         accountKey,
         peerPrivateKey,
         initialPublicKeyToPeerId,
         initialPeerPathCache,
+        initialJoinRetryState,
         initialRelayHints,
         bootstrapPeers,
         discoveryProfile: "aggressive",
@@ -512,6 +543,10 @@ export const App = () => {
         },
         onPeerPathCacheChange: (cache) => {
           persistPeerPathCache(cache);
+        },
+        onJoinRetryStateChange: (state) => {
+          setJoinRetryState(state);
+          persistJoinRetryState(state);
         },
         onApprovalReceived: (groupId) => {
           dispatchGroupEvent({ type: "approval-received", groupId });
@@ -559,6 +594,7 @@ export const App = () => {
       });
 
       unsubscribeJoinRequests = chat.onJoinRequest((evt) => {
+        if (evt.autoApproved) return;
         const pubKeyHex = toHex(new Uint8Array(evt.requesterPublicKey));
         setPendingJoinsMap((prev) => {
           const existing = prev.get(evt.groupId) ?? [];
@@ -623,18 +659,22 @@ export const App = () => {
     });
   };
 
-  const handleJoinViaInvite = (invite: GroupInvite) => {
+  const handleJoinViaInvite = async (invite: GroupInvite): Promise<string | null> => {
     const currentChat = chat;
-    if (!currentChat) return;
+    if (!currentChat) return "Not connected";
 
-    currentChat.joinViaInvite(invite).then(({ groupId }) => {
+    try {
+      const { groupId } = await currentChat.joinViaInvite(invite);
       const chainState = currentChat.getActionChainState(groupId);
       const groupName = chainState?.groupName || "Unnamed Group";
       dispatchGroupEvent({ type: "group-joined", groupId, groupName, hasActionChain: true });
       dispatchGroupEvent({ type: "group-selected", groupId });
       refreshActionChainState();
       dispatchMobileView({ type: "group-selected" });
-    }).catch(() => {});
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : "Join failed";
+    }
   };
 
   const handleCreateGroup = () => {
@@ -708,22 +748,63 @@ export const App = () => {
     return null;
   };
 
-  const handleCreateInvite = () => {
+  const handleCreateInvite = (options: InviteCreateOptions): string | null => {
     const currentChat = chat;
     const activeId = groupState().activeGroupId;
-    if (!currentChat || !activeId) return;
+    if (!currentChat || !activeId) return "No active group";
     const envelopes = currentChat.getActionChainEnvelopes(activeId);
-    if (!envelopes || envelopes.length === 0) return;
+    if (!envelopes || envelopes.length === 0) return "Group has no genesis action";
 
     const relayAddr = getBestRelayAddress();
-    if (!relayAddr) return;
+    if (!relayAddr) return "No relay address available";
+    const accountKey = getCurrentAccountKey();
+    if (!accountKey) return "No account key available";
+
+    const policy = options.kind === "targeted-peer"
+      ? {
+          kind: "targeted-peer" as const,
+          targetPeerId: options.targetPeerId.trim(),
+        }
+      : {
+          kind: "open" as const,
+          expiresAt: options.expiresInMinutes !== undefined
+            ? Date.now() + Math.round(options.expiresInMinutes * 60_000)
+            : undefined,
+          maxJoiners: options.maxJoiners,
+        };
+
+    if (policy.kind === "targeted-peer" && policy.targetPeerId.length === 0) {
+      return "Target peer ID is required";
+    }
+
+    const inviteGrant = createInviteGrant({
+      accountKey,
+      groupId: activeId,
+      policy,
+    });
 
     const code = encodeGroupInvite({
       genesisEnvelope: envelopes[0],
       relayAddr,
       adminPeerId: currentChat.peerId,
+      inviteGrant,
     });
     navigator.clipboard.writeText(code).catch(() => {});
+    return null;
+  };
+
+  const handleRetryJoinNow = () => {
+    const currentChat = chat;
+    const activeId = groupState().activeGroupId;
+    if (!currentChat || !activeId) return;
+    currentChat.retryJoinNow(activeId).catch(() => {});
+  };
+
+  const handleCancelJoinRetry = () => {
+    const currentChat = chat;
+    const activeId = groupState().activeGroupId;
+    if (!currentChat || !activeId) return;
+    currentChat.cancelJoinRetry(activeId);
   };
 
   const handleApproveJoin = (memberPublicKey: Uint8Array) => {
@@ -930,6 +1011,7 @@ export const App = () => {
                 actionEnvelopes={chat?.getActionChainEnvelopes(groupState().activeGroupId ?? "") ?? []}
                 connectionMetrics={connectionMetrics()}
                 activeGroupDiscoveryMetrics={activeGroupDiscoveryMetrics()}
+                joinRetryEntry={activeJoinRetryEntry()}
                 pendingJoins={pendingJoinsMap().get(groupState().activeGroupId ?? "") ?? []}
                 isAdmin={isCurrentUserAdmin()}
                 ownPublicKeyHex={ownPublicKeyHex()}
@@ -940,6 +1022,8 @@ export const App = () => {
                 onApproveJoin={handleApproveJoin}
                 onRemoveMember={handleRemoveMember}
                 onAddByPeerId={handleAddByPeerId}
+                onRetryJoinNow={handleRetryJoinNow}
+                onCancelJoinRetry={handleCancelJoinRetry}
                 onCreateInvite={
                   (chat?.getActionChainEnvelopes(groupState().activeGroupId ?? "")?.length ?? 0) > 0 && getBestRelayAddress()
                     ? handleCreateInvite

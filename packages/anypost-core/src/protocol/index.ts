@@ -137,6 +137,8 @@ export type {
   DiscoveryProfile,
   PeerDiscoveryMetrics,
   ConnectionMetrics,
+  JoinRetryEntry,
+  JoinRetryState,
 } from "./multi-group-chat.js";
 export {
   ActionPayloadSchema,
@@ -174,6 +176,16 @@ export {
 export { encodeGroupInvite, decodeGroupInvite } from "./group-invite.js";
 export type { GroupInvite } from "./group-invite.js";
 export {
+  createInviteGrant,
+  verifyInviteGrant,
+  validateInviteGrantForJoin,
+} from "./invite-grant.js";
+export type {
+  InviteGrantClaims,
+  InviteGrantProof,
+  InviteGrantPolicy,
+} from "./invite-grant.js";
+export {
   createRelayCandidateState,
   addCandidate as addRelayCandidate,
   removeCandidate as removeRelayCandidate,
@@ -200,3 +212,16 @@ export type {
   RelayDialRequest,
   RelayDialReason,
 } from "./relay-reservation-manager.js";
+export {
+  createJoinRetryState,
+  enqueueJoinRetry,
+  recordJoinRetryAttempt,
+  scheduleNextJoinRetry,
+  removeJoinRetry,
+  markJoinRetryCancelled,
+  dueJoinRetries,
+  getJoinRetryDelayMs,
+} from "./join-retry-queue.js";
+export type {
+  JoinRetryStatus,
+} from "./join-retry-queue.js";

@@ -1,6 +1,7 @@
 import { openDB, deleteDB } from "idb";
 import type { IDBPDatabase } from "idb";
 import type { AccountKey } from "../crypto/identity.js";
+import type { JoinRetryEntry, JoinRetryState, JoinRetryStatus } from "../protocol/join-retry-queue.js";
 
 const DB_NAME = "anypost:account";
 
@@ -12,6 +13,7 @@ type AccountStoreDBSchema = {
 };
 
 const PEER_PATH_CACHE_KEY = "peerPathCache";
+const JOIN_RETRY_STATE_KEY = "joinRetryState";
 
 const decodePeerPathCache = (value: string): ReadonlyMap<string, readonly string[]> => {
   try {
@@ -37,6 +39,66 @@ const encodePeerPathCache = (
   cache: ReadonlyMap<string, readonly string[]>,
 ): string => JSON.stringify([...cache.entries()].map(([peerId, paths]) => [peerId, [...paths]]));
 
+const isJoinRetryStatus = (value: unknown): value is JoinRetryStatus =>
+  value === "active" || value === "paused" || value === "cancelled";
+
+const decodeJoinRetryState = (value: string): JoinRetryState => {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return new Map();
+
+    const state = new Map<string, JoinRetryEntry>();
+    for (const rawEntry of parsed) {
+      if (!Array.isArray(rawEntry) || rawEntry.length !== 2) continue;
+      const [groupId, rawValue] = rawEntry;
+      if (typeof groupId !== "string" || typeof rawValue !== "object" || rawValue === null) continue;
+
+      const valueObj = rawValue as Record<string, unknown>;
+      const createdAt = valueObj.createdAt;
+      const lastAttemptAt = valueObj.lastAttemptAt;
+      const nextAttemptAt = valueObj.nextAttemptAt;
+      const attemptCount = valueObj.attemptCount;
+      const status = valueObj.status;
+
+      if (
+        typeof createdAt !== "number" ||
+        !Number.isFinite(createdAt) ||
+        !(lastAttemptAt === null || (typeof lastAttemptAt === "number" && Number.isFinite(lastAttemptAt))) ||
+        typeof nextAttemptAt !== "number" ||
+        !Number.isFinite(nextAttemptAt) ||
+        typeof attemptCount !== "number" ||
+        !Number.isInteger(attemptCount) ||
+        attemptCount < 0 ||
+        !isJoinRetryStatus(status)
+      ) {
+        continue;
+      }
+
+      state.set(groupId, {
+        groupId,
+        createdAt,
+        lastAttemptAt,
+        nextAttemptAt,
+        attemptCount,
+        status,
+      });
+    }
+    return state;
+  } catch {
+    return new Map();
+  }
+};
+
+const encodeJoinRetryState = (state: JoinRetryState): string =>
+  JSON.stringify([...state.entries()].map(([groupId, entry]) => [groupId, {
+    groupId: entry.groupId,
+    createdAt: entry.createdAt,
+    lastAttemptAt: entry.lastAttemptAt,
+    nextAttemptAt: entry.nextAttemptAt,
+    attemptCount: entry.attemptCount,
+    status: entry.status,
+  }]));
+
 export type AccountStore = {
   readonly getAccountKey: () => Promise<AccountKey | null>;
   readonly saveAccountKey: (key: AccountKey) => Promise<void>;
@@ -48,6 +110,8 @@ export type AccountStore = {
   readonly savePeerPrivateKey: (key: Uint8Array) => Promise<void>;
   readonly getPeerPathCache: () => Promise<ReadonlyMap<string, readonly string[]>>;
   readonly savePeerPathCache: (cache: ReadonlyMap<string, readonly string[]>) => Promise<void>;
+  readonly getJoinRetryState: () => Promise<JoinRetryState>;
+  readonly saveJoinRetryState: (state: JoinRetryState) => Promise<void>;
   readonly destroy: () => Promise<void>;
   readonly close: () => void;
 };
@@ -122,6 +186,16 @@ export const openAccountStore = async (): Promise<AccountStore> => {
 
     savePeerPathCache: async (cache: ReadonlyMap<string, readonly string[]>) => {
       await db.put("account", encodePeerPathCache(cache), PEER_PATH_CACHE_KEY);
+    },
+
+    getJoinRetryState: async () => {
+      const value = await db.get("account", JOIN_RETRY_STATE_KEY);
+      if (typeof value !== "string") return new Map();
+      return decodeJoinRetryState(value);
+    },
+
+    saveJoinRetryState: async (state: JoinRetryState) => {
+      await db.put("account", encodeJoinRetryState(state), JOIN_RETRY_STATE_KEY);
     },
 
     destroy: async () => {

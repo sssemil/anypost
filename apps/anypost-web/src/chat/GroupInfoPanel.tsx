@@ -1,4 +1,4 @@
-import { createSignal, createMemo, createEffect, For, Show } from "solid-js";
+import { createSignal, createMemo, createEffect, For, Show, onCleanup } from "solid-js";
 import {
   toHex,
   verifyAndDecodeAction,
@@ -9,12 +9,24 @@ import type {
   SignedActionEnvelope,
   ConnectionMetrics,
   PeerDiscoveryMetrics,
+  JoinRetryEntry,
 } from "anypost-core/protocol";
 
 export type PendingJoinRequest = {
   readonly publicKeyHex: string;
   readonly publicKey: Uint8Array;
 };
+
+export type InviteCreateOptions =
+  | {
+      readonly kind: "targeted-peer";
+      readonly targetPeerId: string;
+    }
+  | {
+      readonly kind: "open";
+      readonly expiresInMinutes?: number;
+      readonly maxJoiners?: number;
+    };
 
 type GroupInfoPanelProps = {
   readonly groupId: string | null;
@@ -23,6 +35,7 @@ type GroupInfoPanelProps = {
   readonly actionEnvelopes: readonly SignedActionEnvelope[];
   readonly connectionMetrics: ConnectionMetrics | null;
   readonly activeGroupDiscoveryMetrics: PeerDiscoveryMetrics | null;
+  readonly joinRetryEntry: JoinRetryEntry | null;
   readonly pendingJoins: readonly PendingJoinRequest[];
   readonly isAdmin: boolean;
   readonly ownPublicKeyHex: string;
@@ -33,7 +46,9 @@ type GroupInfoPanelProps = {
   readonly onApproveJoin: (memberPublicKey: Uint8Array) => void;
   readonly onRemoveMember: (memberPublicKey: Uint8Array) => void;
   readonly onAddByPeerId: (peerId: string) => string | null;
-  readonly onCreateInvite: (() => void) | null;
+  readonly onRetryJoinNow: () => void;
+  readonly onCancelJoinRetry: () => void;
+  readonly onCreateInvite: ((options: InviteCreateOptions) => string | null) | null;
 };
 
 const truncatePeerId = (peerId: string): string =>
@@ -47,6 +62,18 @@ const ratio = (num: number, den: number): string =>
 
 const formatMs = (ms: number | null): string =>
   ms === null ? "--" : `${Math.round(ms)}ms`;
+
+const formatDuration = (ms: number): string => {
+  if (ms <= 0) return "now";
+  const totalSeconds = Math.ceil(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+  const hours = Math.floor(minutes / 60);
+  const remMinutes = minutes % 60;
+  return remMinutes === 0 ? `${hours}h` : `${hours}h ${remMinutes}m`;
+};
 
 const ENVELOPES_PER_PAGE = 10;
 
@@ -91,7 +118,16 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
   const [copiedInvite, setCopiedInvite] = createSignal(false);
   const [addPeerIdInput, setAddPeerIdInput] = createSignal("");
   const [addPeerIdError, setAddPeerIdError] = createSignal("");
+  const [inviteMode, setInviteMode] = createSignal<"targeted-peer" | "open">("open");
+  const [inviteTargetPeerId, setInviteTargetPeerId] = createSignal("");
+  const [inviteExpiresMinutesInput, setInviteExpiresMinutesInput] = createSignal("");
+  const [inviteMaxJoinersInput, setInviteMaxJoinersInput] = createSignal("");
+  const [inviteError, setInviteError] = createSignal("");
   const [envelopePage, setEnvelopePage] = createSignal(0);
+  const [nowMs, setNowMs] = createSignal(Date.now());
+
+  const nowInterval = setInterval(() => setNowMs(Date.now()), 1000);
+  onCleanup(() => clearInterval(nowInterval));
 
   createEffect(() => {
     props.groupId;
@@ -151,7 +187,45 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
   };
 
   const handleCopyInvite = () => {
-    props.onCreateInvite?.();
+    if (!props.onCreateInvite) return;
+    setInviteError("");
+
+    let error: string | null = null;
+    if (inviteMode() === "targeted-peer") {
+      const target = inviteTargetPeerId().trim();
+      if (!target) {
+        setInviteError("Target peer ID is required");
+        return;
+      }
+      error = props.onCreateInvite({
+        kind: "targeted-peer",
+        targetPeerId: target,
+      });
+    } else {
+      const rawExpiry = inviteExpiresMinutesInput().trim();
+      const rawMaxJoiners = inviteMaxJoinersInput().trim();
+      const expiresInMinutes = rawExpiry.length > 0 ? Number(rawExpiry) : undefined;
+      const maxJoiners = rawMaxJoiners.length > 0 ? Number(rawMaxJoiners) : undefined;
+      if (expiresInMinutes !== undefined && (!Number.isFinite(expiresInMinutes) || expiresInMinutes <= 0)) {
+        setInviteError("Expiry must be a positive number of minutes");
+        return;
+      }
+      if (maxJoiners !== undefined && (!Number.isInteger(maxJoiners) || maxJoiners <= 0)) {
+        setInviteError("Max joiners must be a positive integer");
+        return;
+      }
+      error = props.onCreateInvite({
+        kind: "open",
+        expiresInMinutes,
+        maxJoiners,
+      });
+    }
+
+    if (error) {
+      setInviteError(error);
+      return;
+    }
+
     setCopiedInvite(true);
     setTimeout(() => setCopiedInvite(false), 2000);
   };
@@ -189,12 +263,76 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
       </Show>
 
       <Show when={props.onCreateInvite !== null}>
-        <button
-          class="w-full py-2 px-3 rounded-lg bg-tg-accent text-white text-sm hover:bg-tg-accent/80 cursor-pointer"
-          onClick={handleCopyInvite}
-        >
-          {copiedInvite() ? "Invite copied!" : "Copy Invite Code"}
-        </button>
+        <div class="rounded border border-tg-border bg-tg-hover px-2 py-2 space-y-2">
+          <h4 class="text-xs font-medium text-tg-text-dim uppercase tracking-wider">
+            Create Invite
+          </h4>
+          <div class="flex gap-2 text-xs">
+            <label class="flex items-center gap-1 text-tg-text">
+              <input
+                type="radio"
+                checked={inviteMode() === "open"}
+                onChange={() => setInviteMode("open")}
+              />
+              Any Peer
+            </label>
+            <label class="flex items-center gap-1 text-tg-text">
+              <input
+                type="radio"
+                checked={inviteMode() === "targeted-peer"}
+                onChange={() => setInviteMode("targeted-peer")}
+              />
+              Specific Peer
+            </label>
+          </div>
+          <Show when={inviteMode() === "targeted-peer"}>
+            <input
+              type="text"
+              class="w-full bg-tg-input text-tg-text text-xs font-mono px-2.5 py-1.5 rounded border border-tg-border focus:border-tg-accent focus:outline-none"
+              placeholder="12D3KooW..."
+              value={inviteTargetPeerId()}
+              onInput={(e) => {
+                setInviteTargetPeerId(e.currentTarget.value);
+                setInviteError("");
+              }}
+            />
+          </Show>
+          <Show when={inviteMode() === "open"}>
+            <div class="grid grid-cols-2 gap-2">
+              <input
+                type="number"
+                min="1"
+                class="w-full bg-tg-input text-tg-text text-xs px-2.5 py-1.5 rounded border border-tg-border focus:border-tg-accent focus:outline-none"
+                placeholder="Expiry (min)"
+                value={inviteExpiresMinutesInput()}
+                onInput={(e) => {
+                  setInviteExpiresMinutesInput(e.currentTarget.value);
+                  setInviteError("");
+                }}
+              />
+              <input
+                type="number"
+                min="1"
+                class="w-full bg-tg-input text-tg-text text-xs px-2.5 py-1.5 rounded border border-tg-border focus:border-tg-accent focus:outline-none"
+                placeholder="Max joiners"
+                value={inviteMaxJoinersInput()}
+                onInput={(e) => {
+                  setInviteMaxJoinersInput(e.currentTarget.value);
+                  setInviteError("");
+                }}
+              />
+            </div>
+          </Show>
+          <button
+            class="w-full py-2 px-3 rounded-lg bg-tg-accent text-white text-sm hover:bg-tg-accent/80 cursor-pointer"
+            onClick={handleCopyInvite}
+          >
+            {copiedInvite() ? "Invite copied!" : "Copy Invite Code"}
+          </button>
+          <Show when={inviteError()}>
+            <p class="text-[10px] text-red-400">{inviteError()}</p>
+          </Show>
+        </div>
       </Show>
 
       <div>
@@ -387,6 +525,66 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
               <div class="flex justify-between gap-2">
                 <span class="text-tg-text-dim">Group TTFP</span>
                 <span class="text-tg-text">{formatMs(metrics().timeToFirstPeerMs)}</span>
+              </div>
+            </div>
+          </div>
+        )}
+      </Show>
+
+      <Show when={props.joinRetryEntry}>
+        {(entry) => (
+          <div>
+            <h4 class="text-xs font-medium text-tg-text-dim uppercase tracking-wider mb-2">
+              Join Approval Retry
+            </h4>
+            <div class="rounded border border-tg-border bg-tg-hover px-2 py-2 space-y-1 text-[10px]">
+              <div class="flex justify-between gap-2">
+                <span class="text-tg-text-dim">Status</span>
+                <span
+                  class="uppercase"
+                  classList={{
+                    "text-tg-success": entry().status === "active",
+                    "text-tg-warning": entry().status === "paused",
+                    "text-tg-text-dim": entry().status === "cancelled",
+                  }}
+                >
+                  {entry().status}
+                </span>
+              </div>
+              <div class="flex justify-between gap-2">
+                <span class="text-tg-text-dim">Attempts</span>
+                <span class="text-tg-text">{entry().attemptCount}</span>
+              </div>
+              <div class="flex justify-between gap-2">
+                <span class="text-tg-text-dim">Last attempt</span>
+                <span class="text-tg-text">
+                  {(() => {
+                    const lastAttemptAt = entry().lastAttemptAt;
+                    return lastAttemptAt === null ? "--" : new Date(lastAttemptAt).toLocaleTimeString();
+                  })()}
+                </span>
+              </div>
+              <div class="flex justify-between gap-2">
+                <span class="text-tg-text-dim">Next retry</span>
+                <span class="text-tg-text">
+                  {entry().status === "active"
+                    ? formatDuration(entry().nextAttemptAt - nowMs())
+                    : "stopped"}
+                </span>
+              </div>
+              <div class="flex gap-2 pt-1">
+                <button
+                  class="text-[10px] bg-tg-accent text-white px-2.5 py-1 rounded hover:bg-tg-accent/80 cursor-pointer"
+                  onClick={props.onRetryJoinNow}
+                >
+                  Retry now
+                </button>
+                <button
+                  class="text-[10px] bg-tg-border text-tg-text px-2.5 py-1 rounded hover:bg-tg-hover cursor-pointer"
+                  onClick={props.onCancelJoinRetry}
+                >
+                  Cancel
+                </button>
               </div>
             </div>
           </div>

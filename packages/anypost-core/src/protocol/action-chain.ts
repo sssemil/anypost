@@ -22,6 +22,7 @@ export const ActionPayloadSchema = z.discriminatedUnion("type", [
     type: z.literal("member-approved"),
     memberPublicKey: Uint8ArraySchema,
     role: ActionRoleSchema,
+    inviteTokenId: z.string().uuid().optional(),
   }),
   z.object({
     type: z.literal("member-left"),

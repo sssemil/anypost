@@ -4,17 +4,23 @@ import type { GroupInvite } from "./group-invite.js";
 import { createSignedActionEnvelope } from "./action-signing.js";
 import { GENESIS_HASH, toHex } from "./action-chain.js";
 import { generateAccountKey } from "../crypto/identity.js";
+import { createInviteGrant } from "./invite-grant.js";
 
 const TEST_RELAY_ADDR = "/ip4/127.0.0.1/tcp/4001/ws/p2p/12D3KooWTestRelay";
 const TEST_ADMIN_PEER_ID = "12D3KooWTestAdminPeerId";
+const TEST_GROUP_ID = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11";
 
 const createGenesisInvite = (
-  overrides?: Partial<{ relayAddr: string; adminPeerId: string }>,
+  overrides?: Partial<{
+    relayAddr: string;
+    adminPeerId: string;
+    withInviteGrant: boolean;
+  }>,
 ): GroupInvite => {
   const accountKey = generateAccountKey();
   const genesisEnvelope = createSignedActionEnvelope({
     accountKey,
-    groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+    groupId: TEST_GROUP_ID,
     parentHashes: [GENESIS_HASH],
     payload: { type: "group-created", groupName: "Test Group" },
   });
@@ -23,6 +29,13 @@ const createGenesisInvite = (
     genesisEnvelope,
     relayAddr: overrides?.relayAddr ?? TEST_RELAY_ADDR,
     adminPeerId: overrides?.adminPeerId ?? TEST_ADMIN_PEER_ID,
+    inviteGrant: overrides?.withInviteGrant
+      ? createInviteGrant({
+          accountKey,
+          groupId: TEST_GROUP_ID,
+          policy: { kind: "open", maxJoiners: 5 },
+        })
+      : undefined,
   };
 };
 
@@ -167,6 +180,32 @@ describe("Group invite", () => {
 
       const result = decodeGroupInvite(tampered);
 
+      expect(result.success).toBe(false);
+    });
+
+    it("should round-trip invite grant when present", () => {
+      const invite = createGenesisInvite({ withInviteGrant: true });
+
+      const encoded = encodeGroupInvite(invite);
+      const result = decodeGroupInvite(encoded);
+
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.data.inviteGrant).toBeDefined();
+      expect(result.data.inviteGrant?.claims.kind).toBe("open");
+    });
+
+    it("should reject tampered invite grant signature", () => {
+      const invite = createGenesisInvite({ withInviteGrant: true });
+      const encoded = encodeGroupInvite(invite);
+      const decoded = JSON.parse(atob(encoded.replace(/-/g, "+").replace(/_/g, "/")));
+      decoded.inviteGrant.signature = "ff".repeat(64);
+      const tampered = btoa(JSON.stringify(decoded))
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+
+      const result = decodeGroupInvite(tampered);
       expect(result.success).toBe(false);
     });
   });

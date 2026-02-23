@@ -40,6 +40,10 @@ import type { ActionDagState } from "./action-dag.js";
 import { createActionChainGroupState, deriveGroupState } from "./action-chain-state.js";
 import type { GroupInvite } from "./group-invite.js";
 import {
+  validateInviteGrantForJoin,
+  type InviteGrantProof,
+} from "./invite-grant.js";
+import {
   createRelayCandidateState,
   addCandidate,
   removeCandidate,
@@ -52,6 +56,15 @@ import {
   createRelayReservationManager,
   type RelayReservationState,
 } from "./relay-reservation-manager.js";
+import {
+  createJoinRetryState,
+  enqueueJoinRetry,
+  recordJoinRetryAttempt,
+  removeJoinRetry,
+  dueJoinRetries,
+  markJoinRetryCancelled,
+} from "./join-retry-queue.js";
+import type { JoinRetryState } from "./join-retry-queue.js";
 
 export type MultiGroupChatMessageEvent = ChatMessageEvent & {
   readonly groupId: string;
@@ -64,6 +77,9 @@ export type JoinRequestEvent = {
   readonly groupId: string;
   readonly requesterPublicKey: Uint8Array;
   readonly senderPeerId: string;
+  readonly inviteTokenId?: string;
+  readonly inviteValidationError?: string;
+  readonly autoApproved: boolean;
 };
 
 type JoinRequestListener = (event: JoinRequestEvent) => void;
@@ -97,6 +113,11 @@ export type ConnectionMetrics = {
   readonly directUpgradeSuccesses: number;
 };
 
+export type {
+  JoinRetryState,
+  JoinRetryEntry,
+} from "./join-retry-queue.js";
+
 export type MultiGroupChat = {
   readonly peerId: string;
   readonly multiaddrs: readonly Multiaddr[];
@@ -107,7 +128,11 @@ export type MultiGroupChat = {
   readonly sendMessage: (groupId: string, text: string, displayName?: string) => Promise<void>;
   readonly createGroup: (name: string) => Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }>;
   readonly joinViaInvite: (invite: GroupInvite) => Promise<{ groupId: string }>;
-  readonly approveJoin: (groupId: string, memberPublicKey: Uint8Array) => Promise<void>;
+  readonly approveJoin: (
+    groupId: string,
+    memberPublicKey: Uint8Array,
+    options?: { readonly inviteTokenId?: string },
+  ) => Promise<void>;
   readonly removeMember: (groupId: string, memberPublicKey: Uint8Array) => Promise<void>;
   readonly requestJoin: (groupId: string) => Promise<void>;
   readonly getActionChainState: (groupId: string) => ActionChainGroupState | null;
@@ -115,6 +140,7 @@ export type MultiGroupChat = {
   readonly getAllActionChainEnvelopes: () => ReadonlyMap<string, readonly SignedActionEnvelope[]>;
   readonly loadActionChain: (groupId: string, envelopes: readonly SignedActionEnvelope[]) => void;
   readonly getPublicKeyToPeerId: () => ReadonlyMap<string, string>;
+  readonly getJoinRetryState: () => JoinRetryState;
   readonly onMessage: (listener: MessageListener) => () => void;
   readonly onJoinRequest: (listener: JoinRequestListener) => () => void;
   readonly onPeerChange: (listener: (count: number) => void) => () => void;
@@ -123,6 +149,8 @@ export type MultiGroupChat = {
   readonly connectTo: (addr: Multiaddr) => Promise<void>;
   readonly connectToPeerId: (targetPeerId: string) => Promise<void>;
   readonly pingPeer: (targetPeerId: string) => Promise<number>;
+  readonly retryJoinNow: (groupId: string) => Promise<void>;
+  readonly cancelJoinRetry: (groupId: string) => void;
   readonly addRelay: (addr: string) => void;
   readonly stop: () => Promise<void>;
 };
@@ -132,6 +160,7 @@ type CreateMultiGroupChatOptions = {
   readonly peerPrivateKey?: Uint8Array;
   readonly initialPublicKeyToPeerId?: ReadonlyMap<string, string>;
   readonly initialPeerPathCache?: ReadonlyMap<string, readonly string[]>;
+  readonly initialJoinRetryState?: JoinRetryState;
   readonly listenAddresses?: readonly string[];
   readonly bootstrapPeers?: readonly string[];
   readonly useTransports?: "tcp" | "websocket";
@@ -145,6 +174,7 @@ type CreateMultiGroupChatOptions = {
   readonly onPeerDiscoveryMetricsChange?: (metrics: PeerDiscoveryMetrics) => void;
   readonly onConnectionMetricsChange?: (metrics: ConnectionMetrics) => void;
   readonly onRelayReservationStateChange?: (state: RelayReservationState) => void;
+  readonly onJoinRetryStateChange?: (state: JoinRetryState) => void;
   readonly onApprovalReceived?: (groupId: string) => void;
 };
 
@@ -157,6 +187,7 @@ const DIAL_BACKOFF_MAX_MS = 30_000;
 const AGGRESSIVE_DISCOVERY_SEARCH_SCHEDULE_MS = [0, 1_500, 4_000, 9_000] as const;
 const BALANCED_DISCOVERY_SEARCH_SCHEDULE_MS = [0, 5_000] as const;
 const DIRECT_UPGRADE_WINDOW_MS = 60_000;
+const JOIN_RETRY_TICK_INTERVAL_MS = 2_000;
 
 export const createMultiGroupChat = async (
   options: CreateMultiGroupChatOptions,
@@ -166,6 +197,7 @@ export const createMultiGroupChat = async (
     peerPrivateKey: rawPeerPrivateKey,
     initialPublicKeyToPeerId,
     initialPeerPathCache,
+    initialJoinRetryState,
     listenAddresses = [],
     bootstrapPeers: initialBootstrapPeers = [],
     useTransports = "websocket",
@@ -179,6 +211,7 @@ export const createMultiGroupChat = async (
     onPeerDiscoveryMetricsChange,
     onConnectionMetricsChange,
     onRelayReservationStateChange,
+    onJoinRetryStateChange,
     onApprovalReceived,
   } = options;
 
@@ -269,6 +302,8 @@ export const createMultiGroupChat = async (
   const publicKeyToPeerId = new Map<string, string>(initialPublicKeyToPeerId ?? []);
   const peerPathCache = new Map<string, string[]>();
   const peerDiscoveryHints = new Map<string, string[]>();
+  const joinInviteGrantByGroup = new Map<string, InviteGrantProof>();
+  const pendingJoinInviteGrantsByGroup = new Map<string, Map<string, InviteGrantProof>>();
 
   type MutablePeerDiscoveryMetrics = {
     groupId: string;
@@ -281,6 +316,20 @@ export const createMultiGroupChat = async (
     timeToFirstPeerMs: number | null;
   };
   const peerDiscoveryMetrics = new Map<string, MutablePeerDiscoveryMetrics>();
+  let joinRetryState = createJoinRetryState(initialJoinRetryState);
+
+  const getInviteGrantApprovalCount = (groupId: string, tokenId: string): number => {
+    const dag = actionDags.get(groupId);
+    if (!dag) return 0;
+    let count = 0;
+    for (const action of topologicalOrder(dag)) {
+      if (action.payload.type !== "member-approved") continue;
+      if (action.payload.inviteTokenId === tokenId) {
+        count += 1;
+      }
+    }
+    return count;
+  };
 
   const getOrCreatePeerDiscoveryMetrics = (groupId: string): MutablePeerDiscoveryMetrics => {
     const existing = peerDiscoveryMetrics.get(groupId);
@@ -311,6 +360,10 @@ export const createMultiGroupChat = async (
       dialSuccesses: metrics.dialSuccesses,
       timeToFirstPeerMs: metrics.timeToFirstPeerMs,
     });
+  };
+
+  const emitJoinRetryState = () => {
+    onJoinRetryStateChange?.(createJoinRetryState(joinRetryState));
   };
 
   const connectionMetrics: {
@@ -534,6 +587,7 @@ export const createMultiGroupChat = async (
     relayReservationManager.ingestRelayAddress(relayAddr);
   }
   emitConnectionMetrics();
+  emitJoinRetryState();
 
   const getOrCreateDag = (groupId: string): ActionDagState => {
     const existing = actionDags.get(groupId);
@@ -554,6 +608,35 @@ export const createMultiGroupChat = async (
     await pubsub.publish(topic, encodeWireMessage(wireMessage));
   };
 
+  const publishJoinRequest = async (
+    groupId: string,
+    inviteGrant?: InviteGrantProof,
+  ): Promise<void> => {
+    const topic = groupTopic(groupId);
+    const wireMessage: WireMessage = {
+      type: "join_request",
+      groupId,
+      requesterPublicKey: new Uint8Array(accountKey.publicKey),
+      inviteGrant,
+    };
+    await pubsub.publish(topic, encodeWireMessage(wireMessage));
+    emit("info", `Sent join request to group ${groupId.slice(0, 8)}...`);
+  };
+
+  const isOwnMemberOfGroup = (groupId: string): boolean => {
+    const state = actionChainStates.get(groupId);
+    if (!state) return false;
+    const ownKeyHex = toHex(new Uint8Array(accountKey.publicKey));
+    return state.members.has(ownKeyHex);
+  };
+
+  const isOwnAdminOfGroup = (groupId: string): boolean => {
+    const state = actionChainStates.get(groupId);
+    if (!state) return false;
+    const ownKeyHex = toHex(new Uint8Array(accountKey.publicKey));
+    return state.members.get(ownKeyHex)?.role === "admin";
+  };
+
   const processSignedAction = (groupId: string, envelope: SignedActionEnvelope, senderPeerId?: string): SignedAction | null => {
     const result = verifyAndDecodeAction(envelope);
     if (!result.success) {
@@ -562,6 +645,10 @@ export const createMultiGroupChat = async (
     }
 
     const action = result.data;
+    if (action.payload.type === "member-approved") {
+      const approvedHex = toHex(action.payload.memberPublicKey);
+      pendingJoinInviteGrantsByGroup.get(groupId)?.delete(approvedHex);
+    }
 
     if (senderPeerId) {
       const authorHex = toHex(action.authorPublicKey);
@@ -595,6 +682,11 @@ export const createMultiGroupChat = async (
       const wasMember = previousState?.members.has(ownKeyHex) ?? false;
       const isMember = derived.data.members.has(ownKeyHex);
       if (!wasMember && isMember) {
+        if (joinRetryState.has(groupId)) {
+          joinRetryState = removeJoinRetry(joinRetryState, groupId);
+          emitJoinRetryState();
+          emit("info", `Approval received; stopped join retries for ${groupId.slice(0, 8)}...`);
+        }
         onApprovalReceived?.(groupId);
       }
     }
@@ -1158,12 +1250,51 @@ export const createMultiGroupChat = async (
         notifyPublicKeyToPeerIdChange();
       }
 
+      let inviteTokenId: string | undefined;
+      let inviteValidationError: string | undefined;
+      let autoApproved = false;
+
+      if (wireMessage.inviteGrant) {
+        const approvedCount = wireMessage.inviteGrant.claims.kind === "open" &&
+            wireMessage.inviteGrant.claims.maxJoiners !== undefined
+          ? getInviteGrantApprovalCount(matchedGroupId, wireMessage.inviteGrant.claims.tokenId)
+          : undefined;
+        const grantValidation = validateInviteGrantForJoin(wireMessage.inviteGrant, {
+          groupId: matchedGroupId,
+          requesterPeerId: senderPeerId,
+          approvedCount,
+          now: Date.now(),
+        });
+        if (grantValidation.success) {
+          inviteTokenId = grantValidation.data.tokenId;
+          const pendingForGroup = pendingJoinInviteGrantsByGroup.get(matchedGroupId) ?? new Map();
+          pendingForGroup.set(requesterHex, wireMessage.inviteGrant);
+          pendingJoinInviteGrantsByGroup.set(matchedGroupId, pendingForGroup);
+        } else {
+          inviteValidationError = grantValidation.error.message;
+        }
+      }
+
+      if (
+        isOwnAdminOfGroup(matchedGroupId) &&
+        inviteTokenId !== undefined &&
+        !actionChainStates.get(matchedGroupId)?.members.has(requesterHex)
+      ) {
+        autoApproved = true;
+        performApproveJoin(matchedGroupId, wireMessage.requesterPublicKey, { inviteTokenId }).catch(() => {
+          autoApproved = false;
+        });
+      }
+
       emit("pubsub-message", `Join request for group ${matchedGroupId.slice(0, 8)}...`);
       joinRequestListeners.forEach((listener) =>
         listener({
           groupId: matchedGroupId,
           requesterPublicKey: wireMessage.requesterPublicKey,
           senderPeerId,
+          inviteTokenId,
+          inviteValidationError,
+          autoApproved,
         }),
       );
       return;
@@ -1282,6 +1413,93 @@ export const createMultiGroupChat = async (
     void runRelayReservationTick();
   }
 
+  const runJoinRetryAttempt = async (groupId: string) => {
+    try {
+      await publishJoinRequest(groupId, joinInviteGrantByGroup.get(groupId));
+    } catch {
+      emit("info", `Join request retry failed for ${groupId.slice(0, 8)}...`);
+    } finally {
+      joinRetryState = recordJoinRetryAttempt(joinRetryState, groupId, Date.now());
+      emitJoinRetryState();
+    }
+  };
+
+  const runJoinRetryTick = async () => {
+    const now = Date.now();
+    const due = dueJoinRetries(joinRetryState, now);
+    for (const entry of due) {
+      if (!joinedGroups.includes(entry.groupId)) {
+        continue;
+      }
+      if (isOwnMemberOfGroup(entry.groupId)) {
+        joinRetryState = removeJoinRetry(joinRetryState, entry.groupId);
+        emitJoinRetryState();
+        continue;
+      }
+      emit("info", `Retrying join request for ${entry.groupId.slice(0, 8)}...`);
+      await runJoinRetryAttempt(entry.groupId);
+    }
+  };
+
+  const joinRetryInterval = setInterval(() => {
+    void runJoinRetryTick();
+  }, JOIN_RETRY_TICK_INTERVAL_MS);
+  void runJoinRetryTick();
+
+  const performApproveJoin = async (
+    groupId: string,
+    memberPublicKey: Uint8Array,
+    options?: { readonly inviteTokenId?: string },
+  ): Promise<void> => {
+    const dag = actionDags.get(groupId);
+    if (!dag) throw new Error("No action chain for this group");
+
+    const tips = getTips(dag);
+    const parentHashes = tips.length > 0 ? tips : [GENESIS_HASH];
+    const memberPublicKeyHex = toHex(memberPublicKey);
+    let inviteTokenId = options?.inviteTokenId;
+
+    if (!inviteTokenId) {
+      const pendingForGroup = pendingJoinInviteGrantsByGroup.get(groupId);
+      const grant = pendingForGroup?.get(memberPublicKeyHex);
+      if (grant) {
+        const requesterPeerId = publicKeyToPeerId.get(memberPublicKeyHex) ?? "";
+        const approvedCount = grant.claims.kind === "open" &&
+            grant.claims.maxJoiners !== undefined
+          ? getInviteGrantApprovalCount(groupId, grant.claims.tokenId)
+          : undefined;
+        const grantValidation = validateInviteGrantForJoin(grant, {
+          groupId,
+          requesterPeerId,
+          approvedCount,
+          now: Date.now(),
+        });
+        if (!grantValidation.success) {
+          throw new Error(`Invite grant rejected: ${grantValidation.error.message}`);
+        }
+        inviteTokenId = grantValidation.data.tokenId;
+      }
+    }
+
+    const envelope = createSignedActionEnvelope({
+      accountKey,
+      groupId,
+      parentHashes,
+      payload: {
+        type: "member-approved",
+        memberPublicKey: new Uint8Array(memberPublicKey),
+        role: "member",
+        inviteTokenId,
+      },
+    });
+
+    processSignedAction(groupId, envelope);
+    await publishEnvelope(groupId, envelope);
+    pendingJoinInviteGrantsByGroup.get(groupId)?.delete(memberPublicKeyHex);
+
+    emit("info", `Approved member ${toHex(memberPublicKey).slice(0, 16)}... in group ${groupId.slice(0, 8)}...`);
+  };
+
   const MEMBER_RECONNECT_INTERVAL = 30_000;
 
   const reconnectDisconnectedMembers = () => {
@@ -1328,6 +1546,10 @@ export const createMultiGroupChat = async (
       actionChainStates.delete(groupId);
       actionEnvelopes.delete(groupId);
       peerDiscoveryMetrics.delete(groupId);
+      joinInviteGrantByGroup.delete(groupId);
+      pendingJoinInviteGrantsByGroup.delete(groupId);
+      joinRetryState = removeJoinRetry(joinRetryState, groupId);
+      emitJoinRetryState();
       groupDiscoveryManager?.leaveGroup(groupId);
       reconcilePeerPathCache(true);
       emit("info", `Left group ${groupId.slice(0, 8)}...`);
@@ -1383,6 +1605,19 @@ export const createMultiGroupChat = async (
       }
 
       const groupId = verifyResult.data.groupId;
+      if (invite.inviteGrant) {
+        const localGrantValidation = validateInviteGrantForJoin(invite.inviteGrant, {
+          groupId,
+          requesterPeerId: node.peerId.toString(),
+          now: Date.now(),
+        });
+        if (!localGrantValidation.success) {
+          throw new Error(`Invite rejected for this peer: ${localGrantValidation.error.message}`);
+        }
+        joinInviteGrantByGroup.set(groupId, invite.inviteGrant);
+      } else {
+        joinInviteGrantByGroup.delete(groupId);
+      }
 
       if (!relayPeers.includes(invite.relayAddr)) {
         relayPeers.push(invite.relayAddr);
@@ -1414,40 +1649,18 @@ export const createMultiGroupChat = async (
 
       await new Promise((r) => setTimeout(r, 1500));
 
-      const topic = groupTopic(groupId);
-      const wireMessage: WireMessage = {
-        type: "join_request",
-        groupId,
-        requesterPublicKey: new Uint8Array(accountKey.publicKey),
-      };
-      await pubsub.publish(topic, encodeWireMessage(wireMessage));
-      emit("info", `Sent join request to group ${groupId.slice(0, 8)}...`);
+      joinRetryState = enqueueJoinRetry(joinRetryState, groupId, Date.now());
+      emitJoinRetryState();
+      await runJoinRetryAttempt(groupId);
 
       return { groupId };
     },
-    approveJoin: async (groupId: string, memberPublicKey: Uint8Array): Promise<void> => {
-      const dag = actionDags.get(groupId);
-      if (!dag) throw new Error("No action chain for this group");
-
-      const tips = getTips(dag);
-      const parentHashes = tips.length > 0 ? tips : [GENESIS_HASH];
-
-      const envelope = createSignedActionEnvelope({
-        accountKey,
-        groupId,
-        parentHashes,
-        payload: {
-          type: "member-approved",
-          memberPublicKey: new Uint8Array(memberPublicKey),
-          role: "member",
-        },
-      });
-
-      processSignedAction(groupId, envelope);
-      await publishEnvelope(groupId, envelope);
-
-      emit("info", `Approved member ${toHex(memberPublicKey).slice(0, 16)}... in group ${groupId.slice(0, 8)}...`);
-    },
+    approveJoin: async (
+      groupId: string,
+      memberPublicKey: Uint8Array,
+      options?: { readonly inviteTokenId?: string },
+    ): Promise<void> =>
+      performApproveJoin(groupId, memberPublicKey, options),
     removeMember: async (groupId: string, memberPublicKey: Uint8Array): Promise<void> => {
       const dag = actionDags.get(groupId);
       if (!dag) throw new Error("No action chain for this group");
@@ -1471,14 +1684,9 @@ export const createMultiGroupChat = async (
       emit("info", `Removed member ${toHex(memberPublicKey).slice(0, 16)}... from group ${groupId.slice(0, 8)}...`);
     },
     requestJoin: async (groupId: string): Promise<void> => {
-      const topic = groupTopic(groupId);
-      const wireMessage: WireMessage = {
-        type: "join_request",
-        groupId,
-        requesterPublicKey: new Uint8Array(accountKey.publicKey),
-      };
-      await pubsub.publish(topic, encodeWireMessage(wireMessage));
-      emit("info", `Sent join request to group ${groupId.slice(0, 8)}...`);
+      joinRetryState = enqueueJoinRetry(joinRetryState, groupId, Date.now());
+      emitJoinRetryState();
+      await runJoinRetryAttempt(groupId);
     },
     getActionChainState: (groupId: string): ActionChainGroupState | null =>
       actionChainStates.get(groupId) ?? null,
@@ -1492,6 +1700,7 @@ export const createMultiGroupChat = async (
       }
     },
     getPublicKeyToPeerId: (): ReadonlyMap<string, string> => new Map(publicKeyToPeerId),
+    getJoinRetryState: (): JoinRetryState => createJoinRetryState(joinRetryState),
     onMessage: (listener: MessageListener) => {
       messageListeners.push(listener);
       return () => {
@@ -1554,6 +1763,16 @@ export const createMultiGroupChat = async (
       if (!pingService) throw new Error("Ping service not available");
       return pingService.ping(remotePeer);
     },
+    retryJoinNow: async (groupId: string) => {
+      joinRetryState = enqueueJoinRetry(joinRetryState, groupId, Date.now());
+      emitJoinRetryState();
+      await runJoinRetryAttempt(groupId);
+    },
+    cancelJoinRetry: (groupId: string) => {
+      joinRetryState = markJoinRetryCancelled(joinRetryState, groupId);
+      emitJoinRetryState();
+      emit("info", `Join retry cancelled for ${groupId.slice(0, 8)}...`);
+    },
     addRelay: (addr: string) => {
       if (!relayPeers.includes(addr)) {
         relayPeers.push(addr);
@@ -1564,8 +1783,12 @@ export const createMultiGroupChat = async (
     stop: async () => {
       if (memberReconnectInterval) clearInterval(memberReconnectInterval);
       if (relayReservationInterval) clearInterval(relayReservationInterval);
+      if (joinRetryInterval) clearInterval(joinRetryInterval);
       inFlightPeerDials.clear();
       pendingDirectUpgradeByPeer.clear();
+      joinRetryState = createJoinRetryState();
+      joinInviteGrantByGroup.clear();
+      pendingJoinInviteGrantsByGroup.clear();
       relayPoolManager?.stop();
       groupDiscoveryManager?.stop();
       pubsub.removeEventListener("message", handlePubsubMessage);

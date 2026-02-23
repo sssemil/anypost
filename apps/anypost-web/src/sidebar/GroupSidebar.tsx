@@ -20,7 +20,7 @@ type GroupSidebarProps = {
   readonly activeGroupId: string | null;
   readonly topBanners?: JSX.Element;
   readonly onSelectGroup: (groupId: string) => void;
-  readonly onJoinViaInvite: (invite: GroupInvite) => void;
+  readonly onJoinViaInvite: (invite: GroupInvite) => Promise<string | null>;
   readonly onCreateGroup: () => void;
   readonly onLeaveGroup: (groupId: string) => void;
 };
@@ -54,7 +54,7 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
     setState((s) => transitionSidebar(s, event));
   };
 
-  const handleJoinSubmit = () => {
+  const handleJoinSubmit = async () => {
     const input = state().joinInput.trim();
     if (!input) {
       dispatch({ type: "join-failed", error: "Paste an invite code" });
@@ -65,14 +65,18 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
       dispatch({ type: "join-failed", error: "Invalid invite code" });
       return;
     }
-    props.onJoinViaInvite(result.data);
+    const error = await props.onJoinViaInvite(result.data);
+    if (error) {
+      dispatch({ type: "join-failed", error });
+      return;
+    }
     dispatch({ type: "join-succeeded" });
   };
 
   const handleJoinKeyDown = (e: KeyboardEvent) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      handleJoinSubmit();
+      void handleJoinSubmit();
     }
     if (e.key === "Escape") {
       dispatch({ type: "join-form-closed" });
@@ -114,7 +118,7 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
           </Show>
           <div class="flex gap-2">
             <button
-              onClick={handleJoinSubmit}
+              onClick={() => void handleJoinSubmit()}
               disabled={!state().joinInput.trim()}
               class="flex-1 py-1 px-2 rounded-lg bg-tg-success text-white text-xs cursor-pointer disabled:opacity-50"
             >
