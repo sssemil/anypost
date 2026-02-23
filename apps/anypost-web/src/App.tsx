@@ -381,12 +381,21 @@ export const App = () => {
   const startChat = async (accountKey: AccountKey) => {
     try {
       const bootstrapPeers = ENV_RELAY_MULTIADDR ? [ENV_RELAY_MULTIADDR] : [];
+      type PeerPathCacheStoreCompat = {
+        readonly getPeerPathCache?: () => Promise<ReadonlyMap<string, readonly string[]>>;
+        readonly savePeerPathCache?: (cache: ReadonlyMap<string, readonly string[]>) => Promise<void>;
+      };
 
       const store = await openAccountStore();
       let peerPrivateKey: Uint8Array | undefined;
+      let initialPeerPathCache: ReadonlyMap<string, readonly string[]> = new Map();
       try {
         const savedKey = await store.getPeerPrivateKey();
         if (savedKey) peerPrivateKey = savedKey;
+        const compatStore = store as AccountStore & PeerPathCacheStoreCompat;
+        if (typeof compatStore.getPeerPathCache === "function") {
+          initialPeerPathCache = await compatStore.getPeerPathCache();
+        }
       } finally {
         store.close();
       }
@@ -394,10 +403,25 @@ export const App = () => {
       const initialPublicKeyToPeerId = loadPublicKeyToPeerId();
       const initialPendingJoins = loadPendingJoins();
 
+      const persistPeerPathCache = (cache: ReadonlyMap<string, readonly string[]>) => {
+        void (async () => {
+          const pathStore = await openAccountStore();
+          try {
+            const compatStore = pathStore as AccountStore & PeerPathCacheStoreCompat;
+            if (typeof compatStore.savePeerPathCache === "function") {
+              await compatStore.savePeerPathCache(cache);
+            }
+          } finally {
+            pathStore.close();
+          }
+        })();
+      };
+
       chat = await createMultiGroupChat({
         accountKey,
         peerPrivateKey,
         initialPublicKeyToPeerId,
+        initialPeerPathCache,
         bootstrapPeers,
         onRelayPoolStateChange: setRelayPoolState,
         onGroupDiscoveryStateChange: setGroupDiscoveryState,
@@ -405,6 +429,9 @@ export const App = () => {
         onPublicKeyToPeerIdChange: (map) => {
           setPublicKeyToPeerIdMap(map);
           savePublicKeyToPeerId(map);
+        },
+        onPeerPathCacheChange: (cache) => {
+          persistPeerPathCache(cache);
         },
         onApprovalReceived: (groupId) => {
           dispatchGroupEvent({ type: "approval-received", groupId });
@@ -602,9 +629,10 @@ export const App = () => {
   };
 
   const handleCreateInvite = () => {
+    const currentChat = chat;
     const activeId = groupState().activeGroupId;
-    if (!activeId) return;
-    const envelopes = chat?.getActionChainEnvelopes(activeId);
+    if (!currentChat || !activeId) return;
+    const envelopes = currentChat.getActionChainEnvelopes(activeId);
     if (!envelopes || envelopes.length === 0) return;
 
     const relayAddr = getBestRelayAddress();
@@ -613,7 +641,7 @@ export const App = () => {
     const code = encodeGroupInvite({
       genesisEnvelope: envelopes[0],
       relayAddr,
-      adminPeerId: chat?.peerId,
+      adminPeerId: currentChat.peerId,
     });
     navigator.clipboard.writeText(code).catch(() => {});
   };
@@ -728,6 +756,15 @@ export const App = () => {
           </div>
         </Show>
 
+        <Show when={chatStatus() === "disconnected"}>
+          <div class="flex items-center justify-center min-h-screen bg-tg-chat font-sans">
+            <div class="text-center space-y-3 px-6">
+              <p class="text-tg-text text-sm">Failed to connect to network.</p>
+              <p class="text-tg-text-dim text-xs">Reload the page to retry.</p>
+            </div>
+          </div>
+        </Show>
+
         <Show when={chatStatus() === "connected" && chat}>
           <ChatLayout
             header={
@@ -785,6 +822,7 @@ export const App = () => {
               <>
                 <PeerSharingPanel
                   ownPeerId={chat!.peerId}
+                  networkStatus={networkStatus()}
                   onConnect={(targetPeerId) => chat!.connectToPeerId(targetPeerId)}
                 />
                 <NetworkPanel

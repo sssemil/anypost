@@ -7,9 +7,35 @@ const DB_NAME = "anypost:account";
 type AccountStoreDBSchema = {
   account: {
     key: string;
-    value: Uint8Array | boolean;
+    value: Uint8Array | boolean | string;
   };
 };
+
+const PEER_PATH_CACHE_KEY = "peerPathCache";
+
+const decodePeerPathCache = (value: string): ReadonlyMap<string, readonly string[]> => {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return new Map();
+
+    const cache = new Map<string, readonly string[]>();
+    for (const entry of parsed) {
+      if (!Array.isArray(entry) || entry.length !== 2) continue;
+      const [peerId, paths] = entry;
+      if (typeof peerId !== "string" || !Array.isArray(paths)) continue;
+      const validPaths = paths.filter((path): path is string => typeof path === "string");
+      if (validPaths.length === 0) continue;
+      cache.set(peerId, validPaths);
+    }
+    return cache;
+  } catch {
+    return new Map();
+  }
+};
+
+const encodePeerPathCache = (
+  cache: ReadonlyMap<string, readonly string[]>,
+): string => JSON.stringify([...cache.entries()].map(([peerId, paths]) => [peerId, [...paths]]));
 
 export type AccountStore = {
   readonly getAccountKey: () => Promise<AccountKey | null>;
@@ -20,6 +46,8 @@ export type AccountStore = {
   readonly setBackedUp: (backedUp: boolean) => Promise<void>;
   readonly getPeerPrivateKey: () => Promise<Uint8Array | null>;
   readonly savePeerPrivateKey: (key: Uint8Array) => Promise<void>;
+  readonly getPeerPathCache: () => Promise<ReadonlyMap<string, readonly string[]>>;
+  readonly savePeerPathCache: (cache: ReadonlyMap<string, readonly string[]>) => Promise<void>;
   readonly destroy: () => Promise<void>;
   readonly close: () => void;
 };
@@ -84,6 +112,16 @@ export const openAccountStore = async (): Promise<AccountStore> => {
 
     savePeerPrivateKey: async (key: Uint8Array) => {
       await db.put("account", new Uint8Array(key), "peerPrivateKey");
+    },
+
+    getPeerPathCache: async () => {
+      const value = await db.get("account", PEER_PATH_CACHE_KEY);
+      if (typeof value !== "string") return new Map();
+      return decodePeerPathCache(value);
+    },
+
+    savePeerPathCache: async (cache: ReadonlyMap<string, readonly string[]>) => {
+      await db.put("account", encodePeerPathCache(cache), PEER_PATH_CACHE_KEY);
     },
 
     destroy: async () => {

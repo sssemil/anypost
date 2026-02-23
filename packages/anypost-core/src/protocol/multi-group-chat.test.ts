@@ -42,7 +42,11 @@ describe("MultiGroupChat", () => {
     instances.length = 0;
   });
 
-  const createTestNode = async (accountKey?: AccountKey, peerPrivateKey?: Uint8Array): Promise<TestNode> => {
+  const createTestNode = async (
+    accountKey?: AccountKey,
+    peerPrivateKey?: Uint8Array,
+    overrides: Partial<Parameters<typeof createMultiGroupChat>[0]> = {},
+  ): Promise<TestNode> => {
     const key = accountKey ?? generateAccountKey();
 
     const events: NetworkEvent[] = [];
@@ -62,6 +66,7 @@ describe("MultiGroupChat", () => {
       onApprovalReceived: (groupId) => {
         approvedGroupIds.push(groupId);
       },
+      ...overrides,
     });
 
     chat.onEvent((evt) => events.push(evt));
@@ -84,8 +89,12 @@ describe("MultiGroupChat", () => {
     };
   };
 
-  const createTestNodeWithPeerKey = async (peerPrivateKey: Uint8Array, accountKey?: AccountKey): Promise<TestNode> =>
-    createTestNode(accountKey, peerPrivateKey);
+  const createTestNodeWithPeerKey = async (
+    peerPrivateKey: Uint8Array,
+    accountKey?: AccountKey,
+    overrides: Partial<Parameters<typeof createMultiGroupChat>[0]> = {},
+  ): Promise<TestNode> =>
+    createTestNode(accountKey, peerPrivateKey, overrides);
 
   it("should start and return a peer ID", async () => {
     const { chat } = await createTestNode();
@@ -271,6 +280,74 @@ describe("MultiGroupChat", () => {
     instances.push(chat);
 
     expect(chat.peerId).toMatch(/^12D3KooW/);
+  });
+
+  it("should accept onPeerPathCacheChange option without error", async () => {
+    const chat = await createMultiGroupChat({
+      accountKey: generateAccountKey(),
+      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+      useTransports: "tcp",
+      onPeerPathCacheChange: () => {},
+    });
+    instances.push(chat);
+
+    expect(chat.peerId).toMatch(/^12D3KooW/);
+  });
+
+  it("should prune cached paths for non-pinned peers once membership context is available", async () => {
+    const admin = await createTestNode();
+    const { groupId, genesisEnvelope } = await admin.chat.createGroup("Pinned Cache");
+
+    const adminPublicKeyHex = toHex(new Uint8Array(admin.accountKey.publicKey));
+    let latestPeerPathCache: ReadonlyMap<string, readonly string[]> = new Map();
+    const joiner = await createTestNode(undefined, undefined, {
+      initialPublicKeyToPeerId: new Map([[adminPublicKeyHex, admin.peerId]]),
+      initialPeerPathCache: new Map([
+        [admin.peerId, [admin.chat.multiaddrs[0].toString()]],
+        ["12D3KooWNotPinnedPeer11111111111111111111111", ["/ip4/127.0.0.1/tcp/9999/p2p/12D3KooWNotPinnedPeer11111111111111111111111"]],
+      ]),
+      onPeerPathCacheChange: (cache) => {
+        latestPeerPathCache = cache;
+      },
+    });
+
+    joiner.chat.joinGroup(groupId);
+    joiner.chat.loadActionChain(groupId, [genesisEnvelope]);
+
+    await waitUntil(() => latestPeerPathCache.size > 0);
+
+    expect(latestPeerPathCache.has(admin.peerId)).toBe(true);
+    expect(latestPeerPathCache.has("12D3KooWNotPinnedPeer11111111111111111111111")).toBe(false);
+  });
+
+  it("should try cached paths first and promote successful cached path for pinned peers", async () => {
+    const admin = await createTestNode();
+    const { groupId, genesisEnvelope } = await admin.chat.createGroup("Cached Path Priority");
+    const adminPublicKeyHex = toHex(new Uint8Array(admin.accountKey.publicKey));
+    const validPath = admin.chat.multiaddrs[0].toString();
+    const invalidPath = `/ip4/127.0.0.1/tcp/1/p2p/${admin.peerId}`;
+
+    let latestPeerPathCache: ReadonlyMap<string, readonly string[]> = new Map();
+    const joiner = await createTestNode(undefined, undefined, {
+      initialPublicKeyToPeerId: new Map([[adminPublicKeyHex, admin.peerId]]),
+      initialPeerPathCache: new Map([[admin.peerId, [invalidPath, validPath]]]),
+      onPeerPathCacheChange: (cache) => {
+        latestPeerPathCache = cache;
+      },
+    });
+
+    joiner.chat.joinGroup(groupId);
+    joiner.chat.loadActionChain(groupId, [genesisEnvelope]);
+    await joiner.chat.connectToPeerId(admin.peerId);
+
+    const dialAttempts = joiner.events.filter((e) => e.type === "dial-attempt");
+    expect(dialAttempts.length).toBeGreaterThan(0);
+    expect(dialAttempts[0].detail).toContain("Trying cached path");
+
+    await waitUntil(
+      () => (latestPeerPathCache.get(admin.peerId)?.length ?? 0) > 0,
+    );
+    expect(latestPeerPathCache.get(admin.peerId)).toEqual([validPath]);
   });
 
   it("should rebuild action chain state from loaded envelopes", async () => {

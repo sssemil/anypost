@@ -153,4 +153,50 @@ describe("Account Store", () => {
       }
     });
   });
+
+  describe("peer path cache persistence", () => {
+    it("should return empty cache when no peer path cache exists", async () => {
+      const store = await openAccountStore();
+      try {
+        const cache = await store.getPeerPathCache();
+        expect(cache.size).toBe(0);
+      } finally {
+        await store.destroy();
+      }
+    });
+
+    it("should store and retrieve peer path cache", async () => {
+      const store = await openAccountStore();
+      try {
+        const original = new Map<string, readonly string[]>([
+          ["12D3KooWPeerA", ["/dns4/r1.example/tcp/443/wss/p2p/12D3KooWRelay/p2p-circuit/p2p/12D3KooWPeerA"]],
+          ["12D3KooWPeerB", ["/dns4/r2.example/tcp/443/wss/p2p/12D3KooWRelay/p2p-circuit/p2p/12D3KooWPeerB"]],
+        ]);
+
+        await store.savePeerPathCache(original);
+        const retrieved = await store.getPeerPathCache();
+
+        expect(retrieved).toEqual(original);
+      } finally {
+        await store.destroy();
+      }
+    });
+
+    it("should persist peer path cache across store instances", async () => {
+      const store1 = await openAccountStore();
+      const original = new Map<string, readonly string[]>([
+        ["12D3KooWPeerA", ["/dns4/r1.example/tcp/443/wss/p2p/12D3KooWRelay/p2p-circuit/p2p/12D3KooWPeerA"]],
+      ]);
+      await store1.savePeerPathCache(original);
+      store1.close();
+
+      const store2 = await openAccountStore();
+      try {
+        const retrieved = await store2.getPeerPathCache();
+        expect(retrieved).toEqual(original);
+      } finally {
+        await store2.destroy();
+      }
+    });
+  });
 });

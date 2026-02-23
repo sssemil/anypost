@@ -98,6 +98,7 @@ type CreateMultiGroupChatOptions = {
   readonly accountKey: AccountKey;
   readonly peerPrivateKey?: Uint8Array;
   readonly initialPublicKeyToPeerId?: ReadonlyMap<string, string>;
+  readonly initialPeerPathCache?: ReadonlyMap<string, readonly string[]>;
   readonly listenAddresses?: readonly string[];
   readonly bootstrapPeers?: readonly string[];
   readonly useTransports?: "tcp" | "websocket";
@@ -105,8 +106,12 @@ type CreateMultiGroupChatOptions = {
   readonly onGroupDiscoveryStateChange?: (state: GroupDiscoveryState) => void;
   readonly onRelayCandidateStateChange?: (state: RelayCandidateState) => void;
   readonly onPublicKeyToPeerIdChange?: (map: ReadonlyMap<string, string>) => void;
+  readonly onPeerPathCacheChange?: (cache: ReadonlyMap<string, readonly string[]>) => void;
   readonly onApprovalReceived?: (groupId: string) => void;
 };
+
+const MAX_CACHED_PEER_PATHS_PER_PEER = 4;
+const MAX_CACHED_PEER_PATH_PEERS = 200;
 
 export const createMultiGroupChat = async (
   options: CreateMultiGroupChatOptions,
@@ -115,6 +120,7 @@ export const createMultiGroupChat = async (
     accountKey,
     peerPrivateKey: rawPeerPrivateKey,
     initialPublicKeyToPeerId,
+    initialPeerPathCache,
     listenAddresses = [],
     bootstrapPeers: initialBootstrapPeers = [],
     useTransports = "websocket",
@@ -122,6 +128,7 @@ export const createMultiGroupChat = async (
     onGroupDiscoveryStateChange,
     onRelayCandidateStateChange,
     onPublicKeyToPeerIdChange,
+    onPeerPathCacheChange,
     onApprovalReceived,
   } = options;
 
@@ -210,6 +217,125 @@ export const createMultiGroupChat = async (
   const actionChainStates = new Map<string, ActionChainGroupState>();
   const actionEnvelopes = new Map<string, SignedActionEnvelope[]>();
   const publicKeyToPeerId = new Map<string, string>(initialPublicKeyToPeerId ?? []);
+  const peerPathCache = new Map<string, string[]>();
+
+  const normalizePathList = (paths: readonly string[]): string[] => {
+    const deduped: string[] = [];
+    const seen = new Set<string>();
+    for (const rawPath of paths) {
+      const path = rawPath.trim();
+      if (path.length === 0 || seen.has(path)) continue;
+      seen.add(path);
+      deduped.push(path);
+      if (deduped.length >= MAX_CACHED_PEER_PATHS_PER_PEER) break;
+    }
+    return deduped;
+  };
+
+  const clonePeerPathCache = (): ReadonlyMap<string, readonly string[]> =>
+    new Map([...peerPathCache.entries()].map(([peerId, paths]) => [peerId, [...paths]]));
+
+  const notifyPeerPathCacheChange = () => {
+    onPeerPathCacheChange?.(clonePeerPathCache());
+  };
+
+  for (const [peerId, paths] of initialPeerPathCache ?? []) {
+    const normalized = normalizePathList(paths);
+    if (normalized.length > 0) {
+      peerPathCache.set(peerId, normalized);
+      if (peerPathCache.size >= MAX_CACHED_PEER_PATH_PEERS) break;
+    }
+  }
+
+  const getPinnedPeerIds = (): ReadonlySet<string> => {
+    const pinned = new Set<string>();
+    for (const groupId of joinedGroups) {
+      const chainState = actionChainStates.get(groupId);
+      if (!chainState) continue;
+      for (const member of chainState.members.values()) {
+        const peerId = publicKeyToPeerId.get(member.publicKeyHex);
+        if (peerId && peerId !== node.peerId.toString()) {
+          pinned.add(peerId);
+        }
+      }
+    }
+    return pinned;
+  };
+
+  const hasCompleteMembershipContext = (): boolean => {
+    if (joinedGroups.length === 0) return false;
+    for (const groupId of joinedGroups) {
+      if (!actionChainStates.has(groupId)) return false;
+    }
+    return true;
+  };
+
+  const reconcilePeerPathCache = (force = false) => {
+    if (!force && !hasCompleteMembershipContext()) return;
+
+    const pinned = getPinnedPeerIds();
+    let changed = false;
+
+    for (const peerId of [...peerPathCache.keys()]) {
+      if (pinned.has(peerId)) continue;
+      peerPathCache.delete(peerId);
+      changed = true;
+    }
+
+    while (peerPathCache.size > MAX_CACHED_PEER_PATH_PEERS) {
+      const oldestPeerId = peerPathCache.keys().next().value as string | undefined;
+      if (!oldestPeerId) break;
+      peerPathCache.delete(oldestPeerId);
+      changed = true;
+    }
+
+    if (changed) {
+      notifyPeerPathCacheChange();
+    }
+  };
+
+  const recordSuccessfulPeerPath = (peerId: string, path: string) => {
+    const normalizedPath = path.trim();
+    if (normalizedPath.length === 0) return;
+    if (!getPinnedPeerIds().has(peerId)) return;
+
+    const current = peerPathCache.get(peerId) ?? [];
+    const next = normalizePathList([normalizedPath, ...current]);
+    if (next.length === 0) return;
+
+    const unchanged =
+      current.length === next.length &&
+      current.every((value, idx) => value === next[idx]);
+
+    if (unchanged) return;
+
+    peerPathCache.delete(peerId);
+    peerPathCache.set(peerId, next);
+
+    while (peerPathCache.size > MAX_CACHED_PEER_PATH_PEERS) {
+      const oldestPeerId = peerPathCache.keys().next().value as string | undefined;
+      if (!oldestPeerId) break;
+      peerPathCache.delete(oldestPeerId);
+    }
+
+    notifyPeerPathCacheChange();
+  };
+
+  const forgetPeerPath = (peerId: string, path: string) => {
+    const existing = peerPathCache.get(peerId);
+    if (!existing) return;
+
+    const filtered = existing.filter((cachedPath) => cachedPath !== path);
+    if (filtered.length === existing.length) return;
+
+    if (filtered.length === 0) {
+      peerPathCache.delete(peerId);
+    } else {
+      peerPathCache.set(peerId, filtered);
+    }
+
+    notifyPeerPathCacheChange();
+  };
 
   const KEEP_ALIVE_TAG = "keep-alive-group-member";
 
@@ -230,6 +356,7 @@ export const createMultiGroupChat = async (
     for (const memberPeerId of publicKeyToPeerId.values()) {
       tagGroupMemberKeepAlive(memberPeerId);
     }
+    reconcilePeerPathCache();
   };
 
   publicKeyToPeerId.set(toHex(new Uint8Array(accountKey.publicKey)), node.peerId.toString());
@@ -297,6 +424,7 @@ export const createMultiGroupChat = async (
     const derived = deriveGroupState(groupId, ordered);
     if (derived.success) {
       actionChainStates.set(groupId, derived.data);
+      reconcilePeerPathCache();
 
       const wasMember = previousState?.members.has(ownKeyHex) ?? false;
       const isMember = derived.data.members.has(ownKeyHex);
@@ -474,6 +602,98 @@ export const createMultiGroupChat = async (
   emit("info", `Node started: ${node.peerId.toString()}`);
 
   const dialedPeers = new Set<string>();
+  const inFlightPeerDials = new Map<string, Promise<void>>();
+
+  const tryDialAddress = async (
+    remotePeerId: string,
+    addr: string,
+    source: "cached path" | "circuit relay",
+  ): Promise<boolean> => {
+    try {
+      emit("dial-attempt", `Trying ${source}: ${addr.slice(0, 80)}...`);
+      await node.dial(multiaddr(addr));
+      emit("dial-success", `Connected to ${remotePeerId.slice(0, 16)}... via ${source}`);
+      recordSuccessfulPeerPath(remotePeerId, addr);
+      return true;
+    } catch {
+      emit("dial-failure", `${source} failed: ${addr.slice(0, 80)}...`);
+      if (source === "cached path") {
+        forgetPeerPath(remotePeerId, addr);
+      }
+      return false;
+    }
+  };
+
+  const tryConnectToPeerId = async (targetPeerId: string): Promise<void> => {
+    const existingDial = inFlightPeerDials.get(targetPeerId);
+    if (existingDial) {
+      await existingDial;
+      return;
+    }
+
+    const dialPromise = (async () => {
+      const ownPeerId = node.peerId.toString();
+      if (targetPeerId === ownPeerId) return;
+      if (node.getPeers().some((p) => p.toString() === targetPeerId)) return;
+
+      const isPinnedPeer = getPinnedPeerIds().has(targetPeerId);
+      const cachedPaths = isPinnedPeer
+        ? [...(peerPathCache.get(targetPeerId) ?? [])]
+        : [];
+      for (const cachedPath of cachedPaths) {
+        const connected = await tryDialAddress(targetPeerId, cachedPath, "cached path");
+        if (connected) return;
+      }
+
+      const remotePeer = peerIdFromString(targetPeerId);
+
+      try {
+        emit("dial-attempt", `Looking up peer ${targetPeerId.slice(0, 16)}... on DHT`);
+        const peerInfo = await node.peerRouting.findPeer(remotePeer);
+        if (peerInfo.multiaddrs.length > 0) {
+          emit("info", `Found ${peerInfo.multiaddrs.length} address(es) via DHT for ${targetPeerId.slice(0, 16)}...`);
+          await node.dial(remotePeer);
+
+          const activeConn = node.getConnections().find(
+            (conn) => conn.remotePeer.toString() === targetPeerId,
+          );
+          if (activeConn) {
+            recordSuccessfulPeerPath(targetPeerId, activeConn.remoteAddr.toString());
+          }
+
+          emit("dial-success", `Connected to ${targetPeerId.slice(0, 16)}... via DHT`);
+          return;
+        }
+      } catch {
+        emit("info", `DHT lookup failed for ${targetPeerId.slice(0, 16)}..., trying circuit relay`);
+      }
+
+      const relayAddresses = relayPeers.length > 0
+        ? relayPeers
+        : node.getMultiaddrs()
+            .map((ma) => ma.toString())
+            .filter((addr) => addr.includes("/p2p/") && !addr.includes("/p2p-circuit/"));
+
+      const circuitAddrs = buildCircuitRelayAddresses({
+        targetPeerId,
+        relayAddresses,
+      });
+
+      for (const addr of circuitAddrs) {
+        const connected = await tryDialAddress(targetPeerId, addr, "circuit relay");
+        if (connected) return;
+      }
+
+      throw new Error(`Could not connect to peer ${targetPeerId}`);
+    })();
+
+    inFlightPeerDials.set(targetPeerId, dialPromise);
+    try {
+      await dialPromise;
+    } finally {
+      inFlightPeerDials.delete(targetPeerId);
+    }
+  };
 
   const attemptDirectConnect = (remotePeerId: string) => {
     if (remotePeerId === node.peerId.toString()) return;
@@ -481,17 +701,9 @@ export const createMultiGroupChat = async (
     if (node.getPeers().some((p) => p.toString() === remotePeerId)) return;
 
     dialedPeers.add(remotePeerId);
-
-    for (const bp of relayPeers) {
-      const circuitAddr = multiaddr(`${bp}/p2p-circuit/p2p/${remotePeerId}`);
-      emit("dial-attempt", `Dialing ${peerId({ toString: () => remotePeerId })}... via circuit relay`);
-      node.dial(circuitAddr).then(() => {
-        emit("dial-success", `Direct connection to ${peerId({ toString: () => remotePeerId })}... established`);
-      }).catch((err: Error) => {
-        emit("dial-failure", `Failed to dial ${peerId({ toString: () => remotePeerId })}...: ${err.message}`);
-        dialedPeers.delete(remotePeerId);
-      });
-    }
+    tryConnectToPeerId(remotePeerId).catch(() => {
+      dialedPeers.delete(remotePeerId);
+    });
   };
 
   const handlePubsubMessage = (event: CustomEvent) => {
@@ -610,8 +822,8 @@ export const createMultiGroupChat = async (
   const reconnectDisconnectedMembers = () => {
     const ownId = node.peerId.toString();
     const connectedIds = new Set(node.getPeers().map((p) => p.toString()));
-
-    for (const memberPeerId of publicKeyToPeerId.values()) {
+    const pinnedPeerIds = getPinnedPeerIds();
+    for (const memberPeerId of pinnedPeerIds) {
       if (memberPeerId === ownId) continue;
       tagGroupMemberKeepAlive(memberPeerId);
       if (connectedIds.has(memberPeerId)) continue;
@@ -636,6 +848,7 @@ export const createMultiGroupChat = async (
       joinedGroups.push(groupId);
       pubsub.subscribe(topic);
       groupDiscoveryManager?.joinGroup(groupId);
+      reconcilePeerPathCache();
       emit("info", `Joined group ${groupId.slice(0, 8)}... (topic: ${topic})`);
     },
     leaveGroup: (groupId: string) => {
@@ -649,6 +862,7 @@ export const createMultiGroupChat = async (
       actionChainStates.delete(groupId);
       actionEnvelopes.delete(groupId);
       groupDiscoveryManager?.leaveGroup(groupId);
+      reconcilePeerPathCache(true);
       emit("info", `Left group ${groupId.slice(0, 8)}...`);
     },
     getJoinedGroups: () => [...joinedGroups],
@@ -679,6 +893,7 @@ export const createMultiGroupChat = async (
       }
 
       actionChainStates.set(groupId, createActionChainGroupState(groupId));
+      reconcilePeerPathCache();
 
       const envelope = createSignedActionEnvelope({
         accountKey,
@@ -718,22 +933,13 @@ export const createMultiGroupChat = async (
         joinedGroups.push(groupId);
         pubsub.subscribe(topic);
         groupDiscoveryManager?.joinGroup(groupId);
+        reconcilePeerPathCache();
         emit("info", `Joined group ${groupId.slice(0, 8)}... via invite`);
       }
 
       const isConnectedToAdmin = node.getPeers().some((p) => p.toString() === invite.adminPeerId);
       if (!isConnectedToAdmin) {
-        for (const bp of relayPeers) {
-          try {
-            const circuitAddr = multiaddr(`${bp}/p2p-circuit/p2p/${invite.adminPeerId}`);
-            emit("dial-attempt", `Dialing admin ${peerId({ toString: () => invite.adminPeerId })}... via circuit relay`);
-            await node.dial(circuitAddr);
-            emit("dial-success", `Connected to admin ${peerId({ toString: () => invite.adminPeerId })}...`);
-            break;
-          } catch {
-            emit("dial-failure", `Failed circuit relay dial to admin`);
-          }
-        }
+        await tryConnectToPeerId(invite.adminPeerId).catch(() => {});
       }
 
       await new Promise((r) => setTimeout(r, 1500));
@@ -869,44 +1075,7 @@ export const createMultiGroupChat = async (
       await node.dial(addr);
     },
     connectToPeerId: async (targetPeerId: string) => {
-      const remotePeer = peerIdFromString(targetPeerId);
-
-      try {
-        emit("dial-attempt", `Looking up peer ${targetPeerId.slice(0, 16)}... on DHT`);
-        const peerInfo = await node.peerRouting.findPeer(remotePeer);
-        if (peerInfo.multiaddrs.length > 0) {
-          emit("info", `Found ${peerInfo.multiaddrs.length} address(es) via DHT for ${targetPeerId.slice(0, 16)}...`);
-          await node.dial(remotePeer);
-          emit("dial-success", `Connected to ${targetPeerId.slice(0, 16)}... via DHT`);
-          return;
-        }
-      } catch {
-        emit("info", `DHT lookup failed for ${targetPeerId.slice(0, 16)}..., trying circuit relay`);
-      }
-
-      const relayAddresses = relayPeers.length > 0
-        ? relayPeers
-        : node.getMultiaddrs()
-            .map((ma) => ma.toString())
-            .filter((a) => a.includes("/p2p/") && !a.includes("/p2p-circuit/"));
-
-      const circuitAddrs = buildCircuitRelayAddresses({
-        targetPeerId,
-        relayAddresses,
-      });
-
-      for (const addr of circuitAddrs) {
-        try {
-          emit("dial-attempt", `Trying circuit relay: ${addr.slice(0, 60)}...`);
-          await node.dial(multiaddr(addr));
-          emit("dial-success", `Connected to ${targetPeerId.slice(0, 16)}... via circuit relay`);
-          return;
-        } catch {
-          emit("dial-failure", `Circuit relay failed: ${addr.slice(0, 60)}...`);
-        }
-      }
-
-      throw new Error(`Could not connect to peer ${targetPeerId}`);
+      await tryConnectToPeerId(targetPeerId);
     },
     pingPeer: async (targetPeerId: string) => {
       const remotePeer = peerIdFromString(targetPeerId);
@@ -923,6 +1092,7 @@ export const createMultiGroupChat = async (
     },
     stop: async () => {
       if (memberReconnectInterval) clearInterval(memberReconnectInterval);
+      inFlightPeerDials.clear();
       relayPoolManager?.stop();
       groupDiscoveryManager?.stop();
       pubsub.removeEventListener("message", handlePubsubMessage);
