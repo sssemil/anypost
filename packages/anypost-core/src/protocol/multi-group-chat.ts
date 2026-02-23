@@ -1688,14 +1688,12 @@ export const createMultiGroupChat = async (
 
       const isConnectedToAdmin = node.getPeers().some((p) => p.toString() === invite.adminPeerId);
       if (!isConnectedToAdmin) {
-        await tryConnectToPeerId(invite.adminPeerId).catch(() => {});
+        void tryConnectToPeerId(invite.adminPeerId).catch(() => {});
       }
-
-      await new Promise((r) => setTimeout(r, 1500));
 
       joinRetryState = enqueueJoinRetry(joinRetryState, groupId, Date.now());
       emitJoinRetryState();
-      await runJoinRetryAttempt(groupId);
+      void runJoinRetryAttempt(groupId);
 
       return { groupId };
     },

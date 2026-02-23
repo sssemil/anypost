@@ -55,6 +55,7 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
   };
 
   const handleJoinSubmit = async () => {
+    if (state().isJoining) return;
     const input = state().joinInput.trim();
     if (!input) {
       dispatch({ type: "join-failed", error: "Paste an invite code" });
@@ -65,6 +66,7 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
       dispatch({ type: "join-failed", error: "Invalid invite code" });
       return;
     }
+    dispatch({ type: "join-started" });
     const error = await props.onJoinViaInvite(result.data);
     if (error) {
       dispatch({ type: "join-failed", error });
@@ -111,6 +113,7 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
             onKeyDown={handleJoinKeyDown}
             placeholder="Paste invite code..."
             autofocus
+            disabled={state().isJoining}
             class="w-full px-2.5 py-1.5 rounded-lg bg-tg-sidebar border border-tg-border text-tg-text font-mono text-xs mb-2 box-border placeholder:text-tg-text-dim"
           />
           <Show when={state().joinError}>
@@ -119,13 +122,14 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
           <div class="flex gap-2">
             <button
               onClick={() => void handleJoinSubmit()}
-              disabled={!state().joinInput.trim()}
+              disabled={!state().joinInput.trim() || state().isJoining}
               class="flex-1 py-1 px-2 rounded-lg bg-tg-success text-white text-xs cursor-pointer disabled:opacity-50"
             >
-              Join
+              {state().isJoining ? "Joining..." : "Join"}
             </button>
             <button
               onClick={() => dispatch({ type: "join-form-closed" })}
+              disabled={state().isJoining}
               class="py-1 px-2 rounded-lg border border-tg-border text-tg-text text-xs cursor-pointer hover:bg-tg-hover"
             >
               Cancel

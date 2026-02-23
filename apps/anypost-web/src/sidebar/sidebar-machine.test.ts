@@ -13,6 +13,7 @@ describe("Sidebar machine", () => {
       expect(state.isJoinFormOpen).toBe(false);
       expect(state.joinInput).toBe("");
       expect(state.joinError).toBeNull();
+      expect(state.isJoining).toBe(false);
     });
   });
 
@@ -37,6 +38,7 @@ describe("Sidebar machine", () => {
       expect(next.isJoinFormOpen).toBe(false);
       expect(next.joinInput).toBe("");
       expect(next.joinError).toBeNull();
+      expect(next.isJoining).toBe(false);
     });
   });
 
@@ -79,6 +81,16 @@ describe("Sidebar machine", () => {
       });
 
       expect(next.joinError).toBe("Invalid group ID format");
+      expect(next.isJoining).toBe(false);
+    });
+  });
+
+  describe("join started", () => {
+    it("should mark joining in progress", () => {
+      const state = createSidebarState();
+      const next = transitionSidebar(state, { type: "join-started" });
+      expect(next.isJoining).toBe(true);
+      expect(next.joinError).toBeNull();
     });
   });
 
@@ -96,6 +108,7 @@ describe("Sidebar machine", () => {
       expect(next.isJoinFormOpen).toBe(false);
       expect(next.joinInput).toBe("");
       expect(next.joinError).toBeNull();
+      expect(next.isJoining).toBe(false);
     });
   });
 

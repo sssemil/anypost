@@ -2,12 +2,14 @@ export type SidebarState = {
   readonly isJoinFormOpen: boolean;
   readonly joinInput: string;
   readonly joinError: string | null;
+  readonly isJoining: boolean;
 };
 
 export type SidebarEvent =
   | { readonly type: "join-form-opened" }
   | { readonly type: "join-form-closed" }
   | { readonly type: "join-input-changed"; readonly value: string }
+  | { readonly type: "join-started" }
   | { readonly type: "join-failed"; readonly error: string }
   | { readonly type: "join-succeeded" };
 
@@ -17,6 +19,7 @@ export const createSidebarState = (): SidebarState => ({
   isJoinFormOpen: false,
   joinInput: "",
   joinError: null,
+  isJoining: false,
 });
 
 export const transitionSidebar = (
@@ -27,13 +30,15 @@ export const transitionSidebar = (
     case "join-form-opened":
       return { ...state, isJoinFormOpen: true };
     case "join-form-closed":
-      return { ...state, isJoinFormOpen: false, joinInput: "", joinError: null };
+      return { ...state, isJoinFormOpen: false, joinInput: "", joinError: null, isJoining: false };
     case "join-input-changed":
       return { ...state, joinInput: event.value, joinError: null };
+    case "join-started":
+      return { ...state, joinError: null, isJoining: true };
     case "join-failed":
-      return { ...state, joinError: event.error };
+      return { ...state, joinError: event.error, isJoining: false };
     case "join-succeeded":
-      return { ...state, isJoinFormOpen: false, joinInput: "", joinError: null };
+      return { ...state, isJoinFormOpen: false, joinInput: "", joinError: null, isJoining: false };
   }
 };
 
