@@ -7,9 +7,11 @@ import {
   getActiveMessages,
   getGroupList,
   getSeenPeerIds,
+  hasGroup,
   toHex,
   encodeGroupInvite,
   createInviteGrant,
+  verifyAndDecodeAction,
 } from "anypost-core/protocol";
 import type {
   MultiGroupChat,
@@ -261,6 +263,40 @@ export const App = () => {
     setActionChainState(chat.getActionChainState(activeId));
   };
 
+  const syncMessagesFromActionChain = (groupId: string) => {
+    const currentChat = chat;
+    if (!currentChat) return;
+    const envelopes = currentChat.getActionChainEnvelopes(groupId);
+    if (envelopes.length === 0) return;
+
+    const existingIds = new Set(
+      (groupState().groups.get(groupId)?.messages ?? []).map((m) => m.id),
+    );
+    const pubKeyMap = publicKeyToPeerIdMap();
+
+    for (const envelope of envelopes) {
+      const decoded = verifyAndDecodeAction(envelope);
+      if (!decoded.success) continue;
+      const action = decoded.data;
+      if (action.payload.type !== "message") continue;
+      if (existingIds.has(action.id)) continue;
+
+      const authorHex = toHex(action.authorPublicKey);
+      dispatchGroupEvent({
+        type: "message-received",
+        groupId,
+        message: {
+          id: action.id,
+          senderPeerId: pubKeyMap.get(authorHex) ?? "unknown",
+          senderDisplayName: undefined,
+          text: action.payload.text,
+          timestamp: action.timestamp,
+        },
+      });
+      existingIds.add(action.id);
+    }
+  };
+
   const activeGroupDiscoveryMetrics = () => {
     const activeId = groupState().activeGroupId;
     if (!activeId) return null;
@@ -445,6 +481,7 @@ export const App = () => {
           dispatchGroupEvent({ type: "message-received", groupId, message: msg });
         }
       }
+      syncMessagesFromActionChain(groupId);
     }
 
     if (persisted.activeGroupId) {
@@ -552,6 +589,7 @@ export const App = () => {
         onApprovalReceived: (groupId) => {
           dispatchGroupEvent({ type: "approval-received", groupId });
           refreshActionChainState();
+          syncMessagesFromActionChain(groupId);
         },
       });
 
@@ -587,6 +625,15 @@ export const App = () => {
       });
 
       unsubscribeMessage = chat.onMessage((msg) => {
+        if (!hasGroup(groupState(), msg.groupId)) {
+          const chainState = chat?.getActionChainState(msg.groupId);
+          dispatchGroupEvent({
+            type: "group-joined",
+            groupId: msg.groupId,
+            groupName: chainState?.groupName,
+            hasActionChain: true,
+          });
+        }
         dispatchGroupEvent({
           type: "message-received",
           groupId: msg.groupId,
@@ -671,6 +718,7 @@ export const App = () => {
       dispatchGroupEvent({ type: "group-joined", groupId, groupName, hasActionChain: true });
       dispatchGroupEvent({ type: "group-selected", groupId });
       refreshActionChainState();
+      syncMessagesFromActionChain(groupId);
       dispatchMobileView({ type: "group-selected" });
       return null;
     } catch (error) {
