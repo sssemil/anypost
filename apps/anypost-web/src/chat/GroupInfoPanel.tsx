@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import type { GroupMember } from "anypost-core/protocol";
 
 export type PendingJoinRequest = {
@@ -7,12 +7,14 @@ export type PendingJoinRequest = {
 };
 
 type GroupInfoPanelProps = {
+  readonly groupId: string | null;
   readonly groupName: string;
   readonly members: ReadonlyMap<string, GroupMember>;
   readonly pendingJoins: readonly PendingJoinRequest[];
   readonly isAdmin: boolean;
   readonly ownPublicKeyHex: string;
   readonly onApproveJoin: (memberPublicKey: Uint8Array) => void;
+  readonly onCreateInvite: (() => void) | null;
 };
 
 const truncateHex = (hex: string): string =>
@@ -32,12 +34,50 @@ const RoleBadge = (props: { readonly role: "admin" | "member" }) => (
 
 export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
   const memberEntries = () => [...props.members.values()];
+  const [copiedGroupId, setCopiedGroupId] = createSignal(false);
+  const [copiedInvite, setCopiedInvite] = createSignal(false);
+
+  const copyGroupId = () => {
+    if (!props.groupId) return;
+    navigator.clipboard.writeText(props.groupId).then(() => {
+      setCopiedGroupId(true);
+      setTimeout(() => setCopiedGroupId(false), 2000);
+    }).catch(() => {});
+  };
+
+  const handleCopyInvite = () => {
+    props.onCreateInvite?.();
+    setCopiedInvite(true);
+    setTimeout(() => setCopiedInvite(false), 2000);
+  };
 
   return (
     <div class="space-y-4">
       <div>
         <h3 class="text-lg font-semibold text-tg-text">{props.groupName}</h3>
       </div>
+
+      <Show when={props.groupId}>
+        <button
+          class="flex items-center gap-2 w-full text-left py-1.5 px-2 rounded hover:bg-tg-hover cursor-pointer"
+          onClick={copyGroupId}
+        >
+          <span class="text-xs text-tg-text-dim shrink-0">Group ID</span>
+          <span class="font-mono text-xs text-tg-text truncate">{props.groupId}</span>
+          <span class="text-tg-accent text-[10px] shrink-0 ml-auto">
+            {copiedGroupId() ? "Copied!" : "Copy"}
+          </span>
+        </button>
+      </Show>
+
+      <Show when={props.onCreateInvite !== null}>
+        <button
+          class="w-full py-2 px-3 rounded-lg bg-tg-accent text-white text-sm hover:bg-tg-accent/80 cursor-pointer"
+          onClick={handleCopyInvite}
+        >
+          {copiedInvite() ? "Invite copied!" : "Copy Invite Code"}
+        </button>
+      </Show>
 
       <div>
         <h4 class="text-xs font-medium text-tg-text-dim uppercase tracking-wider mb-2">

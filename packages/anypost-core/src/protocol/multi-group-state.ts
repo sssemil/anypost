@@ -9,6 +9,7 @@ export type GroupEntry = {
   readonly seenPeerIds: ReadonlySet<string>;
   readonly hasActionChain: boolean;
   readonly groupName: string | undefined;
+  readonly pendingApproval: boolean;
 };
 
 export type MultiGroupState = {
@@ -23,7 +24,8 @@ export type MultiGroupEvent =
   | { readonly type: "group-left"; readonly groupId: string }
   | { readonly type: "group-selected"; readonly groupId: string }
   | { readonly type: "message-received"; readonly groupId: string; readonly message: ChatMessageEvent }
-  | { readonly type: "message-sent"; readonly groupId: string; readonly message: ChatMessageEvent };
+  | { readonly type: "message-sent"; readonly groupId: string; readonly message: ChatMessageEvent }
+  | { readonly type: "approval-received"; readonly groupId: string };
 
 export const createMultiGroupState = (): MultiGroupState => ({
   groups: new Map(),
@@ -45,6 +47,7 @@ const handleGroupJoined = (
     seenPeerIds: new Set(),
     hasActionChain: false,
     groupName: undefined,
+    pendingApproval: true,
   };
 
   const groups = new Map(state.groups);
@@ -72,6 +75,7 @@ const handleGroupCreated = (
     seenPeerIds: new Set(),
     hasActionChain: true,
     groupName,
+    pendingApproval: false,
   };
 
   const groups = new Map(state.groups);
@@ -142,6 +146,19 @@ const addMessageToGroup = (
   return { ...state, groups };
 };
 
+const handleApprovalReceived = (
+  state: MultiGroupState,
+  groupId: string,
+): MultiGroupState => {
+  const group = state.groups.get(groupId);
+  if (!group) return state;
+
+  const groups = new Map(state.groups);
+  groups.set(groupId, { ...group, pendingApproval: false });
+
+  return { ...state, groups };
+};
+
 export const transitionMultiGroup = (
   state: MultiGroupState,
   event: MultiGroupEvent,
@@ -159,6 +176,8 @@ export const transitionMultiGroup = (
       return addMessageToGroup(state, event.groupId, event.message, true);
     case "message-sent":
       return addMessageToGroup(state, event.groupId, event.message, false);
+    case "approval-received":
+      return handleApprovalReceived(state, event.groupId);
   }
 };
 

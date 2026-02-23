@@ -38,6 +38,7 @@ import { createSignedActionEnvelope, verifyAndDecodeAction } from "./action-sign
 import { createActionDagState, appendAction, getTips, topologicalOrder } from "./action-dag.js";
 import type { ActionDagState } from "./action-dag.js";
 import { createActionChainGroupState, deriveGroupState } from "./action-chain-state.js";
+import type { GroupInvite } from "./group-invite.js";
 
 export type MultiGroupChatMessageEvent = ChatMessageEvent & {
   readonly groupId: string;
@@ -61,7 +62,8 @@ export type MultiGroupChat = {
   readonly leaveGroup: (groupId: string) => void;
   readonly getJoinedGroups: () => readonly string[];
   readonly sendMessage: (groupId: string, text: string, displayName?: string) => Promise<void>;
-  readonly createGroup: (name: string) => Promise<string>;
+  readonly createGroup: (name: string) => Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }>;
+  readonly joinViaInvite: (invite: GroupInvite) => Promise<{ groupId: string }>;
   readonly approveJoin: (groupId: string, memberPublicKey: Uint8Array) => Promise<void>;
   readonly requestJoin: (groupId: string) => Promise<void>;
   readonly getActionChainState: (groupId: string) => ActionChainGroupState | null;
@@ -84,6 +86,7 @@ type CreateMultiGroupChatOptions = {
   readonly useTransports?: "tcp" | "websocket";
   readonly onRelayPoolStateChange?: (state: RelayPoolState) => void;
   readonly onGroupDiscoveryStateChange?: (state: GroupDiscoveryState) => void;
+  readonly onApprovalReceived?: (groupId: string) => void;
 };
 
 const DEFAULT_CHANNEL_ID = "b1ffbc99-9c0b-4ef8-bb6d-6bb9bd380a22";
@@ -98,6 +101,7 @@ export const createMultiGroupChat = async (
     useTransports = "websocket",
     onRelayPoolStateChange,
     onGroupDiscoveryStateChange,
+    onApprovalReceived,
   } = options;
 
   const relayPeers = [...initialBootstrapPeers];
@@ -205,16 +209,31 @@ export const createMultiGroupChat = async (
     }
 
     const action = result.data;
+
+    if (action.groupId !== groupId) {
+      emit("info", `Rejected cross-group action in ${groupId.slice(0, 8)}...`);
+      return false;
+    }
+
     const dag = getOrCreateDag(groupId);
     const newDag = appendAction(dag, action);
     if (newDag === dag) return false;
 
     actionDags.set(groupId, newDag);
 
+    const previousState = actionChainStates.get(groupId);
+    const ownKeyHex = toHex(new Uint8Array(accountKey.publicKey));
+
     const ordered = topologicalOrder(newDag);
     const derived = deriveGroupState(groupId, ordered);
     if (derived.success) {
       actionChainStates.set(groupId, derived.data);
+
+      const wasMember = previousState?.members.has(ownKeyHex) ?? false;
+      const isMember = derived.data.members.has(ownKeyHex);
+      if (!wasMember && isMember) {
+        onApprovalReceived?.(groupId);
+      }
     }
 
     return true;
@@ -447,7 +466,7 @@ export const createMultiGroupChat = async (
 
       await pubsub.publish(topic, encodeWireMessage(wireMessage));
     },
-    createGroup: async (name: string): Promise<string> => {
+    createGroup: async (name: string): Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }> => {
       const groupId = crypto.randomUUID();
       const topic = groupTopic(groupId);
 
@@ -471,7 +490,42 @@ export const createMultiGroupChat = async (
       await publishEnvelope(groupId, envelope);
 
       emit("info", `Created group "${name}" (${groupId.slice(0, 8)}...)`);
-      return groupId;
+      return { groupId, genesisEnvelope: envelope };
+    },
+    joinViaInvite: async (invite: GroupInvite): Promise<{ groupId: string }> => {
+      const verifyResult = verifyAndDecodeAction(invite.genesisEnvelope);
+      if (!verifyResult.success) {
+        throw new Error(`Invalid invite: ${verifyResult.error.message}`);
+      }
+
+      const groupId = verifyResult.data.groupId;
+
+      if (!relayPeers.includes(invite.relayAddr)) {
+        relayPeers.push(invite.relayAddr);
+        emit("info", `Relay added from invite: ${invite.relayAddr.slice(0, 40)}...`);
+      }
+
+      processSignedAction(groupId, invite.genesisEnvelope);
+
+      if (!joinedGroups.includes(groupId)) {
+        const topic = groupTopic(groupId);
+        topicToGroupId.set(topic, groupId);
+        joinedGroups.push(groupId);
+        pubsub.subscribe(topic);
+        groupDiscoveryManager?.joinGroup(groupId);
+        emit("info", `Joined group ${groupId.slice(0, 8)}... via invite`);
+      }
+
+      const topic = groupTopic(groupId);
+      const wireMessage: WireMessage = {
+        type: "join_request",
+        groupId,
+        requesterPublicKey: new Uint8Array(accountKey.publicKey),
+      };
+      await pubsub.publish(topic, encodeWireMessage(wireMessage));
+      emit("info", `Sent join request to group ${groupId.slice(0, 8)}...`);
+
+      return { groupId };
     },
     approveJoin: async (groupId: string, memberPublicKey: Uint8Array): Promise<void> => {
       const dag = actionDags.get(groupId);

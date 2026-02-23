@@ -9,8 +9,9 @@ import {
   getSeenPeerIds,
   getGroupMembers,
   toHex,
+  encodeGroupInvite,
 } from "anypost-core/protocol";
-import type { MultiGroupChat, MultiGroupState, NetworkStatus, NetworkEvent, RelayPoolState, GroupDiscoveryState, ActionChainGroupState } from "anypost-core/protocol";
+import type { MultiGroupChat, MultiGroupState, NetworkStatus, NetworkEvent, RelayPoolState, GroupDiscoveryState, ActionChainGroupState, SignedActionEnvelope, GroupInvite } from "anypost-core/protocol";
 import {
   generateAccountKey,
   exportAccountKey,
@@ -78,7 +79,8 @@ export const App = () => {
   const [latencyMap, setLatencyMap] = createSignal<ReadonlyMap<string, number>>(new Map());
   const [mobileView, setMobileView] = createSignal(createMobileViewState());
   const [actionChainState, setActionChainState] = createSignal<ActionChainGroupState | null>(null);
-  const [pendingJoins, setPendingJoins] = createSignal<readonly PendingJoinRequest[]>([]);
+  const [pendingJoinsMap, setPendingJoinsMap] = createSignal<ReadonlyMap<string, readonly PendingJoinRequest[]>>(new Map());
+  const [genesisEnvelopes, setGenesisEnvelopes] = createSignal<ReadonlyMap<string, SignedActionEnvelope>>(new Map());
 
   let chat: MultiGroupChat | undefined;
   let unsubscribeMessage: (() => void) | undefined;
@@ -129,7 +131,6 @@ export const App = () => {
   createEffect(() => {
     groupState().activeGroupId;
     refreshActionChainState();
-    setPendingJoins([]);
   });
 
   const dispatchGroupEvent = (event: Parameters<typeof transitionMultiGroup>[1]) => {
@@ -304,6 +305,10 @@ export const App = () => {
         bootstrapPeers,
         onRelayPoolStateChange: setRelayPoolState,
         onGroupDiscoveryStateChange: setGroupDiscoveryState,
+        onApprovalReceived: (groupId) => {
+          dispatchGroupEvent({ type: "approval-received", groupId });
+          refreshActionChainState();
+        },
       });
 
       setChatStatus("connected");
@@ -333,13 +338,14 @@ export const App = () => {
       });
 
       unsubscribeJoinRequests = chat.onJoinRequest((evt) => {
-        if (evt.groupId === groupState().activeGroupId) {
-          const pubKeyHex = toHex(new Uint8Array(evt.requesterPublicKey));
-          setPendingJoins((prev) => {
-            if (prev.some((p) => p.publicKeyHex === pubKeyHex)) return prev;
-            return [...prev, { publicKeyHex: pubKeyHex, publicKey: new Uint8Array(evt.requesterPublicKey) }];
-          });
-        }
+        const pubKeyHex = toHex(new Uint8Array(evt.requesterPublicKey));
+        setPendingJoinsMap((prev) => {
+          const existing = prev.get(evt.groupId) ?? [];
+          if (existing.some((p) => p.publicKeyHex === pubKeyHex)) return prev;
+          const updated = new Map(prev);
+          updated.set(evt.groupId, [...existing, { publicKeyHex: pubKeyHex, publicKey: new Uint8Array(evt.requesterPublicKey) }]);
+          return updated;
+        });
       });
     } catch {
       setChatStatus("disconnected");
@@ -395,16 +401,27 @@ export const App = () => {
     });
   };
 
-  const handleJoinGroup = (groupId: string) => {
-    chat?.joinGroup(groupId);
-    dispatchGroupEvent({ type: "group-joined", groupId });
+  const handleJoinViaInvite = (invite: GroupInvite) => {
+    const currentChat = chat;
+    if (!currentChat) return;
+
+    currentChat.joinViaInvite(invite).then(({ groupId }) => {
+      dispatchGroupEvent({ type: "group-joined", groupId });
+      dispatchGroupEvent({ type: "group-selected", groupId });
+      dispatchMobileView({ type: "group-selected" });
+    }).catch(() => {});
   };
 
   const handleCreateGroup = () => {
     const currentChat = chat;
     if (!currentChat) return;
 
-    currentChat.createGroup("New Group").then((groupId) => {
+    currentChat.createGroup("New Group").then(({ groupId, genesisEnvelope }) => {
+      setGenesisEnvelopes((prev) => {
+        const updated = new Map(prev);
+        updated.set(groupId, genesisEnvelope);
+        return updated;
+      });
       dispatchGroupEvent({ type: "group-created", groupId, groupName: "New Group" });
       dispatchGroupEvent({ type: "group-selected", groupId });
       dispatchMobileView({ type: "group-selected" });
@@ -450,6 +467,20 @@ export const App = () => {
     return state.members.get(hex)?.role === "admin";
   };
 
+  const handleCreateInvite = () => {
+    const activeId = groupState().activeGroupId;
+    if (!activeId) return;
+    const envelope = genesisEnvelopes().get(activeId);
+    if (!envelope) return;
+
+    const pool = relayPoolState();
+    const relayAddr = pool?.relays?.[0]?.address;
+    if (!relayAddr) return;
+
+    const code = encodeGroupInvite({ genesisEnvelope: envelope, relayAddr });
+    navigator.clipboard.writeText(code).catch(() => {});
+  };
+
   const handleApproveJoin = (memberPublicKey: Uint8Array) => {
     const currentChat = chat;
     const activeId = groupState().activeGroupId;
@@ -457,7 +488,13 @@ export const App = () => {
 
     currentChat.approveJoin(activeId, memberPublicKey).then(() => {
       const approvedHex = toHex(new Uint8Array(memberPublicKey));
-      setPendingJoins((prev) => prev.filter((p) => p.publicKeyHex !== approvedHex));
+      setPendingJoinsMap((prev) => {
+        const existing = prev.get(activeId) ?? [];
+        const filtered = existing.filter((p) => p.publicKeyHex !== approvedHex);
+        const updated = new Map(prev);
+        updated.set(activeId, filtered);
+        return updated;
+      });
       refreshActionChainState();
     }).catch(() => {});
   };
@@ -559,7 +596,7 @@ export const App = () => {
                   </>
                 }
                 onSelectGroup={handleSelectGroup}
-                onJoinGroup={handleJoinGroup}
+                onJoinViaInvite={handleJoinViaInvite}
                 onCreateGroup={handleCreateGroup}
                 onLeaveGroup={handleLeaveGroup}
               />
@@ -573,7 +610,8 @@ export const App = () => {
             messageInput={
               <MessageInput
                 onSend={handleSendMessage}
-                disabled={chatStatus() !== "connected" || getActiveGroup(groupState()) === null}
+                disabled={chatStatus() !== "connected" || getActiveGroup(groupState()) === null || (getActiveGroup(groupState())?.pendingApproval ?? false)}
+                placeholder={getActiveGroup(groupState())?.pendingApproval ? "Waiting for approval..." : undefined}
               />
             }
             devDrawerContent={
@@ -598,12 +636,18 @@ export const App = () => {
             }
             groupInfoContent={
               <GroupInfoPanel
+                groupId={groupState().activeGroupId}
                 groupName={activeGroupName() ?? "Unknown Group"}
                 members={actionChainState()?.members ?? new Map()}
-                pendingJoins={pendingJoins()}
+                pendingJoins={pendingJoinsMap().get(groupState().activeGroupId ?? "") ?? []}
                 isAdmin={isCurrentUserAdmin()}
                 ownPublicKeyHex={ownPublicKeyHex()}
                 onApproveJoin={handleApproveJoin}
+                onCreateInvite={
+                  isCurrentUserAdmin() && genesisEnvelopes().has(groupState().activeGroupId ?? "") && relayPoolState()?.relays?.[0]
+                    ? handleCreateInvite
+                    : null
+                }
               />
             }
             mobileView={mobileView().currentView}

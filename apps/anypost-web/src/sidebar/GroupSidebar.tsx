@@ -3,8 +3,9 @@ import { createSignal, For, Show } from "solid-js";
 import {
   createSidebarState,
   transitionSidebar,
-  isValidGroupIdInput,
 } from "./sidebar-machine.js";
+import { decodeGroupInvite } from "anypost-core/protocol";
+import type { GroupInvite } from "anypost-core/protocol";
 
 type GroupItem = {
   readonly groupId: string;
@@ -19,7 +20,7 @@ type GroupSidebarProps = {
   readonly activeGroupId: string | null;
   readonly topBanners?: JSX.Element;
   readonly onSelectGroup: (groupId: string) => void;
-  readonly onJoinGroup: (groupId: string) => void;
+  readonly onJoinViaInvite: (invite: GroupInvite) => void;
   readonly onCreateGroup: () => void;
   readonly onLeaveGroup: (groupId: string) => void;
 };
@@ -55,11 +56,16 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
 
   const handleJoinSubmit = () => {
     const input = state().joinInput.trim();
-    if (!isValidGroupIdInput(input)) {
-      dispatch({ type: "join-failed", error: "Enter a valid UUID" });
+    if (!input) {
+      dispatch({ type: "join-failed", error: "Paste an invite code" });
       return;
     }
-    props.onJoinGroup(input);
+    const result = decodeGroupInvite(input);
+    if (!result.success) {
+      dispatch({ type: "join-failed", error: "Invalid invite code" });
+      return;
+    }
+    props.onJoinViaInvite(result.data);
     dispatch({ type: "join-succeeded" });
   };
 
@@ -99,7 +105,7 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
             value={state().joinInput}
             onInput={(e) => dispatch({ type: "join-input-changed", value: e.currentTarget.value })}
             onKeyDown={handleJoinKeyDown}
-            placeholder="Paste group UUID..."
+            placeholder="Paste invite code..."
             autofocus
             class="w-full px-2.5 py-1.5 rounded-lg bg-tg-sidebar border border-tg-border text-tg-text font-mono text-xs mb-2 box-border placeholder:text-tg-text-dim"
           />

@@ -3,6 +3,7 @@ import { createSignal } from "solid-js";
 type MessageInputProps = {
   readonly onSend: (text: string) => void;
   readonly disabled: boolean;
+  readonly placeholder?: string;
 };
 
 export const MessageInput = (props: MessageInputProps) => {
@@ -44,7 +45,7 @@ export const MessageInput = (props: MessageInputProps) => {
           resetHeight();
         }}
         onKeyDown={handleKeyDown}
-        placeholder="Type a message..."
+        placeholder={props.placeholder ?? "Type a message..."}
         disabled={props.disabled}
         class="flex-1 py-2.5 px-4 rounded-2xl bg-tg-input border border-tg-border text-tg-text text-sm resize-none max-h-32 placeholder:text-tg-text-dim focus:outline-none focus:border-tg-accent"
       />

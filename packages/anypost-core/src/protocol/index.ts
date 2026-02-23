@@ -167,3 +167,5 @@ export {
   applyAction,
   deriveGroupState,
 } from "./action-chain-state.js";
+export { encodeGroupInvite, decodeGroupInvite } from "./group-invite.js";
+export type { GroupInvite } from "./group-invite.js";

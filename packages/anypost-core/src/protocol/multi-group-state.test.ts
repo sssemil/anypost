@@ -595,6 +595,52 @@ describe("Multi-group state machine", () => {
     });
   });
 
+  describe("pending approval", () => {
+    it("should set pendingApproval to true for group-joined", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, { type: "group-joined", groupId: "group-1" });
+
+      const group = getActiveGroup(state);
+      expect(group?.pendingApproval).toBe(true);
+    });
+
+    it("should set pendingApproval to false for group-created", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, {
+        type: "group-created",
+        groupId: "group-1",
+        groupName: "My Group",
+      });
+
+      const group = getActiveGroup(state);
+      expect(group?.pendingApproval).toBe(false);
+    });
+
+    it("should set pendingApproval to false on approval-received", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, { type: "group-joined", groupId: "group-1" });
+      expect(getActiveGroup(state)?.pendingApproval).toBe(true);
+
+      state = transitionMultiGroup(state, {
+        type: "approval-received",
+        groupId: "group-1",
+      });
+
+      expect(getActiveGroup(state)?.pendingApproval).toBe(false);
+    });
+
+    it("should be a no-op for approval-received on unknown group", () => {
+      const state = createMultiGroupState();
+
+      const next = transitionMultiGroup(state, {
+        type: "approval-received",
+        groupId: "nonexistent",
+      });
+
+      expect(next).toBe(state);
+    });
+  });
+
   describe("immutability", () => {
     it("should not mutate the original state on join", () => {
       const original = createMultiGroupState();
