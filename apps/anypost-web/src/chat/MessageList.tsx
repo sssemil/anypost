@@ -7,6 +7,8 @@ type MessageListProps = {
   readonly ownPeerId: string;
 };
 
+const SYSTEM_SENDER_ID = "__system__";
+
 const formatTime = (timestamp: number): string =>
   new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
@@ -31,7 +33,17 @@ export const MessageList = (props: MessageListProps) => {
         </div>
       }>
         {(msg) => {
+          const isSystem = () => msg.senderPeerId === SYSTEM_SENDER_ID;
           const isMe = () => props.ownPeerId === msg.senderPeerId;
+          if (isSystem()) {
+            return (
+              <div class="flex justify-center my-2">
+                <div class="text-[11px] text-tg-text-dim bg-tg-hover border border-tg-border rounded-full px-2.5 py-1">
+                  {msg.text} · {formatTime(msg.timestamp)}
+                </div>
+              </div>
+            );
+          }
           return (
             <div
               class="flex mb-2"

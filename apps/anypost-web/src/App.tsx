@@ -83,6 +83,7 @@ const PUBKEY_PEERID_STORAGE_KEY = "anypost:pubkey-peerid";
 const PENDING_JOINS_STORAGE_KEY = "anypost:pending-joins";
 const RELAY_HINTS_STORAGE_KEY = "anypost:relay-hints";
 const MAX_EVENTS = 200;
+const SYSTEM_SENDER_ID = "__system__";
 
 const hexToBytes = (hex: string): Uint8Array<ArrayBuffer> => {
   const buf = new ArrayBuffer(hex.length / 2);
@@ -278,22 +279,45 @@ export const App = () => {
       const decoded = verifyAndDecodeAction(envelope);
       if (!decoded.success) continue;
       const action = decoded.data;
-      if (action.payload.type !== "message") continue;
-      if (existingIds.has(action.id)) continue;
+      if (action.payload.type === "message") {
+        if (existingIds.has(action.id)) continue;
+        const authorHex = toHex(action.authorPublicKey);
+        dispatchGroupEvent({
+          type: "message-received",
+          groupId,
+          message: {
+            id: action.id,
+            senderPeerId: pubKeyMap.get(authorHex) ?? "unknown",
+            senderDisplayName: undefined,
+            text: action.payload.text,
+            timestamp: action.timestamp,
+          },
+        });
+        existingIds.add(action.id);
+        continue;
+      }
 
-      const authorHex = toHex(action.authorPublicKey);
-      dispatchGroupEvent({
-        type: "message-received",
-        groupId,
-        message: {
-          id: action.id,
-          senderPeerId: pubKeyMap.get(authorHex) ?? "unknown",
-          senderDisplayName: undefined,
-          text: action.payload.text,
-          timestamp: action.timestamp,
-        },
-      });
-      existingIds.add(action.id);
+      if (action.payload.type === "member-approved") {
+        const indicatorId = `join:${action.id}`;
+        if (existingIds.has(indicatorId)) continue;
+        const joinedHex = toHex(action.payload.memberPublicKey);
+        const joinedPeerId = pubKeyMap.get(joinedHex);
+        const joinedLabel = joinedPeerId
+          ? `${joinedPeerId.slice(0, 12)}...${joinedPeerId.slice(-6)}`
+          : `${joinedHex.slice(0, 8)}...${joinedHex.slice(-8)}`;
+        dispatchGroupEvent({
+          type: "message-received",
+          groupId,
+          message: {
+            id: indicatorId,
+            senderPeerId: SYSTEM_SENDER_ID,
+            senderDisplayName: "system",
+            text: `${joinedLabel} joined the group`,
+            timestamp: action.timestamp,
+          },
+        });
+        existingIds.add(indicatorId);
+      }
     }
   };
 
@@ -310,8 +334,9 @@ export const App = () => {
   };
 
   createEffect(() => {
-    groupState().activeGroupId;
+    const activeId = groupState().activeGroupId;
     refreshActionChainState();
+    if (activeId) syncMessagesFromActionChain(activeId);
   });
 
   const dispatchGroupEvent = (event: Parameters<typeof transitionMultiGroup>[1]) => {
@@ -615,7 +640,11 @@ export const App = () => {
         refreshNetworkStatus();
       });
 
-      statusInterval = setInterval(refreshNetworkStatus, 3000);
+      statusInterval = setInterval(() => {
+        refreshNetworkStatus();
+        const activeId = groupState().activeGroupId;
+        if (activeId) syncMessagesFromActionChain(activeId);
+      }, 3000);
 
       void runPingSweep();
       pingInterval = setInterval(() => void runPingSweep(), PING_SWEEP_INTERVAL);
@@ -872,6 +901,7 @@ export const App = () => {
         return updated;
       });
       refreshActionChainState();
+      syncMessagesFromActionChain(activeId);
     }).catch(() => {});
   };
 
@@ -917,6 +947,7 @@ export const App = () => {
     const pubKeyBytes = hexToBytes(matchedPublicKeyHex);
     currentChat.approveJoin(activeId, pubKeyBytes).then(() => {
       refreshActionChainState();
+      syncMessagesFromActionChain(activeId);
     }).catch(() => {});
 
     return null;
@@ -937,11 +968,14 @@ export const App = () => {
   const sidebarGroups = () =>
     getGroupList(groupState()).map((g) => {
       const lastMsg = g.messages.length > 0 ? g.messages[g.messages.length - 1] : undefined;
+      const visiblePeerCount = [...getSeenPeerIds(groupState(), g.groupId)]
+        .filter((peerId) => peerId !== SYSTEM_SENDER_ID)
+        .length;
       return {
         groupId: g.groupId,
         groupName: g.groupName,
         unreadCount: g.unreadCount,
-        seenPeerCount: getSeenPeerIds(groupState(), g.groupId).size,
+        seenPeerCount: visiblePeerCount,
         lastMessage: lastMsg
           ? { text: lastMsg.text, timestamp: lastMsg.timestamp }
           : undefined,
