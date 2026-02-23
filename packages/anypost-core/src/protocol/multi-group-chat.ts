@@ -202,6 +202,8 @@ type CreateMultiGroupChatOptions = {
   readonly onRelayReservationStateChange?: (state: RelayReservationState) => void;
   readonly onJoinRetryStateChange?: (state: JoinRetryState) => void;
   readonly onSyncProgressStateChange?: (state: SyncProgressState) => void;
+  readonly syncReconcileIntervalMs?: number;
+  readonly syncReconcileStaleMs?: number;
   readonly onApprovalReceived?: (groupId: string) => void;
 };
 
@@ -230,6 +232,8 @@ const SYNC_REQUEST_TRACK_TTL_MS = 60_000;
 const MAX_SYNC_REQUEST_TRACKED = 4_096;
 const MAX_SYNC_PROGRESS_PEERS_PER_GROUP = 128;
 const SYNC_PROGRESS_STALE_MS = 24 * 60 * 60 * 1_000;
+const DEFAULT_SYNC_RECONCILE_INTERVAL_MS = 20_000;
+const DEFAULT_SYNC_RECONCILE_STALE_MS = 45_000;
 
 export const createMultiGroupChat = async (
   options: CreateMultiGroupChatOptions,
@@ -256,6 +260,8 @@ export const createMultiGroupChat = async (
     onRelayReservationStateChange,
     onJoinRetryStateChange,
     onSyncProgressStateChange,
+    syncReconcileIntervalMs = DEFAULT_SYNC_RECONCILE_INTERVAL_MS,
+    syncReconcileStaleMs = DEFAULT_SYNC_RECONCILE_STALE_MS,
     onApprovalReceived,
   } = options;
 
@@ -2145,6 +2151,37 @@ export const createMultiGroupChat = async (
   }, JOIN_RETRY_TICK_INTERVAL_MS);
   void runJoinRetryTick();
 
+  const latestSyncReceiveAtMs = (groupId: string): number | null => {
+    const byPeer = syncProgressByGroup.get(groupId);
+    if (!byPeer || byPeer.size === 0) return null;
+
+    let latest = 0;
+    for (const progress of byPeer.values()) {
+      latest = Math.max(latest, progress.lastReceivedAtMs ?? 0);
+    }
+    return latest > 0 ? latest : null;
+  };
+
+  const runSyncReconcileTick = () => {
+    const connectedPeers = node.getPeers();
+    if (connectedPeers.length === 0) return;
+
+    const now = Date.now();
+    for (const groupId of joinedGroups) {
+      if (isMembershipEnforcedGroup(groupId) && !isOwnMemberOfGroup(groupId)) continue;
+      const latestReceivedAt = latestSyncReceiveAtMs(groupId);
+      const stale = latestReceivedAt === null || now - latestReceivedAt >= syncReconcileStaleMs;
+      if (!stale) continue;
+      requestSyncFromConnectedPeers(groupId);
+      emit("sync", `Periodic sync reconcile for group ${groupId.slice(0, 8)}...`);
+    }
+  };
+
+  const syncReconcileInterval = setInterval(() => {
+    runSyncReconcileTick();
+  }, Math.max(1_000, syncReconcileIntervalMs));
+  runSyncReconcileTick();
+
   const performApproveJoin = async (
     groupId: string,
     memberPublicKey: Uint8Array,
@@ -2614,6 +2651,7 @@ export const createMultiGroupChat = async (
       if (memberReconnectInterval) clearInterval(memberReconnectInterval);
       if (relayReservationInterval) clearInterval(relayReservationInterval);
       if (joinRetryInterval) clearInterval(joinRetryInterval);
+      clearInterval(syncReconcileInterval);
       inFlightPeerDials.clear();
       pendingDirectUpgradeByPeer.clear();
       joinRetryState = createJoinRetryState();

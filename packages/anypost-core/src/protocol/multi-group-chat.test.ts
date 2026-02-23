@@ -497,6 +497,28 @@ describe("MultiGroupChat", () => {
     ).toBe(true);
   });
 
+  it("should run periodic sync reconcile for stale groups", async () => {
+    const owner = await createTestNode(undefined, undefined, {
+      syncReconcileIntervalMs: 1_000,
+      syncReconcileStaleMs: 0,
+    });
+    const joiner = await createTestNode(undefined, undefined, {
+      syncReconcileIntervalMs: 1_000,
+      syncReconcileStaleMs: 0,
+    });
+    const { groupId } = await owner.chat.createGroup("Reconcile Tick");
+    joiner.chat.joinGroup(groupId);
+
+    await joiner.chat.connectTo(owner.chat.multiaddrs[0]);
+    await waitFor(1_250);
+
+    expect(
+      owner.events.some(
+        (evt) => evt.type === "sync" && evt.detail.includes("Periodic sync reconcile"),
+      ),
+    ).toBe(true);
+  });
+
   it("should emit connection metrics and relay reservation state callbacks", async () => {
     const metrics: Array<{ timeToFirstPeerMs: number | null; reservationAttempts: number }> = [];
     const reservationStates: Array<{ entries: number; targetActive: number }> = [];
