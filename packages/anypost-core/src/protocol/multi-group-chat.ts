@@ -228,6 +228,8 @@ const OUTGOING_APPROVAL_WINDOW_MS = 30_000;
 const OUTGOING_APPROVAL_MAX = 10;
 const SYNC_REQUEST_TRACK_TTL_MS = 60_000;
 const MAX_SYNC_REQUEST_TRACKED = 4_096;
+const MAX_SYNC_PROGRESS_PEERS_PER_GROUP = 128;
+const SYNC_PROGRESS_STALE_MS = 24 * 60 * 60 * 1_000;
 
 export const createMultiGroupChat = async (
   options: CreateMultiGroupChatOptions,
@@ -432,6 +434,45 @@ export const createMultiGroupChat = async (
     lastReceivedEnvelopeCount: 0,
   });
 
+  const syncProgressActivityAtMs = (progress: SyncPeerProgress): number =>
+    Math.max(
+      progress.lastRequestedAtMs ?? 0,
+      progress.lastServedAtMs ?? 0,
+      progress.lastReceivedAtMs ?? 0,
+    );
+
+  const pruneSyncProgressForGroup = (groupId: string) => {
+    const byPeer = syncProgressByGroup.get(groupId);
+    if (!byPeer) return;
+    const now = Date.now();
+
+    for (const [peerId, progress] of [...byPeer.entries()]) {
+      const lastActivityAt = syncProgressActivityAtMs(progress);
+      if (lastActivityAt > 0 && now - lastActivityAt > SYNC_PROGRESS_STALE_MS) {
+        byPeer.delete(peerId);
+      }
+    }
+
+    if (byPeer.size > MAX_SYNC_PROGRESS_PEERS_PER_GROUP) {
+      const entriesByFreshness = [...byPeer.entries()]
+        .sort((a, b) => syncProgressActivityAtMs(b[1]) - syncProgressActivityAtMs(a[1]));
+      const keep = new Set(entriesByFreshness
+        .slice(0, MAX_SYNC_PROGRESS_PEERS_PER_GROUP)
+        .map(([peerId]) => peerId));
+      for (const peerId of byPeer.keys()) {
+        if (!keep.has(peerId)) {
+          byPeer.delete(peerId);
+        }
+      }
+    }
+
+    if (byPeer.size === 0) {
+      syncProgressByGroup.delete(groupId);
+    } else {
+      syncProgressByGroup.set(groupId, byPeer);
+    }
+  };
+
   const patchSyncProgress = (
     groupId: string,
     peerId: string,
@@ -441,6 +482,7 @@ export const createMultiGroupChat = async (
     const current = byPeer.get(peerId) ?? defaultSyncPeerProgress();
     byPeer.set(peerId, { ...current, ...patch });
     syncProgressByGroup.set(groupId, byPeer);
+    pruneSyncProgressForGroup(groupId);
     emitSyncProgressState();
   };
 
@@ -461,6 +503,7 @@ export const createMultiGroupChat = async (
     }
     if (byPeer.size > 0) {
       syncProgressByGroup.set(groupId, byPeer);
+      pruneSyncProgressForGroup(groupId);
     }
   }
 

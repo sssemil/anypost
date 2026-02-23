@@ -354,6 +354,7 @@ describe("MultiGroupChat", () => {
 
   it("should accept initialSyncProgressState and onSyncProgressStateChange options without error", async () => {
     const states: SyncProgressState[] = [];
+    const now = Date.now();
     const chat = await createMultiGroupChat({
       accountKey: generateAccountKey(),
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
@@ -361,13 +362,13 @@ describe("MultiGroupChat", () => {
       initialSyncProgressState: new Map([
         ["group-a", new Map([
           ["12D3KooWPeerA", {
-            lastRequestedAtMs: 100,
+            lastRequestedAtMs: now,
             lastRequestKnownHashHex: "aa",
-            lastServedAtMs: 200,
+            lastServedAtMs: now,
             lastServedKnownHashHex: "bb",
             lastServedHeadHashHex: "cc",
             lastServedEnvelopeCount: 2,
-            lastReceivedAtMs: 300,
+            lastReceivedAtMs: now,
             lastReceivedHashHex: "dd",
             lastReceivedEnvelopeCount: 4,
           }],
@@ -381,6 +382,88 @@ describe("MultiGroupChat", () => {
     expect(states.length).toBeGreaterThan(0);
     expect(chat.getSyncProgressState().get("group-a")?.get("12D3KooWPeerA")?.lastReceivedEnvelopeCount)
       .toBe(4);
+  });
+
+  it("should prune stale sync progress entries on startup", async () => {
+    const staleAt = Date.now() - (3 * 24 * 60 * 60 * 1_000);
+    const freshAt = Date.now();
+    const chat = await createMultiGroupChat({
+      accountKey: generateAccountKey(),
+      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+      useTransports: "tcp",
+      initialSyncProgressState: new Map([
+        ["group-a", new Map([
+          ["peer-stale", {
+            lastRequestedAtMs: staleAt,
+            lastRequestKnownHashHex: "aa",
+            lastServedAtMs: staleAt,
+            lastServedKnownHashHex: "bb",
+            lastServedHeadHashHex: "cc",
+            lastServedEnvelopeCount: 1,
+            lastReceivedAtMs: staleAt,
+            lastReceivedHashHex: "dd",
+            lastReceivedEnvelopeCount: 1,
+          }],
+          ["peer-fresh", {
+            lastRequestedAtMs: freshAt,
+            lastRequestKnownHashHex: "aa",
+            lastServedAtMs: null,
+            lastServedKnownHashHex: null,
+            lastServedHeadHashHex: null,
+            lastServedEnvelopeCount: 0,
+            lastReceivedAtMs: null,
+            lastReceivedHashHex: null,
+            lastReceivedEnvelopeCount: 0,
+          }],
+        ])],
+      ]),
+    });
+    instances.push(chat);
+
+    const groupState = chat.getSyncProgressState().get("group-a");
+    expect(groupState?.has("peer-stale")).toBe(false);
+    expect(groupState?.has("peer-fresh")).toBe(true);
+  });
+
+  it("should cap initial sync progress peers per group", async () => {
+    const now = Date.now();
+    const peerState = new Map<string, {
+      lastRequestedAtMs: number;
+      lastRequestKnownHashHex: string | null;
+      lastServedAtMs: number | null;
+      lastServedKnownHashHex: string | null;
+      lastServedHeadHashHex: string | null;
+      lastServedEnvelopeCount: number;
+      lastReceivedAtMs: number | null;
+      lastReceivedHashHex: string | null;
+      lastReceivedEnvelopeCount: number;
+    }>();
+    for (let idx = 0; idx < 160; idx += 1) {
+      peerState.set(`peer-${idx}`, {
+        lastRequestedAtMs: now - idx,
+        lastRequestKnownHashHex: null,
+        lastServedAtMs: null,
+        lastServedKnownHashHex: null,
+        lastServedHeadHashHex: null,
+        lastServedEnvelopeCount: 0,
+        lastReceivedAtMs: null,
+        lastReceivedHashHex: null,
+        lastReceivedEnvelopeCount: 0,
+      });
+    }
+
+    const chat = await createMultiGroupChat({
+      accountKey: generateAccountKey(),
+      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+      useTransports: "tcp",
+      initialSyncProgressState: new Map([["group-a", peerState]]),
+    });
+    instances.push(chat);
+
+    const groupState = chat.getSyncProgressState().get("group-a");
+    expect(groupState).toBeDefined();
+    expect(groupState!.size).toBeLessThanOrEqual(128);
+    expect(groupState!.has("peer-0")).toBe(true);
   });
 
   it("should expose retryJoinNow and cancelJoinRetry methods", async () => {
