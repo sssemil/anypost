@@ -44,7 +44,7 @@ import {
   getDisplayName,
 } from "anypost-core/data";
 import { openAccountStore } from "anypost-core/data";
-import type { AccountStore } from "anypost-core/data";
+import type { AccountStore, ContactsBook } from "anypost-core/data";
 import {
   createInitialState,
   transition,
@@ -85,6 +85,7 @@ const PENDING_JOINS_STORAGE_KEY = "anypost:pending-joins";
 const RELAY_HINTS_STORAGE_KEY = "anypost:relay-hints";
 const MAX_EVENTS = 200;
 const SYSTEM_SENDER_ID = "__system__";
+const CONTACTS_LAST_SEEN_UPDATE_MS = 60_000;
 
 const hexToBytes = (hex: string): Uint8Array<ArrayBuffer> => {
   const buf = new ArrayBuffer(hex.length / 2);
@@ -218,6 +219,7 @@ export const App = () => {
   const [actionChainState, setActionChainState] = createSignal<ActionChainGroupState | null>(null);
   const [pendingJoinsMap, setPendingJoinsMap] = createSignal<ReadonlyMap<string, readonly PendingJoinRequest[]>>(new Map());
   const [publicKeyToPeerIdMap, setPublicKeyToPeerIdMap] = createSignal<ReadonlyMap<string, string>>(new Map());
+  const [contactsBook, setContactsBook] = createSignal<ContactsBook>(new Map());
 
   let chat: MultiGroupChat | undefined;
   let unsubscribeMessage: (() => void) | undefined;
@@ -228,6 +230,72 @@ export const App = () => {
 
   const dispatchMobileView = (event: Parameters<typeof transitionMobileView>[1]) => {
     setMobileView((s) => transitionMobileView(s, event));
+  };
+
+  const persistContactsBook = (contacts: ContactsBook) => {
+    void (async () => {
+      const store = await openAccountStore();
+      try {
+        await store.saveContactsBook(contacts);
+      } finally {
+        store.close();
+      }
+    })();
+  };
+
+  const upsertContact = (
+    peerId: string,
+    options?: {
+      readonly selfName?: string | null;
+      readonly groupId?: string;
+      readonly lastSeenAt?: number;
+    },
+  ) => {
+    if (!peerId || peerId === SYSTEM_SENDER_ID) return;
+
+    const normalizedName = options?.selfName?.trim();
+    const incomingName = normalizedName && normalizedName.length > 0 ? normalizedName : null;
+    const incomingLastSeenAt = options?.lastSeenAt ?? Date.now();
+    const incomingGroupId = options?.groupId;
+
+    setContactsBook((prev) => {
+      const existing = prev.get(peerId);
+      const nextName = incomingName ?? existing?.selfName ?? null;
+
+      const baseGroupIds = existing?.groupIds ?? [];
+      const nextGroupIds = incomingGroupId && !baseGroupIds.includes(incomingGroupId)
+        ? [...baseGroupIds, incomingGroupId]
+        : baseGroupIds;
+
+      const nextLastSeenAt = existing
+        ? Math.max(
+            existing.lastSeenAt,
+            incomingLastSeenAt >= existing.lastSeenAt + CONTACTS_LAST_SEEN_UPDATE_MS
+              ? incomingLastSeenAt
+              : existing.lastSeenAt,
+          )
+        : incomingLastSeenAt;
+
+      if (
+        existing &&
+        existing.selfName === nextName &&
+        existing.lastSeenAt === nextLastSeenAt &&
+        existing.groupIds.length === nextGroupIds.length &&
+        existing.groupIds.every((groupId, idx) => groupId === nextGroupIds[idx])
+      ) {
+        return prev;
+      }
+
+      const next = new Map(prev);
+      next.set(peerId, {
+        peerId,
+        selfName: nextName,
+        lastSeenAt: nextLastSeenAt,
+        groupIds: nextGroupIds,
+      });
+      persistContactsBook(next);
+      return next;
+    });
   };
 
   const refreshNetworkStatus = () => {
@@ -268,8 +336,18 @@ export const App = () => {
   const syncMessagesFromActionChain = (groupId: string) => {
     const currentChat = chat;
     if (!currentChat) return;
+    const chainState = currentChat.getActionChainState(groupId);
     const envelopes = currentChat.getActionChainEnvelopes(groupId);
     if (envelopes.length === 0) return;
+
+    if (chainState) {
+      for (const member of chainState.members.values()) {
+        const memberPeerId = publicKeyToPeerIdMap().get(member.publicKeyHex);
+        if (memberPeerId) {
+          upsertContact(memberPeerId, { groupId });
+        }
+      }
+    }
 
     const existingIds = new Set(
       (groupState().groups.get(groupId)?.messages ?? []).map((m) => m.id),
@@ -278,7 +356,11 @@ export const App = () => {
     const memberLabelFromPublicKey = (publicKey: Uint8Array): string => {
       const memberHex = toHex(publicKey);
       const memberPeerId = pubKeyMap.get(memberHex);
-      if (memberPeerId) return `${memberPeerId.slice(0, 12)}...${memberPeerId.slice(-6)}`;
+      if (memberPeerId) {
+        const knownName = contactsBook().get(memberPeerId)?.selfName;
+        if (knownName) return knownName;
+        return `${memberPeerId.slice(0, 12)}...${memberPeerId.slice(-6)}`;
+      }
       return `${memberHex.slice(0, 8)}...${memberHex.slice(-8)}`;
     };
 
@@ -463,6 +545,9 @@ export const App = () => {
       try {
         setDisplayName(persistedSettings.doc, name);
         setDisplayNameState(name);
+        if (chat) {
+          upsertContact(chat.peerId, { selfName: name });
+        }
       } finally {
         await persistedSettings.destroy();
       }
@@ -550,6 +635,7 @@ export const App = () => {
         readonly saveJoinRetryState?: (state: JoinRetryState) => Promise<void>;
         readonly getSyncProgressState?: () => Promise<SyncProgressState>;
         readonly saveSyncProgressState?: (state: SyncProgressState) => Promise<void>;
+        readonly getContactsBook?: () => Promise<ContactsBook>;
       };
 
       const store = await openAccountStore();
@@ -557,6 +643,7 @@ export const App = () => {
       let initialPeerPathCache: ReadonlyMap<string, readonly string[]> = new Map();
       let initialJoinRetryState: JoinRetryState = new Map();
       let initialSyncProgressState: SyncProgressState = new Map();
+      let initialContactsBook: ContactsBook = new Map();
       try {
         const savedKey = await store.getPeerPrivateKey();
         if (savedKey) peerPrivateKey = savedKey;
@@ -570,9 +657,14 @@ export const App = () => {
         if (typeof compatStore.getSyncProgressState === "function") {
           initialSyncProgressState = await compatStore.getSyncProgressState();
         }
+        if (typeof compatStore.getContactsBook === "function") {
+          initialContactsBook = await compatStore.getContactsBook();
+        }
       } finally {
         store.close();
       }
+
+      setContactsBook(initialContactsBook);
 
       const initialPublicKeyToPeerId = loadPublicKeyToPeerId();
       const initialPendingJoins = loadPendingJoins();
@@ -647,6 +739,9 @@ export const App = () => {
         onPublicKeyToPeerIdChange: (map) => {
           setPublicKeyToPeerIdMap(map);
           savePublicKeyToPeerId(map);
+          for (const peerId of map.values()) {
+            upsertContact(peerId);
+          }
         },
         onPeerPathCacheChange: (cache) => {
           persistPeerPathCache(cache);
@@ -680,6 +775,8 @@ export const App = () => {
         setPendingJoinsMap(initialPendingJoins);
       }
 
+      upsertContact(chat.peerId, { selfName: displayName() || null });
+
       restorePersistedGroups();
       refreshNetworkStatus();
 
@@ -701,6 +798,11 @@ export const App = () => {
       });
 
       unsubscribeMessage = chat.onMessage((msg) => {
+        upsertContact(msg.senderPeerId, {
+          selfName: msg.senderDisplayName,
+          groupId: msg.groupId,
+          lastSeenAt: msg.timestamp,
+        });
         if (!hasGroup(groupState(), msg.groupId)) {
           const chainState = chat?.getActionChainState(msg.groupId);
           dispatchGroupEvent({
@@ -718,6 +820,7 @@ export const App = () => {
       });
 
       unsubscribeJoinRequests = chat.onJoinRequest((evt) => {
+        upsertContact(evt.senderPeerId, { groupId: evt.groupId });
         if (evt.autoApproved || evt.alreadyMember) return;
         const pubKeyHex = toHex(new Uint8Array(evt.requesterPublicKey));
         setPendingJoinsMap((prev) => {
@@ -767,6 +870,10 @@ export const App = () => {
 
     const name = displayName() || undefined;
     currentChat.sendMessage(groupId, text, name).then(() => {
+      upsertContact(currentChat.peerId, {
+        selfName: name ?? null,
+        groupId,
+      });
       dispatchGroupEvent({
         type: "message-sent",
         groupId,
@@ -1185,6 +1292,7 @@ export const App = () => {
                   connectionMetrics={connectionMetrics()}
                   displayName={displayName()}
                   latencyMap={latencyMap()}
+                  contactsBook={contactsBook()}
                   onAddRelay={handleAddRelay}
                 />
                 <EventLog

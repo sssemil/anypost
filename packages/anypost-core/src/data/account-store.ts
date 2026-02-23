@@ -16,6 +16,16 @@ type AccountStoreDBSchema = {
 const PEER_PATH_CACHE_KEY = "peerPathCache";
 const JOIN_RETRY_STATE_KEY = "joinRetryState";
 const SYNC_PROGRESS_STATE_KEY = "syncProgressState";
+const CONTACTS_BOOK_KEY = "contactsBook";
+
+export type ContactBookEntry = {
+  readonly peerId: string;
+  readonly selfName: string | null;
+  readonly lastSeenAt: number;
+  readonly groupIds: readonly string[];
+};
+
+export type ContactsBook = ReadonlyMap<string, ContactBookEntry>;
 
 const decodePeerPathCache = (value: string): ReadonlyMap<string, readonly string[]> => {
   try {
@@ -188,6 +198,59 @@ const encodeSyncProgressState = (state: SyncProgressState): string =>
     ]),
   ]));
 
+const decodeContactsBook = (value: string): ContactsBook => {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return new Map();
+
+    const contacts = new Map<string, ContactBookEntry>();
+    for (const rawEntry of parsed) {
+      if (!Array.isArray(rawEntry) || rawEntry.length !== 2) continue;
+      const [peerId, rawValue] = rawEntry;
+      if (typeof peerId !== "string" || typeof rawValue !== "object" || rawValue === null) continue;
+
+      const valueObj = rawValue as Record<string, unknown>;
+      const selfNameRaw = valueObj.selfName;
+      const lastSeenAt = valueObj.lastSeenAt;
+      const groupIdsRaw = valueObj.groupIds;
+
+      if (
+        !(selfNameRaw === null || typeof selfNameRaw === "string") ||
+        typeof lastSeenAt !== "number" ||
+        !Number.isFinite(lastSeenAt) ||
+        !Array.isArray(groupIdsRaw)
+      ) {
+        continue;
+      }
+
+      const selfName = typeof selfNameRaw === "string" && selfNameRaw.trim().length > 0
+        ? selfNameRaw.trim()
+        : null;
+      const groupIds = [...new Set(groupIdsRaw.filter((g): g is string => typeof g === "string" && g.length > 0))];
+
+      contacts.set(peerId, {
+        peerId,
+        selfName,
+        lastSeenAt,
+        groupIds,
+      });
+    }
+    return contacts;
+  } catch {
+    return new Map();
+  }
+};
+
+const encodeContactsBook = (contacts: ContactsBook): string =>
+  JSON.stringify([...contacts.entries()].map(([peerId, entry]) => [
+    peerId,
+    {
+      selfName: entry.selfName,
+      lastSeenAt: entry.lastSeenAt,
+      groupIds: [...entry.groupIds],
+    },
+  ]));
+
 export type AccountStore = {
   readonly getAccountKey: () => Promise<AccountKey | null>;
   readonly saveAccountKey: (key: AccountKey) => Promise<void>;
@@ -203,6 +266,8 @@ export type AccountStore = {
   readonly saveJoinRetryState: (state: JoinRetryState) => Promise<void>;
   readonly getSyncProgressState: () => Promise<SyncProgressState>;
   readonly saveSyncProgressState: (state: SyncProgressState) => Promise<void>;
+  readonly getContactsBook: () => Promise<ContactsBook>;
+  readonly saveContactsBook: (contacts: ContactsBook) => Promise<void>;
   readonly destroy: () => Promise<void>;
   readonly close: () => void;
 };
@@ -297,6 +362,16 @@ export const openAccountStore = async (): Promise<AccountStore> => {
 
     saveSyncProgressState: async (state: SyncProgressState) => {
       await db.put("account", encodeSyncProgressState(state), SYNC_PROGRESS_STATE_KEY);
+    },
+
+    getContactsBook: async () => {
+      const value = await db.get("account", CONTACTS_BOOK_KEY);
+      if (typeof value !== "string") return new Map();
+      return decodeContactsBook(value);
+    },
+
+    saveContactsBook: async (contacts: ContactsBook) => {
+      await db.put("account", encodeContactsBook(contacts), CONTACTS_BOOK_KEY);
     },
 
     destroy: async () => {

@@ -1,4 +1,5 @@
 import { createSignal, For, Show } from "solid-js";
+import type { ContactsBook } from "anypost-core/data";
 import type {
   NetworkStatus,
   RelayPoolState,
@@ -19,6 +20,7 @@ type NetworkPanelProps = {
   readonly connectionMetrics: ConnectionMetrics | null;
   readonly displayName: string;
   readonly latencyMap: ReadonlyMap<string, number>;
+  readonly contactsBook: ContactsBook;
   readonly onAddRelay?: (addr: string) => void;
 };
 
@@ -373,6 +375,7 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                   const query = peerSearch().toLowerCase();
                   const filtered = query
                     ? status().peers.filter((p) =>
+                        (props.contactsBook.get(p.peerId)?.selfName?.toLowerCase().includes(query) ?? false) ||
                         p.peerId.toLowerCase().includes(query) ||
                         p.addrs.some((a) => a.toLowerCase().includes(query))
                       )
@@ -387,7 +390,18 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                           <div class="p-2 mb-1.5 bg-tg-sidebar rounded-lg border border-tg-border">
                             <div class="flex justify-between items-center">
                               <div class="flex items-center gap-1.5">
-                                <code class="font-bold text-tg-text">{peer.peerId.slice(0, 20)}...</code>
+                                {(() => {
+                                  const contactName = props.contactsBook.get(peer.peerId)?.selfName;
+                                  if (!contactName) {
+                                    return <code class="font-bold text-tg-text">{peer.peerId.slice(0, 20)}...</code>;
+                                  }
+                                  return (
+                                    <>
+                                      <span class="font-semibold text-tg-text">{contactName}</span>
+                                      <code class="text-tg-text-dim">{peer.peerId.slice(0, 12)}...</code>
+                                    </>
+                                  );
+                                })()}
                                 {(() => {
                                   const latency = props.latencyMap.get(peer.peerId);
                                   if (latency === undefined) return null;

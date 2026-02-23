@@ -223,6 +223,49 @@ describe("Multi-group state machine", () => {
       expect(next).toBe(state);
       expect(getActiveMessages(next)).toHaveLength(1);
     });
+
+    it("should keep timeline ordered by timestamp when older events arrive later", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, { type: "group-joined", groupId: "group-1" });
+
+      const newer = createTestMessage({
+        id: "msg-newer",
+        timestamp: 2_000,
+        text: "newer",
+      });
+      const older = createTestMessage({
+        id: "msg-older",
+        timestamp: 1_000,
+        text: "older",
+      });
+      const newest = createTestMessage({
+        id: "msg-newest",
+        timestamp: 3_000,
+        text: "newest",
+      });
+
+      state = transitionMultiGroup(state, {
+        type: "message-received",
+        groupId: "group-1",
+        message: newer,
+      });
+      state = transitionMultiGroup(state, {
+        type: "message-received",
+        groupId: "group-1",
+        message: older,
+      });
+      state = transitionMultiGroup(state, {
+        type: "message-received",
+        groupId: "group-1",
+        message: newest,
+      });
+
+      expect(getActiveMessages(state).map((msg) => msg.id)).toEqual([
+        "msg-older",
+        "msg-newer",
+        "msg-newest",
+      ]);
+    });
   });
 
   describe("display name preservation", () => {

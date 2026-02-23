@@ -138,10 +138,12 @@ const addMessageToGroup = (
   const updatedSeenPeerIds = group.seenPeerIds.has(message.senderPeerId)
     ? group.seenPeerIds
     : new Set([...group.seenPeerIds, message.senderPeerId]);
+  const messages = [...group.messages, message]
+    .sort((a, b) => a.timestamp - b.timestamp);
   const groups = new Map(state.groups);
   groups.set(groupId, {
     ...group,
-    messages: [...group.messages, message],
+    messages,
     unreadCount: incrementUnread && !isActive
       ? group.unreadCount + 1
       : group.unreadCount,

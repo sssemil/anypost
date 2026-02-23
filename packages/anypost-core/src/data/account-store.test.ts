@@ -4,6 +4,7 @@ import { openAccountStore } from "./account-store.js";
 import { generateAccountKey } from "../crypto/identity.js";
 import type { JoinRetryState } from "../protocol/join-retry-queue.js";
 import type { SyncProgressState } from "../protocol/multi-group-chat.js";
+import type { ContactsBook } from "./account-store.js";
 
 describe("Account Store", () => {
   describe("account key persistence", () => {
@@ -331,6 +332,67 @@ describe("Account Store", () => {
       const store2 = await openAccountStore();
       try {
         const retrieved = await store2.getSyncProgressState();
+        expect(retrieved).toEqual(original);
+      } finally {
+        await store2.destroy();
+      }
+    });
+  });
+
+  describe("contacts book persistence", () => {
+    it("should return empty contacts when no contacts book exists", async () => {
+      const store = await openAccountStore();
+      try {
+        const contacts = await store.getContactsBook();
+        expect(contacts.size).toBe(0);
+      } finally {
+        await store.destroy();
+      }
+    });
+
+    it("should store and retrieve contacts book", async () => {
+      const store = await openAccountStore();
+      try {
+        const original: ContactsBook = new Map([
+          ["12D3KooWPeerA", {
+            peerId: "12D3KooWPeerA",
+            selfName: "Alice",
+            lastSeenAt: 1_000,
+            groupIds: ["group-a", "group-b"],
+          }],
+          ["12D3KooWPeerB", {
+            peerId: "12D3KooWPeerB",
+            selfName: null,
+            lastSeenAt: 2_000,
+            groupIds: ["group-a"],
+          }],
+        ]);
+
+        await store.saveContactsBook(original);
+        const retrieved = await store.getContactsBook();
+
+        expect(retrieved).toEqual(original);
+      } finally {
+        await store.destroy();
+      }
+    });
+
+    it("should persist contacts book across store instances", async () => {
+      const store1 = await openAccountStore();
+      const original: ContactsBook = new Map([
+        ["12D3KooWPeerA", {
+          peerId: "12D3KooWPeerA",
+          selfName: "Alice",
+          lastSeenAt: 4_000,
+          groupIds: ["group-z"],
+        }],
+      ]);
+      await store1.saveContactsBook(original);
+      store1.close();
+
+      const store2 = await openAccountStore();
+      try {
+        const retrieved = await store2.getContactsBook();
         expect(retrieved).toEqual(original);
       } finally {
         await store2.destroy();

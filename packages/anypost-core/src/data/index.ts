@@ -45,7 +45,7 @@ export type {
 
 export { openAccountStore } from "./account-store.js";
 
-export type { AccountStore } from "./account-store.js";
+export type { AccountStore, ContactBookEntry, ContactsBook } from "./account-store.js";
 
 export { createYjsSyncProvider } from "./yjs-sync-provider.js";
 
