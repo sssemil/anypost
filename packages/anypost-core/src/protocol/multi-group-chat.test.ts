@@ -520,7 +520,13 @@ describe("MultiGroupChat", () => {
   });
 
   it("should emit connection metrics and relay reservation state callbacks", async () => {
-    const metrics: Array<{ timeToFirstPeerMs: number | null; reservationAttempts: number }> = [];
+    const metrics: Array<{
+      timeToFirstPeerMs: number | null;
+      reservationAttempts: number;
+      syncRequestsSent: number;
+      syncResponsesAccepted: number;
+      syncResponsesRejected: number;
+    }> = [];
     const reservationStates: Array<{ entries: number; targetActive: number }> = [];
 
     const chat = await createMultiGroupChat({
@@ -532,6 +538,9 @@ describe("MultiGroupChat", () => {
         metrics.push({
           timeToFirstPeerMs: next.timeToFirstPeerMs,
           reservationAttempts: next.reservationAttempts,
+          syncRequestsSent: next.syncRequestsSent,
+          syncResponsesAccepted: next.syncResponsesAccepted,
+          syncResponsesRejected: next.syncResponsesRejected,
         });
       },
       onRelayReservationStateChange: (next) => {
@@ -545,6 +554,9 @@ describe("MultiGroupChat", () => {
 
     expect(metrics.length).toBeGreaterThan(0);
     expect(metrics[0].reservationAttempts).toBe(0);
+    expect(metrics[0].syncRequestsSent).toBe(0);
+    expect(metrics[0].syncResponsesAccepted).toBe(0);
+    expect(metrics[0].syncResponsesRejected).toBe(0);
     expect(reservationStates.length).toBeGreaterThan(0);
     expect(reservationStates[reservationStates.length - 1].entries).toBeGreaterThan(0);
     expect(reservationStates[reservationStates.length - 1].targetActive).toBe(3);

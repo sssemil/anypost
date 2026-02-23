@@ -198,6 +198,12 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                     <span>{ratio(metrics().renewSuccesses, metrics().renewAttempts)}</span>
                     <span class="text-tg-text-dim">Direct-upgrade success</span>
                     <span>{ratio(metrics().directUpgradeSuccesses, metrics().directUpgradeAttempts)}</span>
+                    <span class="text-tg-text-dim">Sync requests sent</span>
+                    <span>{metrics().syncRequestsSent}</span>
+                    <span class="text-tg-text-dim">Sync accepted</span>
+                    <span>{metrics().syncResponsesAccepted}</span>
+                    <span class="text-tg-text-dim">Sync rejected</span>
+                    <span>{metrics().syncResponsesRejected}</span>
                     <span class="text-tg-text-dim">Active reservations</span>
                     <span>{metrics().activeReservations}</span>
                     <span class="text-tg-text-dim">Rotations</span>

@@ -114,6 +114,9 @@ export type ConnectionMetrics = {
   readonly directPeerConnections: number;
   readonly directUpgradeAttempts: number;
   readonly directUpgradeSuccesses: number;
+  readonly syncRequestsSent: number;
+  readonly syncResponsesAccepted: number;
+  readonly syncResponsesRejected: number;
 };
 
 export type SyncPeerProgress = {
@@ -576,6 +579,9 @@ export const createMultiGroupChat = async (
     directPeerConnections: number;
     directUpgradeAttempts: number;
     directUpgradeSuccesses: number;
+    syncRequestsSent: number;
+    syncResponsesAccepted: number;
+    syncResponsesRejected: number;
   } = {
     startedAtMs: Date.now(),
     timeToFirstPeerMs: null,
@@ -591,6 +597,9 @@ export const createMultiGroupChat = async (
     directPeerConnections: 0,
     directUpgradeAttempts: 0,
     directUpgradeSuccesses: 0,
+    syncRequestsSent: 0,
+    syncResponsesAccepted: 0,
+    syncResponsesRejected: 0,
   };
 
   const emitConnectionMetrics = () => {
@@ -609,6 +618,9 @@ export const createMultiGroupChat = async (
       directPeerConnections: connectionMetrics.directPeerConnections,
       directUpgradeAttempts: connectionMetrics.directUpgradeAttempts,
       directUpgradeSuccesses: connectionMetrics.directUpgradeSuccesses,
+      syncRequestsSent: connectionMetrics.syncRequestsSent,
+      syncResponsesAccepted: connectionMetrics.syncResponsesAccepted,
+      syncResponsesRejected: connectionMetrics.syncResponsesRejected,
     });
   };
 
@@ -1093,6 +1105,8 @@ export const createMultiGroupChat = async (
       },
     };
     await pubsub.publish(topic, encodeWireMessage(wireMessage));
+    connectionMetrics.syncRequestsSent += 1;
+    emitConnectionMetrics();
     if (targetPeerId && requestId) {
       pruneTimedMap(pendingSyncRequests, SYNC_REQUEST_TRACK_TTL_MS, MAX_SYNC_REQUEST_TRACKED);
       pendingSyncRequests.set(
@@ -1880,6 +1894,8 @@ export const createMultiGroupChat = async (
       if (senderPeerId === "unknown") return;
       if (payload.senderPeerId !== senderPeerId) return;
       if (!verifySyncResponse(payload)) {
+        connectionMetrics.syncResponsesRejected += 1;
+        emitConnectionMetrics();
         emit(
           "sync",
           `Rejected sync response with invalid signature from ${senderPeerId.slice(0, 12)}...`,
@@ -1892,9 +1908,13 @@ export const createMultiGroupChat = async (
         pruneTimedMap(seenSyncResponses, SYNC_REQUEST_TRACK_TTL_MS, MAX_SYNC_REQUEST_TRACKED);
         const requestKey = createSyncRequestKey(matchedGroupId, senderPeerId, payload.requestId);
         if (seenSyncResponses.has(requestKey)) {
+          connectionMetrics.syncResponsesRejected += 1;
+          emitConnectionMetrics();
           return;
         }
         if (!pendingSyncRequests.has(requestKey)) {
+          connectionMetrics.syncResponsesRejected += 1;
+          emitConnectionMetrics();
           emit(
             "sync",
             `Rejected unsolicited sync response ${payload.requestId.slice(0, 8)} from ${senderPeerId.slice(0, 12)}...`,
@@ -1909,6 +1929,8 @@ export const createMultiGroupChat = async (
       publicKeyToPeerId.set(senderPublicKeyHex, senderPeerId);
       notifyPublicKeyToPeerIdChange();
       if (isMembershipEnforcedGroup(matchedGroupId) && !actionChainStates.get(matchedGroupId)?.members.has(senderPublicKeyHex)) {
+        connectionMetrics.syncResponsesRejected += 1;
+        emitConnectionMetrics();
         emit(
           "sync",
           `Rejected sync response from unknown member key ${senderPublicKeyHex.slice(0, 12)}... for group ${matchedGroupId.slice(0, 8)}...`,
@@ -1939,6 +1961,8 @@ export const createMultiGroupChat = async (
         lastReceivedHashHex: lastAcceptedHashHex,
         lastReceivedEnvelopeCount: payload.envelopes.length,
       });
+      connectionMetrics.syncResponsesAccepted += 1;
+      emitConnectionMetrics();
 
       emit(
         "sync",

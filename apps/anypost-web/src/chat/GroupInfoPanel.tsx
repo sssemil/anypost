@@ -659,6 +659,18 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
                 <span class="text-tg-text">{ratio(metrics().directUpgradeSuccesses, metrics().directUpgradeAttempts)}</span>
               </div>
               <div class="flex justify-between gap-2">
+                <span class="text-tg-text-dim">Sync requests sent</span>
+                <span class="text-tg-text">{metrics().syncRequestsSent}</span>
+              </div>
+              <div class="flex justify-between gap-2">
+                <span class="text-tg-text-dim">Sync responses accepted</span>
+                <span class="text-tg-text">{metrics().syncResponsesAccepted}</span>
+              </div>
+              <div class="flex justify-between gap-2">
+                <span class="text-tg-text-dim">Sync responses rejected</span>
+                <span class="text-tg-text">{metrics().syncResponsesRejected}</span>
+              </div>
+              <div class="flex justify-between gap-2">
                 <span class="text-tg-text-dim">Active reservations</span>
                 <span class="text-tg-text">{metrics().activeReservations}</span>
               </div>
