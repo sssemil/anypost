@@ -108,4 +108,49 @@ describe("Account Store", () => {
       }
     });
   });
+
+  describe("peer private key persistence", () => {
+    it("should return null when no peer private key exists", async () => {
+      const store = await openAccountStore();
+      try {
+        const key = await store.getPeerPrivateKey();
+        expect(key).toBeNull();
+      } finally {
+        await store.destroy();
+      }
+    });
+
+    it("should store and retrieve peer private key", async () => {
+      const store = await openAccountStore();
+      try {
+        const original = new Uint8Array(64);
+        crypto.getRandomValues(original);
+
+        await store.savePeerPrivateKey(original);
+        const retrieved = await store.getPeerPrivateKey();
+
+        expect(retrieved).not.toBeNull();
+        expect(new Uint8Array(retrieved!)).toEqual(original);
+      } finally {
+        await store.destroy();
+      }
+    });
+
+    it("should persist peer private key across store instances", async () => {
+      const store1 = await openAccountStore();
+      const original = new Uint8Array(64);
+      crypto.getRandomValues(original);
+      await store1.savePeerPrivateKey(original);
+      store1.close();
+
+      const store2 = await openAccountStore();
+      try {
+        const retrieved = await store2.getPeerPrivateKey();
+        expect(retrieved).not.toBeNull();
+        expect(new Uint8Array(retrieved!)).toEqual(original);
+      } finally {
+        await store2.destroy();
+      }
+    });
+  });
 });

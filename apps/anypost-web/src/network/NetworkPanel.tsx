@@ -1,11 +1,13 @@
 import { createSignal, For, Show } from "solid-js";
-import type { NetworkStatus, RelayPoolState, GroupDiscoveryState } from "anypost-core/protocol";
+import type { NetworkStatus, RelayPoolState, GroupDiscoveryState, RelayCandidateState } from "anypost-core/protocol";
+import { getCandidatesByRtt, getReservedCount } from "anypost-core/protocol";
 import { TopologyGraph } from "./TopologyGraph.js";
 
 type NetworkPanelProps = {
   readonly networkStatus: NetworkStatus | null;
   readonly relayPoolState: RelayPoolState | null;
   readonly groupDiscoveryState: GroupDiscoveryState | null;
+  readonly relayCandidateState: RelayCandidateState | null;
   readonly displayName: string;
   readonly latencyMap: ReadonlyMap<string, number>;
   readonly onAddRelay?: (addr: string) => void;
@@ -24,6 +26,11 @@ const latencyBadge = (ms: number) => {
       {Math.round(ms)}ms
     </span>
   );
+};
+
+const reservationDot = (hasReservation: boolean) => {
+  const color = hasReservation ? "bg-tg-success" : "bg-tg-text-dim";
+  return <span class={`inline-block w-2 h-2 rounded-full ${color}`} />;
 };
 
 const relayStatusDot = (status: string) => {
@@ -132,6 +139,32 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                     </div>
                   </Show>
                 </div>
+              )}
+            </Show>
+
+            <Show when={props.relayCandidateState}>
+              {(candidateState) => (
+                <Show when={candidateState().candidates.size > 0}>
+                  <div class="mb-3 pb-3 border-b border-tg-border">
+                    <div class="flex items-center gap-2 mb-1.5">
+                      <span class="text-tg-text-dim">Relay Candidates</span>
+                      <span class="text-tg-text">
+                        {getReservedCount(candidateState())} reserved / {candidateState().candidates.size} candidate{candidateState().candidates.size !== 1 ? "s" : ""}
+                      </span>
+                    </div>
+                    <For each={getCandidatesByRtt(candidateState()) as readonly { peerId: string; addresses: readonly string[]; rttMs: number | null; hasReservation: boolean }[]}>
+                      {(candidate) => (
+                        <div class="flex items-center gap-2 py-0.5">
+                          {reservationDot(candidate.hasReservation)}
+                          <code class="text-tg-text flex-1">{candidate.peerId.slice(0, 20)}...</code>
+                          <Show when={candidate.rttMs !== null}>
+                            {latencyBadge(candidate.rttMs!)}
+                          </Show>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </Show>
               )}
             </Show>
 

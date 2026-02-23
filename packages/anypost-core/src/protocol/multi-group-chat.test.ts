@@ -1,15 +1,38 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { createMultiGroupChat } from "./multi-group-chat.js";
-import type { MultiGroupChat } from "./multi-group-chat.js";
+import type {
+  MultiGroupChat,
+  MultiGroupChatMessageEvent,
+  JoinRequestEvent,
+} from "./multi-group-chat.js";
+import type { NetworkEvent } from "./plaintext-chat.js";
 import type { RelayPoolState } from "./relay-pool.js";
+import type { GroupInvite } from "./group-invite.js";
 import { generateAccountKey } from "../crypto/identity.js";
+import type { AccountKey } from "../crypto/identity.js";
+import { toHex } from "./action-chain.js";
 
 const waitFor = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
-const GROUP_A = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a01";
-const GROUP_B = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a02";
-const TEST_ACCOUNT_KEY = generateAccountKey();
+const waitUntil = async (condition: () => boolean, timeout = 5000): Promise<void> => {
+  const start = Date.now();
+  while (!condition() && Date.now() - start < timeout) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  if (!condition()) throw new Error(`waitUntil timed out after ${timeout}ms`);
+};
+
+type TestNode = {
+  readonly chat: MultiGroupChat;
+  readonly accountKey: AccountKey;
+  readonly peerId: string;
+  readonly events: NetworkEvent[];
+  readonly messages: MultiGroupChatMessageEvent[];
+  readonly joinRequests: JoinRequestEvent[];
+  readonly approvedGroupIds: string[];
+  publicKeyToPeerId: ReadonlyMap<string, string>;
+};
 
 describe("MultiGroupChat", () => {
   const instances: MultiGroupChat[] = [];
@@ -19,171 +42,151 @@ describe("MultiGroupChat", () => {
     instances.length = 0;
   });
 
-  it("should start and return a peer ID", async () => {
+  const createTestNode = async (accountKey?: AccountKey, peerPrivateKey?: Uint8Array): Promise<TestNode> => {
+    const key = accountKey ?? generateAccountKey();
+
+    const events: NetworkEvent[] = [];
+    const messages: MultiGroupChatMessageEvent[] = [];
+    const joinRequests: JoinRequestEvent[] = [];
+    const approvedGroupIds: string[] = [];
+    let publicKeyToPeerId: ReadonlyMap<string, string> = new Map();
+
     const chat = await createMultiGroupChat({
-      accountKey: TEST_ACCOUNT_KEY,
+      accountKey: key,
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
       useTransports: "tcp",
+      peerPrivateKey,
+      onPublicKeyToPeerIdChange: (map) => {
+        publicKeyToPeerId = map;
+      },
+      onApprovalReceived: (groupId) => {
+        approvedGroupIds.push(groupId);
+      },
     });
+
+    chat.onEvent((evt) => events.push(evt));
+    chat.onMessage((msg) => messages.push(msg));
+    chat.onJoinRequest((evt) => joinRequests.push(evt));
+
     instances.push(chat);
+
+    return {
+      chat,
+      accountKey: key,
+      peerId: chat.peerId,
+      events,
+      messages,
+      joinRequests,
+      approvedGroupIds,
+      get publicKeyToPeerId() {
+        return publicKeyToPeerId;
+      },
+    };
+  };
+
+  const createTestNodeWithPeerKey = async (peerPrivateKey: Uint8Array, accountKey?: AccountKey): Promise<TestNode> =>
+    createTestNode(accountKey, peerPrivateKey);
+
+  it("should start and return a peer ID", async () => {
+    const { chat } = await createTestNode();
 
     expect(chat.peerId).toMatch(/^12D3KooW/);
   });
 
   it("should have no joined groups initially", async () => {
-    const chat = await createMultiGroupChat({
-      accountKey: TEST_ACCOUNT_KEY,
-      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
-      useTransports: "tcp",
-    });
-    instances.push(chat);
+    const { chat } = await createTestNode();
 
     expect(chat.getJoinedGroups()).toEqual([]);
   });
 
   it("should track joined groups", async () => {
-    const chat = await createMultiGroupChat({
-      accountKey: TEST_ACCOUNT_KEY,
-      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
-      useTransports: "tcp",
-    });
-    instances.push(chat);
+    const { chat } = await createTestNode();
 
-    chat.joinGroup(GROUP_A);
-    chat.joinGroup(GROUP_B);
+    const groupA = crypto.randomUUID();
+    const groupB = crypto.randomUUID();
+    chat.joinGroup(groupA);
+    chat.joinGroup(groupB);
 
-    expect(chat.getJoinedGroups()).toEqual([GROUP_A, GROUP_B]);
+    expect(chat.getJoinedGroups()).toEqual([groupA, groupB]);
   });
 
   it("should remove group on leave", async () => {
-    const chat = await createMultiGroupChat({
-      accountKey: TEST_ACCOUNT_KEY,
-      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
-      useTransports: "tcp",
-    });
-    instances.push(chat);
+    const { chat } = await createTestNode();
 
-    chat.joinGroup(GROUP_A);
-    chat.leaveGroup(GROUP_A);
+    const groupA = crypto.randomUUID();
+    chat.joinGroup(groupA);
+    chat.leaveGroup(groupA);
 
     expect(chat.getJoinedGroups()).toEqual([]);
   });
 
   it("should exchange messages on the same group", async () => {
-    const chat1 = await createMultiGroupChat({
-      accountKey: TEST_ACCOUNT_KEY,
-      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
-      useTransports: "tcp",
-    });
-    instances.push(chat1);
+    const node1 = await createTestNode();
+    const node2 = await createTestNode();
 
-    const chat2 = await createMultiGroupChat({
-      accountKey: TEST_ACCOUNT_KEY,
-      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
-      useTransports: "tcp",
-    });
-    instances.push(chat2);
+    const groupA = crypto.randomUUID();
+    node1.chat.joinGroup(groupA);
+    node2.chat.joinGroup(groupA);
 
-    chat1.joinGroup(GROUP_A);
-    chat2.joinGroup(GROUP_A);
-
-    await chat1.connectTo(chat2.multiaddrs[0]);
+    await node1.chat.connectTo(node2.chat.multiaddrs[0]);
     await waitFor(500);
 
-    const received: Array<{ groupId: string; text: string }> = [];
-    chat2.onMessage((msg) => {
-      received.push(msg);
-    });
-
-    await chat1.sendMessage(GROUP_A, "Hello from chat1!");
+    await node1.chat.sendMessage(groupA, "Hello from chat1!");
     await waitFor(500);
 
-    expect(received.length).toBe(1);
-    expect(received[0].text).toBe("Hello from chat1!");
-    expect(received[0].groupId).toBe(GROUP_A);
+    expect(node2.messages.length).toBe(1);
+    expect(node2.messages[0].text).toBe("Hello from chat1!");
+    expect(node2.messages[0].groupId).toBe(groupA);
   });
 
   it("should route messages to correct group", async () => {
-    const chat1 = await createMultiGroupChat({
-      accountKey: TEST_ACCOUNT_KEY,
-      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
-      useTransports: "tcp",
-    });
-    instances.push(chat1);
+    const node1 = await createTestNode();
+    const node2 = await createTestNode();
 
-    const chat2 = await createMultiGroupChat({
-      accountKey: TEST_ACCOUNT_KEY,
-      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
-      useTransports: "tcp",
-    });
-    instances.push(chat2);
+    const groupA = crypto.randomUUID();
+    const groupB = crypto.randomUUID();
+    node1.chat.joinGroup(groupA);
+    node1.chat.joinGroup(groupB);
+    node2.chat.joinGroup(groupA);
+    node2.chat.joinGroup(groupB);
 
-    chat1.joinGroup(GROUP_A);
-    chat1.joinGroup(GROUP_B);
-    chat2.joinGroup(GROUP_A);
-    chat2.joinGroup(GROUP_B);
-
-    await chat1.connectTo(chat2.multiaddrs[0]);
+    await node1.chat.connectTo(node2.chat.multiaddrs[0]);
     await waitFor(500);
 
-    const received: Array<{ groupId: string; text: string }> = [];
-    chat2.onMessage((msg) => {
-      received.push(msg);
-    });
-
-    await chat1.sendMessage(GROUP_A, "Message for A");
-    await chat1.sendMessage(GROUP_B, "Message for B");
+    await node1.chat.sendMessage(groupA, "Message for A");
+    await node1.chat.sendMessage(groupB, "Message for B");
     await waitFor(500);
 
-    expect(received.length).toBe(2);
+    expect(node2.messages.length).toBe(2);
 
-    const groupAMsg = received.find((m) => m.groupId === GROUP_A);
-    const groupBMsg = received.find((m) => m.groupId === GROUP_B);
+    const groupAMsg = node2.messages.find((m) => m.groupId === groupA);
+    const groupBMsg = node2.messages.find((m) => m.groupId === groupB);
     expect(groupAMsg?.text).toBe("Message for A");
     expect(groupBMsg?.text).toBe("Message for B");
   });
 
   it("should not receive messages after leaving a group", async () => {
-    const chat1 = await createMultiGroupChat({
-      accountKey: TEST_ACCOUNT_KEY,
-      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
-      useTransports: "tcp",
-    });
-    instances.push(chat1);
+    const node1 = await createTestNode();
+    const node2 = await createTestNode();
 
-    const chat2 = await createMultiGroupChat({
-      accountKey: TEST_ACCOUNT_KEY,
-      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
-      useTransports: "tcp",
-    });
-    instances.push(chat2);
+    const groupA = crypto.randomUUID();
+    node1.chat.joinGroup(groupA);
+    node2.chat.joinGroup(groupA);
 
-    chat1.joinGroup(GROUP_A);
-    chat2.joinGroup(GROUP_A);
-
-    await chat1.connectTo(chat2.multiaddrs[0]);
+    await node1.chat.connectTo(node2.chat.multiaddrs[0]);
     await waitFor(500);
 
-    const received: Array<{ groupId: string; text: string }> = [];
-    chat2.onMessage((msg) => {
-      received.push(msg);
-    });
-
-    chat2.leaveGroup(GROUP_A);
+    node2.chat.leaveGroup(groupA);
     await waitFor(200);
 
-    await chat1.sendMessage(GROUP_A, "Should not arrive");
+    await node1.chat.sendMessage(groupA, "Should not arrive");
     await waitFor(500);
 
-    expect(received.length).toBe(0);
+    expect(node2.messages.length).toBe(0);
   });
 
   it("should stop cleanly", async () => {
-    const chat = await createMultiGroupChat({
-      accountKey: TEST_ACCOUNT_KEY,
-      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
-      useTransports: "tcp",
-    });
+    const { chat } = await createTestNode();
 
     await chat.stop();
   });
@@ -191,7 +194,7 @@ describe("MultiGroupChat", () => {
   it("should accept onRelayPoolStateChange option without error", async () => {
     const states: RelayPoolState[] = [];
     const chat = await createMultiGroupChat({
-      accountKey: TEST_ACCOUNT_KEY,
+      accountKey: generateAccountKey(),
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
       useTransports: "tcp",
       onRelayPoolStateChange: (state) => states.push(state),
@@ -202,24 +205,341 @@ describe("MultiGroupChat", () => {
   });
 
   it("should expose addRelay method", async () => {
-    const chat = await createMultiGroupChat({
-      accountKey: TEST_ACCOUNT_KEY,
-      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
-      useTransports: "tcp",
-    });
-    instances.push(chat);
+    const { chat } = await createTestNode();
 
-    expect(() => chat.addRelay("/ip4/1.2.3.4/tcp/9090/ws/p2p/12D3KooWTest")).not.toThrow();
+    expect(() =>
+      chat.addRelay("/ip4/1.2.3.4/tcp/9090/ws/p2p/12D3KooWTest"),
+    ).not.toThrow();
   });
 
   it("should stop cleanly with onRelayPoolStateChange configured", async () => {
     const chat = await createMultiGroupChat({
-      accountKey: TEST_ACCOUNT_KEY,
+      accountKey: generateAccountKey(),
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
       useTransports: "tcp",
       onRelayPoolStateChange: () => {},
     });
 
     await chat.stop();
+  });
+
+  it("should store envelopes accessible via getActionChainEnvelopes after createGroup", async () => {
+    const { chat } = await createTestNode();
+
+    const { groupId } = await chat.createGroup("Test Group");
+
+    const envelopes = chat.getActionChainEnvelopes(groupId);
+    expect(envelopes.length).toBe(1);
+    expect(envelopes[0].hash).toBeInstanceOf(Uint8Array);
+  });
+
+  it("should return empty array for unknown group envelopes", async () => {
+    const { chat } = await createTestNode();
+
+    expect(chat.getActionChainEnvelopes("nonexistent-group")).toEqual([]);
+  });
+
+  it("should return all groups' envelopes via getAllActionChainEnvelopes", async () => {
+    const { chat } = await createTestNode();
+
+    const { groupId: id1 } = await chat.createGroup("Group 1");
+    const { groupId: id2 } = await chat.createGroup("Group 2");
+
+    const allEnvelopes = chat.getAllActionChainEnvelopes();
+    expect(allEnvelopes.size).toBe(2);
+    expect(allEnvelopes.get(id1)?.length).toBe(1);
+    expect(allEnvelopes.get(id2)?.length).toBe(1);
+  });
+
+  it("should clear action chain envelopes when leaving a group", async () => {
+    const { chat } = await createTestNode();
+
+    const { groupId } = await chat.createGroup("Test Group");
+    expect(chat.getActionChainEnvelopes(groupId).length).toBe(1);
+
+    chat.leaveGroup(groupId);
+    expect(chat.getActionChainEnvelopes(groupId)).toEqual([]);
+  });
+
+  it("should accept onRelayCandidateStateChange option without error", async () => {
+    const chat = await createMultiGroupChat({
+      accountKey: generateAccountKey(),
+      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+      useTransports: "tcp",
+      onRelayCandidateStateChange: () => {},
+    });
+    instances.push(chat);
+
+    expect(chat.peerId).toMatch(/^12D3KooW/);
+  });
+
+  it("should rebuild action chain state from loaded envelopes", async () => {
+    const node1 = await createTestNode();
+
+    const { groupId } = await node1.chat.createGroup("Persisted Group");
+    const envelopes = node1.chat.getActionChainEnvelopes(groupId);
+
+    const node2 = await createTestNode(node1.accountKey);
+
+    node2.chat.joinGroup(groupId);
+    node2.chat.loadActionChain(groupId, envelopes);
+
+    const state = node2.chat.getActionChainState(groupId);
+    expect(state).not.toBeNull();
+    expect(state!.groupName).toBe("Persisted Group");
+  });
+
+  it("should complete full invite → join → approve flow between two nodes", async () => {
+    const admin = await createTestNode();
+    const joiner = await createTestNode();
+
+    const { groupId, genesisEnvelope } = await admin.chat.createGroup("Invite Test");
+
+    await joiner.chat.connectTo(admin.chat.multiaddrs[0]);
+    await waitFor(500);
+
+    const joinRequestReceived = new Promise<JoinRequestEvent>((resolve) => {
+      admin.chat.onJoinRequest((evt) => resolve(evt));
+    });
+
+    const invite: GroupInvite = {
+      genesisEnvelope,
+      relayAddr: admin.chat.multiaddrs[0].toString(),
+      adminPeerId: admin.peerId,
+    };
+    await joiner.chat.joinViaInvite(invite);
+    await waitFor(500);
+
+    const joinRequest = await joinRequestReceived;
+    expect(joinRequest.groupId).toBe(groupId);
+
+    await admin.chat.approveJoin(groupId, joinRequest.requesterPublicKey);
+    await waitFor(500);
+
+    const adminState = admin.chat.getActionChainState(groupId);
+    const joinerState = joiner.chat.getActionChainState(groupId);
+
+    expect(adminState).not.toBeNull();
+    expect(joinerState).not.toBeNull();
+    expect(adminState!.members.size).toBe(2);
+    expect(joinerState!.members.size).toBe(2);
+
+    const adminEnvelopes = admin.chat.getActionChainEnvelopes(groupId);
+    const joinerEnvelopes = joiner.chat.getActionChainEnvelopes(groupId);
+    expect(adminEnvelopes.length).toBe(2);
+    expect(joinerEnvelopes.length).toBe(2);
+
+    expect(joiner.approvedGroupIds).toContain(groupId);
+
+    const adminKeyHex = toHex(new Uint8Array(admin.accountKey.publicKey));
+    expect(joiner.publicKeyToPeerId.get(adminKeyHex)).toBe(admin.peerId);
+  });
+
+  it("should remove a member from the group when admin calls removeMember", async () => {
+    const admin = await createTestNode();
+    const joiner = await createTestNode();
+
+    const { groupId, genesisEnvelope } = await admin.chat.createGroup("Remove Test");
+
+    await joiner.chat.connectTo(admin.chat.multiaddrs[0]);
+    await waitFor(500);
+
+    const joinRequestReceived = new Promise<JoinRequestEvent>((resolve) => {
+      admin.chat.onJoinRequest((evt) => resolve(evt));
+    });
+
+    const invite: GroupInvite = {
+      genesisEnvelope,
+      relayAddr: admin.chat.multiaddrs[0].toString(),
+      adminPeerId: admin.peerId,
+    };
+    await joiner.chat.joinViaInvite(invite);
+    await waitFor(500);
+
+    const joinRequest = await joinRequestReceived;
+    await admin.chat.approveJoin(groupId, joinRequest.requesterPublicKey);
+    await waitFor(500);
+
+    expect(admin.chat.getActionChainState(groupId)!.members.size).toBe(2);
+
+    await admin.chat.removeMember(groupId, joinRequest.requesterPublicKey);
+    await waitFor(500);
+
+    const adminState = admin.chat.getActionChainState(groupId);
+    expect(adminState!.members.size).toBe(1);
+
+    const joinerState = joiner.chat.getActionChainState(groupId);
+    expect(joinerState!.members.size).toBe(1);
+  });
+
+  it("should produce a stable peer ID when given the same peerPrivateKey", async () => {
+    const node1 = await createTestNode();
+    const peerPrivateKey = node1.chat.getPeerPrivateKey();
+    const firstPeerId = node1.peerId;
+    await node1.chat.stop();
+    instances.splice(instances.indexOf(node1.chat), 1);
+
+    const node2 = await createTestNodeWithPeerKey(peerPrivateKey);
+
+    expect(node2.peerId).toBe(firstPeerId);
+  });
+
+  it("should expose raw peer private key bytes", async () => {
+    const { chat } = await createTestNode();
+
+    const rawKey = chat.getPeerPrivateKey();
+
+    expect(rawKey).toBeInstanceOf(Uint8Array);
+    expect(rawKey.length).toBe(64);
+  });
+
+  it("should seed publicKeyToPeerId from initial map", async () => {
+    const initialMap = new Map<string, string>([
+      ["aabbcc", "12D3KooWFake1"],
+      ["ddeeff", "12D3KooWFake2"],
+    ]);
+
+    let publicKeyToPeerId: ReadonlyMap<string, string> = new Map();
+
+    const chat = await createMultiGroupChat({
+      accountKey: generateAccountKey(),
+      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+      useTransports: "tcp",
+      initialPublicKeyToPeerId: initialMap,
+      onPublicKeyToPeerIdChange: (map) => {
+        publicKeyToPeerId = map;
+      },
+    });
+    instances.push(chat);
+
+    expect(publicKeyToPeerId.get("aabbcc")).toBe("12D3KooWFake1");
+    expect(publicKeyToPeerId.get("ddeeff")).toBe("12D3KooWFake2");
+  });
+
+  it("should attempt to dial admin peer after joinViaInvite", async () => {
+    const admin = await createTestNode();
+    const joiner = await createTestNode();
+
+    const { genesisEnvelope } = await admin.chat.createGroup("Dial Test");
+
+    const invite: GroupInvite = {
+      genesisEnvelope,
+      relayAddr: admin.chat.multiaddrs[0].toString(),
+      adminPeerId: admin.peerId,
+    };
+    await joiner.chat.joinViaInvite(invite);
+    await waitFor(500);
+
+    const dialAttempts = joiner.events.filter((e) => e.type === "dial-attempt");
+    expect(dialAttempts.length).toBeGreaterThanOrEqual(1);
+    expect(dialAttempts.some((e) => e.detail.includes(admin.peerId.slice(0, 16)))).toBe(true);
+  });
+
+  it("should sync missed action chain envelopes when a group member reconnects", { timeout: 10_000 }, async () => {
+    const admin = await createTestNode();
+    const joinerAccountKey = generateAccountKey();
+    const joiner1 = await createTestNode(joinerAccountKey);
+
+    const { groupId, genesisEnvelope } = await admin.chat.createGroup("Sync Test");
+
+    await joiner1.chat.connectTo(admin.chat.multiaddrs[0]);
+    await waitFor(500);
+
+    const joinRequestReceived = new Promise<JoinRequestEvent>((resolve) => {
+      admin.chat.onJoinRequest((evt) => resolve(evt));
+    });
+
+    const invite: GroupInvite = {
+      genesisEnvelope,
+      relayAddr: admin.chat.multiaddrs[0].toString(),
+      adminPeerId: admin.peerId,
+    };
+    await joiner1.chat.joinViaInvite(invite);
+    const joinRequest = await joinRequestReceived;
+    await admin.chat.approveJoin(groupId, joinRequest.requesterPublicKey);
+    await waitUntil(() => joiner1.chat.getActionChainEnvelopes(groupId).length >= 2);
+
+    const joinerPeerKey = joiner1.chat.getPeerPrivateKey();
+    const savedGenesis = joiner1.chat.getActionChainEnvelopes(groupId)[0];
+
+    await joiner1.chat.stop();
+    instances.splice(instances.indexOf(joiner1.chat), 1);
+
+    const joiner2 = await createTestNodeWithPeerKey(joinerPeerKey, joinerAccountKey);
+    joiner2.chat.joinGroup(groupId);
+    joiner2.chat.loadActionChain(groupId, [savedGenesis]);
+    expect(joiner2.chat.getActionChainEnvelopes(groupId).length).toBe(1);
+
+    await joiner2.chat.connectTo(admin.chat.multiaddrs[0]);
+    await waitUntil(() => joiner2.chat.getActionChainEnvelopes(groupId).length >= 2);
+
+    expect(joiner2.chat.getActionChainState(groupId)!.members.size).toBe(2);
+  });
+
+  it("should catch up on missed messages when a peer reconnects", { timeout: 15_000 }, async () => {
+    const alice = await createTestNode();
+    const bobAccountKey = generateAccountKey();
+    const bob1 = await createTestNode(bobAccountKey);
+
+    const { groupId, genesisEnvelope } = await alice.chat.createGroup("Catchup Test");
+
+    await bob1.chat.connectTo(alice.chat.multiaddrs[0]);
+    await waitFor(500);
+
+    const joinRequestReceived = new Promise<JoinRequestEvent>((resolve) => {
+      alice.chat.onJoinRequest((evt) => resolve(evt));
+    });
+    const invite: GroupInvite = {
+      genesisEnvelope,
+      relayAddr: alice.chat.multiaddrs[0].toString(),
+      adminPeerId: alice.peerId,
+    };
+    await bob1.chat.joinViaInvite(invite);
+    const joinRequest = await joinRequestReceived;
+    await alice.chat.approveJoin(groupId, joinRequest.requesterPublicKey);
+    await waitUntil(() => bob1.chat.getActionChainEnvelopes(groupId).length >= 2);
+
+    const bobPeerKey = bob1.chat.getPeerPrivateKey();
+    const bobEnvelopes = bob1.chat.getActionChainEnvelopes(groupId);
+
+    await bob1.chat.stop();
+    instances.splice(instances.indexOf(bob1.chat), 1);
+
+    for (let i = 0; i < 10; i++) {
+      await alice.chat.sendMessage(groupId, `missed-${i}`);
+    }
+
+    await waitFor(7000);
+
+    const bob2 = await createTestNodeWithPeerKey(bobPeerKey, bobAccountKey);
+    bob2.chat.joinGroup(groupId);
+    bob2.chat.loadActionChain(groupId, bobEnvelopes);
+
+    await bob2.chat.connectTo(alice.chat.multiaddrs[0]);
+    await waitUntil(() => bob2.messages.length >= 10);
+
+    for (let i = 0; i < 10; i++) {
+      expect(bob2.messages.some((m) => m.text === `missed-${i}`)).toBe(true);
+    }
+  });
+
+  it("should map admin publicKey to peerId immediately on joinViaInvite", async () => {
+    const admin = await createTestNode();
+    const joiner = await createTestNode();
+
+    const { genesisEnvelope } = await admin.chat.createGroup("PeerId Test");
+
+    await joiner.chat.connectTo(admin.chat.multiaddrs[0]);
+    await waitFor(500);
+
+    const invite: GroupInvite = {
+      genesisEnvelope,
+      relayAddr: admin.chat.multiaddrs[0].toString(),
+      adminPeerId: admin.peerId,
+    };
+    await joiner.chat.joinViaInvite(invite);
+
+    const adminKeyHex = toHex(new Uint8Array(admin.accountKey.publicKey));
+    expect(joiner.publicKeyToPeerId.get(adminKeyHex)).toBe(admin.peerId);
   });
 });

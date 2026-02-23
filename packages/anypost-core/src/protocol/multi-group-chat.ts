@@ -1,10 +1,11 @@
 import { createLibp2p } from "libp2p";
+import { privateKeyFromRaw, generateKeyPair } from "@libp2p/crypto/keys";
 import type { PubSub } from "@libp2p/interface";
 import { tcp } from "@libp2p/tcp";
 import { webSockets } from "@libp2p/websockets";
 import * as wsFilters from "@libp2p/websockets/filters";
 import { webRTC } from "@libp2p/webrtc";
-import { circuitRelayTransport } from "@libp2p/circuit-relay-v2";
+import { circuitRelayTransport, RELAY_V2_HOP_CODEC } from "@libp2p/circuit-relay-v2";
 import { noise } from "@chainsafe/libp2p-noise";
 import { yamux } from "@chainsafe/libp2p-yamux";
 import { gossipsub } from "@chainsafe/libp2p-gossipsub";
@@ -27,18 +28,26 @@ import { pubsubPeerDiscovery } from "@libp2p/pubsub-peer-discovery";
 import { createGroupDiscoveryManager } from "./group-discovery.js";
 import type { GroupDiscoveryManager } from "./group-discovery.js";
 import type { GroupDiscoveryState } from "./group-discovery-state.js";
-import { createEncryptedMessage } from "../shared/factories.js";
 import type { WireMessage } from "../shared/schemas.js";
 import { IPFS_BOOTSTRAP_WSS_PEERS } from "../libp2p/bootstrap-peers.js";
 import type { ChatMessageEvent, PeerInfo, NetworkStatus, NetworkEvent } from "./plaintext-chat.js";
 import type { AccountKey } from "../crypto/identity.js";
 import { GENESIS_HASH, toHex } from "./action-chain.js";
-import type { ActionChainGroupState, SignedActionEnvelope } from "./action-chain.js";
+import type { ActionChainGroupState, SignedActionEnvelope, SignedAction } from "./action-chain.js";
 import { createSignedActionEnvelope, verifyAndDecodeAction } from "./action-signing.js";
 import { createActionDagState, appendAction, getTips, topologicalOrder } from "./action-dag.js";
 import type { ActionDagState } from "./action-dag.js";
 import { createActionChainGroupState, deriveGroupState } from "./action-chain-state.js";
 import type { GroupInvite } from "./group-invite.js";
+import {
+  createRelayCandidateState,
+  addCandidate,
+  removeCandidate,
+  updateRtt,
+  markReservationActive,
+  markReservationLost,
+} from "./relay-candidate-state.js";
+import type { RelayCandidateState } from "./relay-candidate-state.js";
 
 export type MultiGroupChatMessageEvent = ChatMessageEvent & {
   readonly groupId: string;
@@ -47,7 +56,7 @@ export type MultiGroupChatMessageEvent = ChatMessageEvent & {
 type MessageListener = (message: MultiGroupChatMessageEvent) => void;
 type EventListener = (event: NetworkEvent) => void;
 
-type JoinRequestEvent = {
+export type JoinRequestEvent = {
   readonly groupId: string;
   readonly requesterPublicKey: Uint8Array;
   readonly senderPeerId: string;
@@ -58,6 +67,7 @@ type JoinRequestListener = (event: JoinRequestEvent) => void;
 export type MultiGroupChat = {
   readonly peerId: string;
   readonly multiaddrs: readonly Multiaddr[];
+  readonly getPeerPrivateKey: () => Uint8Array;
   readonly joinGroup: (groupId: string) => void;
   readonly leaveGroup: (groupId: string) => void;
   readonly getJoinedGroups: () => readonly string[];
@@ -65,8 +75,13 @@ export type MultiGroupChat = {
   readonly createGroup: (name: string) => Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }>;
   readonly joinViaInvite: (invite: GroupInvite) => Promise<{ groupId: string }>;
   readonly approveJoin: (groupId: string, memberPublicKey: Uint8Array) => Promise<void>;
+  readonly removeMember: (groupId: string, memberPublicKey: Uint8Array) => Promise<void>;
   readonly requestJoin: (groupId: string) => Promise<void>;
   readonly getActionChainState: (groupId: string) => ActionChainGroupState | null;
+  readonly getActionChainEnvelopes: (groupId: string) => readonly SignedActionEnvelope[];
+  readonly getAllActionChainEnvelopes: () => ReadonlyMap<string, readonly SignedActionEnvelope[]>;
+  readonly loadActionChain: (groupId: string, envelopes: readonly SignedActionEnvelope[]) => void;
+  readonly getPublicKeyToPeerId: () => ReadonlyMap<string, string>;
   readonly onMessage: (listener: MessageListener) => () => void;
   readonly onJoinRequest: (listener: JoinRequestListener) => () => void;
   readonly onPeerChange: (listener: (count: number) => void) => () => void;
@@ -81,28 +96,38 @@ export type MultiGroupChat = {
 
 type CreateMultiGroupChatOptions = {
   readonly accountKey: AccountKey;
+  readonly peerPrivateKey?: Uint8Array;
+  readonly initialPublicKeyToPeerId?: ReadonlyMap<string, string>;
   readonly listenAddresses?: readonly string[];
   readonly bootstrapPeers?: readonly string[];
   readonly useTransports?: "tcp" | "websocket";
   readonly onRelayPoolStateChange?: (state: RelayPoolState) => void;
   readonly onGroupDiscoveryStateChange?: (state: GroupDiscoveryState) => void;
+  readonly onRelayCandidateStateChange?: (state: RelayCandidateState) => void;
+  readonly onPublicKeyToPeerIdChange?: (map: ReadonlyMap<string, string>) => void;
   readonly onApprovalReceived?: (groupId: string) => void;
 };
-
-const DEFAULT_CHANNEL_ID = "b1ffbc99-9c0b-4ef8-bb6d-6bb9bd380a22";
 
 export const createMultiGroupChat = async (
   options: CreateMultiGroupChatOptions,
 ): Promise<MultiGroupChat> => {
   const {
     accountKey,
+    peerPrivateKey: rawPeerPrivateKey,
+    initialPublicKeyToPeerId,
     listenAddresses = [],
     bootstrapPeers: initialBootstrapPeers = [],
     useTransports = "websocket",
     onRelayPoolStateChange,
     onGroupDiscoveryStateChange,
+    onRelayCandidateStateChange,
+    onPublicKeyToPeerIdChange,
     onApprovalReceived,
   } = options;
+
+  const privateKey = rawPeerPrivateKey
+    ? privateKeyFromRaw(new Uint8Array(rawPeerPrivateKey))
+    : await generateKeyPair("Ed25519");
 
   const relayPeers = [...initialBootstrapPeers];
 
@@ -129,6 +154,7 @@ export const createMultiGroupChat = async (
 
   const node = isBrowser
     ? await createLibp2p({
+        privateKey,
         addresses: { listen: [...listenAddresses, "/p2p-circuit", "/webrtc"] },
         transports: [
           webSockets({ filter: wsFilters.all }),
@@ -157,6 +183,7 @@ export const createMultiGroupChat = async (
         },
       })
     : await createLibp2p({
+        privateKey,
         addresses: { listen: [...listenAddresses] },
         transports: [tcp()],
         connectionEncrypters: [noise()],
@@ -181,6 +208,39 @@ export const createMultiGroupChat = async (
 
   const actionDags = new Map<string, ActionDagState>();
   const actionChainStates = new Map<string, ActionChainGroupState>();
+  const actionEnvelopes = new Map<string, SignedActionEnvelope[]>();
+  const publicKeyToPeerId = new Map<string, string>(initialPublicKeyToPeerId ?? []);
+
+  const KEEP_ALIVE_TAG = "keep-alive-group-member";
+
+  const tagGroupMemberKeepAlive = (memberPeerId: string) => {
+    if (memberPeerId === node.peerId.toString()) return;
+    try {
+      const remote = peerIdFromString(memberPeerId);
+      node.peerStore.merge(remote, {
+        tags: { [KEEP_ALIVE_TAG]: { value: 100 } },
+      }).catch(() => {});
+    } catch {
+      // Invalid peer ID — skip tagging
+    }
+  };
+
+  const notifyPublicKeyToPeerIdChange = () => {
+    onPublicKeyToPeerIdChange?.(new Map(publicKeyToPeerId));
+    for (const memberPeerId of publicKeyToPeerId.values()) {
+      tagGroupMemberKeepAlive(memberPeerId);
+    }
+  };
+
+  publicKeyToPeerId.set(toHex(new Uint8Array(accountKey.publicKey)), node.peerId.toString());
+  notifyPublicKeyToPeerIdChange();
+
+  let relayCandidateState = createRelayCandidateState();
+
+  const updateRelayCandidateState = (next: RelayCandidateState) => {
+    relayCandidateState = next;
+    onRelayCandidateStateChange?.(relayCandidateState);
+  };
 
   const getOrCreateDag = (groupId: string): ActionDagState => {
     const existing = actionDags.get(groupId);
@@ -201,25 +261,34 @@ export const createMultiGroupChat = async (
     await pubsub.publish(topic, encodeWireMessage(wireMessage));
   };
 
-  const processSignedAction = (groupId: string, envelope: SignedActionEnvelope): boolean => {
+  const processSignedAction = (groupId: string, envelope: SignedActionEnvelope, senderPeerId?: string): SignedAction | null => {
     const result = verifyAndDecodeAction(envelope);
     if (!result.success) {
       emit("info", `Rejected action in ${groupId.slice(0, 8)}...: ${result.error.message}`);
-      return false;
+      return null;
     }
 
     const action = result.data;
 
+    if (senderPeerId) {
+      const authorHex = toHex(action.authorPublicKey);
+      publicKeyToPeerId.set(authorHex, senderPeerId);
+      notifyPublicKeyToPeerIdChange();
+    }
+
     if (action.groupId !== groupId) {
       emit("info", `Rejected cross-group action in ${groupId.slice(0, 8)}...`);
-      return false;
+      return null;
     }
 
     const dag = getOrCreateDag(groupId);
     const newDag = appendAction(dag, action);
-    if (newDag === dag) return false;
+    if (newDag === dag) return null;
 
     actionDags.set(groupId, newDag);
+
+    const existing = actionEnvelopes.get(groupId) ?? [];
+    actionEnvelopes.set(groupId, [...existing, envelope]);
 
     const previousState = actionChainStates.get(groupId);
     const ownKeyHex = toHex(new Uint8Array(accountKey.publicKey));
@@ -236,7 +305,7 @@ export const createMultiGroupChat = async (
       }
     }
 
-    return true;
+    return action;
   };
 
   const emit = (type: NetworkEvent["type"], detail: string) => {
@@ -258,20 +327,89 @@ export const createMultiGroupChat = async (
     peerChangeListeners.forEach((l) => l(count));
   };
 
+  const isWebSocketAddress = (addr: string): boolean =>
+    addr.includes("/ws/") || addr.includes("/wss/");
+
+  const extractRelayPeerId = (circuitAddr: string): string | null => {
+    const base = extractRelayBaseAddress(circuitAddr);
+    if (!base) return null;
+    const peerPrefix = "/p2p/";
+    const idx = base.lastIndexOf(peerPrefix);
+    if (idx === -1) return null;
+    return base.slice(idx + peerPrefix.length);
+  };
+
+  if (isBrowser) {
+    node.addEventListener("peer:identify", (evt: CustomEvent) => {
+      const detail = evt.detail as {
+        peerId: { toString(): string };
+        protocols: string[];
+        listenAddrs: Array<{ toString(): string }>;
+      };
+
+      const hasHop = detail.protocols.includes(RELAY_V2_HOP_CODEC);
+      if (!hasHop) return;
+
+      const remotePeerId = detail.peerId.toString();
+      const wsAddresses = detail.listenAddrs
+        .map((ma) => ma.toString())
+        .filter(isWebSocketAddress);
+
+      updateRelayCandidateState(
+        addCandidate(relayCandidateState, remotePeerId, wsAddresses, Date.now()),
+      );
+
+      for (const addr of wsAddresses) {
+        const fullAddr = `${addr}/p2p/${remotePeerId}`;
+        if (!relayPeers.includes(fullAddr)) {
+          relayPeers.push(fullAddr);
+        }
+      }
+
+      emit("relay-candidate", `Relay candidate: ${peerId(detail.peerId)}... (${wsAddresses.length} WS addr)`);
+
+      const services = node.services as Record<string, unknown>;
+      const pingService = services.ping as PingService | undefined;
+      if (pingService) {
+        const remote = peerIdFromString(remotePeerId);
+        pingService.ping(remote).then((rttMs) => {
+          updateRelayCandidateState(
+            updateRtt(relayCandidateState, remotePeerId, rttMs),
+          );
+        }).catch(() => {});
+      }
+    });
+  }
+
   node.addEventListener("peer:connect", (evt: CustomEvent) => {
     const id = evt.detail as { toString(): string };
+    const remotePeerId = id.toString();
     const conn = node.getConnections().find(
-      (c) => c.remotePeer.toString() === id.toString(),
+      (c) => c.remotePeer.toString() === remotePeerId,
     );
     const addr = conn?.remoteAddr.toString() ?? "unknown";
     const transport = transportLabel(addr);
     emit("peer-connect", `${peerId(id)}... connected via ${transport} (${addr})`);
     notifyPeerChange();
+
+    const isMember = [...publicKeyToPeerId.values()].includes(remotePeerId);
+    if (isMember) {
+      tagGroupMemberKeepAlive(remotePeerId);
+    }
   });
 
   node.addEventListener("peer:disconnect", (evt: CustomEvent) => {
     const id = evt.detail as { toString(): string };
+    const disconnectedId = id.toString();
     emit("peer-disconnect", `${peerId(id)}... disconnected`);
+
+    dialedPeers.delete(disconnectedId);
+
+    if (relayCandidateState.candidates.has(disconnectedId)) {
+      const withLost = markReservationLost(relayCandidateState, disconnectedId);
+      updateRelayCandidateState(removeCandidate(withLost, disconnectedId));
+    }
+
     notifyPeerChange();
   });
 
@@ -285,6 +423,13 @@ export const createMultiGroupChat = async (
       if (baseAddr && !relayPeers.includes(baseAddr)) {
         relayPeers.push(baseAddr);
         emit("relay-harvest", `Auto-harvested relay: ${baseAddr.slice(0, 50)}...`);
+      }
+
+      const relayId = extractRelayPeerId(circuitAddr);
+      if (relayId && relayCandidateState.candidates.has(relayId)) {
+        updateRelayCandidateState(
+          markReservationActive(relayCandidateState, relayId),
+        );
       }
     }
 
@@ -302,9 +447,27 @@ export const createMultiGroupChat = async (
       peerId: { toString(): string };
       subscriptions: ReadonlyArray<{ topic: string; subscribe: boolean }>;
     };
+    const remotePeerId = detail.peerId.toString();
+
     for (const sub of detail.subscriptions) {
       const action = sub.subscribe ? "subscribed to" : "unsubscribed from";
       emit("subscription-change", `${peerId(detail.peerId)}... ${action} ${sub.topic.slice(0, 24)}...`);
+    }
+
+    const isMember = [...publicKeyToPeerId.values()].includes(remotePeerId);
+    if (!isMember) return;
+
+    for (const sub of detail.subscriptions) {
+      if (!sub.subscribe) continue;
+      const groupId = topicToGroupId.get(sub.topic);
+      if (!groupId) continue;
+      const envelopes = actionEnvelopes.get(groupId);
+      if (!envelopes || envelopes.length === 0) continue;
+
+      for (const envelope of envelopes) {
+        publishEnvelope(groupId, envelope).catch(() => {});
+      }
+      emit("sync", `Synced ${envelopes.length} action(s) to ${peerId(detail.peerId)}... for group ${groupId.slice(0, 8)}...`);
     }
   });
 
@@ -332,9 +495,11 @@ export const createMultiGroupChat = async (
   };
 
   const handlePubsubMessage = (event: CustomEvent) => {
-    const detail = event.detail as { topic: string; data: Uint8Array };
+    const detail = event.detail as { topic: string; data: Uint8Array; from?: { toString(): string } };
     const matchedGroupId = topicToGroupId.get(detail.topic);
     if (matchedGroupId === undefined) return;
+
+    const senderPeerId = detail.from?.toString() ?? "unknown";
 
     const result = decodeWireMessage(detail.data);
     if (!result.success) return;
@@ -342,24 +507,43 @@ export const createMultiGroupChat = async (
     const wireMessage = result.data;
 
     if (wireMessage.type === "signed_action") {
-      const accepted = processSignedAction(matchedGroupId, {
-        signedBytes: wireMessage.signedBytes,
-        signature: wireMessage.signature,
-        hash: wireMessage.hash,
-      });
-      if (accepted) {
+      const action = processSignedAction(
+        matchedGroupId,
+        { signedBytes: wireMessage.signedBytes, signature: wireMessage.signature, hash: wireMessage.hash },
+        senderPeerId !== "unknown" ? senderPeerId : undefined,
+      );
+      if (action) {
         emit("pubsub-message", `Signed action accepted in group ${matchedGroupId.slice(0, 8)}...`);
+
+        if (action.payload.type === "message") {
+          const authorHex = toHex(action.authorPublicKey);
+          const chatMessage: MultiGroupChatMessageEvent = {
+            id: action.id,
+            senderPeerId: publicKeyToPeerId.get(authorHex) ?? senderPeerId,
+            senderDisplayName: undefined,
+            text: action.payload.text,
+            timestamp: action.timestamp,
+            groupId: matchedGroupId,
+          };
+          messageListeners.forEach((listener) => listener(chatMessage));
+        }
       }
       return;
     }
 
     if (wireMessage.type === "join_request") {
+      const requesterHex = toHex(wireMessage.requesterPublicKey);
+      if (senderPeerId !== "unknown") {
+        publicKeyToPeerId.set(requesterHex, senderPeerId);
+        notifyPublicKeyToPeerIdChange();
+      }
+
       emit("pubsub-message", `Join request for group ${matchedGroupId.slice(0, 8)}...`);
       joinRequestListeners.forEach((listener) =>
         listener({
           groupId: matchedGroupId,
           requesterPublicKey: wireMessage.requesterPublicKey,
-          senderPeerId: "unknown",
+          senderPeerId,
         }),
       );
       return;
@@ -421,8 +605,27 @@ export const createMultiGroupChat = async (
       })
     : null;
 
+  const MEMBER_RECONNECT_INTERVAL = 30_000;
+
+  const reconnectDisconnectedMembers = () => {
+    const ownId = node.peerId.toString();
+    const connectedIds = new Set(node.getPeers().map((p) => p.toString()));
+
+    for (const memberPeerId of publicKeyToPeerId.values()) {
+      if (memberPeerId === ownId) continue;
+      tagGroupMemberKeepAlive(memberPeerId);
+      if (connectedIds.has(memberPeerId)) continue;
+      attemptDirectConnect(memberPeerId);
+    }
+  };
+
+  const memberReconnectInterval = isBrowser
+    ? setInterval(reconnectDisconnectedMembers, MEMBER_RECONNECT_INTERVAL)
+    : null;
+
   return {
     peerId: node.peerId.toString(),
+    getPeerPrivateKey: () => new Uint8Array(privateKey.raw),
     get multiaddrs() {
       return node.getMultiaddrs();
     },
@@ -442,29 +645,27 @@ export const createMultiGroupChat = async (
       pubsub.unsubscribe(topic);
       topicToGroupId.delete(topic);
       joinedGroups.splice(idx, 1);
+      actionDags.delete(groupId);
+      actionChainStates.delete(groupId);
+      actionEnvelopes.delete(groupId);
       groupDiscoveryManager?.leaveGroup(groupId);
       emit("info", `Left group ${groupId.slice(0, 8)}...`);
     },
     getJoinedGroups: () => [...joinedGroups],
-    sendMessage: async (groupId: string, text: string, displayName?: string) => {
-      const topic = groupTopic(groupId);
-      const payload = createEncryptedMessage({
-        id: crypto.randomUUID(),
+    sendMessage: async (groupId: string, text: string, _displayName?: string) => {
+      const dag = getOrCreateDag(groupId);
+      const tips = getTips(dag);
+      const parentHashes = tips.length > 0 ? tips : [GENESIS_HASH];
+
+      const envelope = createSignedActionEnvelope({
+        accountKey,
         groupId,
-        channelId: DEFAULT_CHANNEL_ID,
-        senderPeerId: node.peerId.toString(),
-        senderDisplayName: displayName,
-        epoch: 0,
-        ciphertext: new TextEncoder().encode(text),
-        timestamp: Date.now(),
+        parentHashes,
+        payload: { type: "message", text },
       });
 
-      const wireMessage: WireMessage = {
-        type: "encrypted_message",
-        payload,
-      };
-
-      await pubsub.publish(topic, encodeWireMessage(wireMessage));
+      processSignedAction(groupId, envelope);
+      await publishEnvelope(groupId, envelope);
     },
     createGroup: async (name: string): Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }> => {
       const groupId = crypto.randomUUID();
@@ -507,6 +708,10 @@ export const createMultiGroupChat = async (
 
       processSignedAction(groupId, invite.genesisEnvelope);
 
+      const authorHex = toHex(verifyResult.data.authorPublicKey);
+      publicKeyToPeerId.set(authorHex, invite.adminPeerId);
+      notifyPublicKeyToPeerIdChange();
+
       if (!joinedGroups.includes(groupId)) {
         const topic = groupTopic(groupId);
         topicToGroupId.set(topic, groupId);
@@ -515,6 +720,23 @@ export const createMultiGroupChat = async (
         groupDiscoveryManager?.joinGroup(groupId);
         emit("info", `Joined group ${groupId.slice(0, 8)}... via invite`);
       }
+
+      const isConnectedToAdmin = node.getPeers().some((p) => p.toString() === invite.adminPeerId);
+      if (!isConnectedToAdmin) {
+        for (const bp of relayPeers) {
+          try {
+            const circuitAddr = multiaddr(`${bp}/p2p-circuit/p2p/${invite.adminPeerId}`);
+            emit("dial-attempt", `Dialing admin ${peerId({ toString: () => invite.adminPeerId })}... via circuit relay`);
+            await node.dial(circuitAddr);
+            emit("dial-success", `Connected to admin ${peerId({ toString: () => invite.adminPeerId })}...`);
+            break;
+          } catch {
+            emit("dial-failure", `Failed circuit relay dial to admin`);
+          }
+        }
+      }
+
+      await new Promise((r) => setTimeout(r, 1500));
 
       const topic = groupTopic(groupId);
       const wireMessage: WireMessage = {
@@ -550,6 +772,28 @@ export const createMultiGroupChat = async (
 
       emit("info", `Approved member ${toHex(memberPublicKey).slice(0, 16)}... in group ${groupId.slice(0, 8)}...`);
     },
+    removeMember: async (groupId: string, memberPublicKey: Uint8Array): Promise<void> => {
+      const dag = actionDags.get(groupId);
+      if (!dag) throw new Error("No action chain for this group");
+
+      const tips = getTips(dag);
+      const parentHashes = tips.length > 0 ? tips : [GENESIS_HASH];
+
+      const envelope = createSignedActionEnvelope({
+        accountKey,
+        groupId,
+        parentHashes,
+        payload: {
+          type: "member-removed",
+          memberPublicKey: new Uint8Array(memberPublicKey),
+        },
+      });
+
+      processSignedAction(groupId, envelope);
+      await publishEnvelope(groupId, envelope);
+
+      emit("info", `Removed member ${toHex(memberPublicKey).slice(0, 16)}... from group ${groupId.slice(0, 8)}...`);
+    },
     requestJoin: async (groupId: string): Promise<void> => {
       const topic = groupTopic(groupId);
       const wireMessage: WireMessage = {
@@ -562,6 +806,16 @@ export const createMultiGroupChat = async (
     },
     getActionChainState: (groupId: string): ActionChainGroupState | null =>
       actionChainStates.get(groupId) ?? null,
+    getActionChainEnvelopes: (groupId: string): readonly SignedActionEnvelope[] =>
+      actionEnvelopes.get(groupId) ?? [],
+    getAllActionChainEnvelopes: (): ReadonlyMap<string, readonly SignedActionEnvelope[]> =>
+      new Map(actionEnvelopes),
+    loadActionChain: (groupId: string, envelopes: readonly SignedActionEnvelope[]) => {
+      for (const envelope of envelopes) {
+        processSignedAction(groupId, envelope);
+      }
+    },
+    getPublicKeyToPeerId: (): ReadonlyMap<string, string> => new Map(publicKeyToPeerId),
     onMessage: (listener: MessageListener) => {
       messageListeners.push(listener);
       return () => {
@@ -668,6 +922,7 @@ export const createMultiGroupChat = async (
       }
     },
     stop: async () => {
+      if (memberReconnectInterval) clearInterval(memberReconnectInterval);
       relayPoolManager?.stop();
       groupDiscoveryManager?.stop();
       pubsub.removeEventListener("message", handlePubsubMessage);
@@ -682,6 +937,7 @@ export const createMultiGroupChat = async (
       eventListeners.length = 0;
       actionDags.clear();
       actionChainStates.clear();
+      actionEnvelopes.clear();
       await node.stop();
     },
   };

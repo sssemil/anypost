@@ -6,6 +6,7 @@ import { verifyAndDecodeAction } from "./action-signing.js";
 export type GroupInvite = {
   readonly genesisEnvelope: SignedActionEnvelope;
   readonly relayAddr: string;
+  readonly adminPeerId: string;
 };
 
 type SerializedInvite = {
@@ -13,6 +14,7 @@ type SerializedInvite = {
   readonly signature: string;
   readonly hash: string;
   readonly relayAddr: string;
+  readonly adminPeerId: string;
 };
 
 const GENESIS_HASH_HEX = toHex(GENESIS_HASH);
@@ -23,6 +25,7 @@ export const encodeGroupInvite = (invite: GroupInvite): string => {
     signature: toHex(invite.genesisEnvelope.signature),
     hash: toHex(invite.genesisEnvelope.hash),
     relayAddr: invite.relayAddr,
+    adminPeerId: invite.adminPeerId,
   };
 
   const json = JSON.stringify(serialized);
@@ -53,12 +56,13 @@ export const decodeGroupInvite = (code: string): Result<GroupInvite, Error> => {
       !("signedBytes" in parsed) ||
       !("signature" in parsed) ||
       !("hash" in parsed) ||
-      !("relayAddr" in parsed)
+      !("relayAddr" in parsed) ||
+      !("adminPeerId" in parsed)
     ) {
       return Result.failure(new Error("Invalid invite format"));
     }
 
-    const { signedBytes, signature, hash, relayAddr } = parsed as SerializedInvite;
+    const { signedBytes, signature, hash, relayAddr, adminPeerId } = parsed as SerializedInvite;
 
     const envelope: SignedActionEnvelope = {
       signedBytes: hexToBytes(signedBytes),
@@ -92,6 +96,7 @@ export const decodeGroupInvite = (code: string): Result<GroupInvite, Error> => {
     return Result.success({
       genesisEnvelope: envelope,
       relayAddr: relayAddr as string,
+      adminPeerId,
     });
   } catch (error) {
     return Result.failure(

@@ -44,6 +44,7 @@
     "@chainsafe/libp2p-yamux": "^7.0.4",
     "@libp2p/bootstrap": "^11.0.47",
     "@libp2p/circuit-relay-v2": "^3.2.24",
+    "@libp2p/crypto": "^5.1.8",
     "@libp2p/dcutr": "^2.0.38",
     "@libp2p/identify": "^3.0.39",
     "@libp2p/interface": "^2.11.0",

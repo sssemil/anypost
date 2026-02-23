@@ -107,6 +107,7 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
   const [layout, setLayout] = createSignal<LayoutSnapshot>({ nodes: [], links: [] });
   const [selectedNodeId, setSelectedNodeId] = createSignal<string | null>(null);
   const [viewOffset, setViewOffset] = createSignal({ x: 0, y: 0 });
+  const [zoom, setZoom] = createSignal(1);
 
   let simRef: Simulation<SimNode, SimLink> | undefined;
   let simNodes: SimNode[] = [];
@@ -181,8 +182,9 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
     if (!svg) return { x: e.clientX, y: e.clientY };
     const rect = svg.getBoundingClientRect();
     const offset = viewOffset();
-    const scaleX = WIDTH / rect.width;
-    const scaleY = HEIGHT / rect.height;
+    const z = zoom();
+    const scaleX = (WIDTH * z) / rect.width;
+    const scaleY = (HEIGHT * z) / rect.height;
     return {
       x: (e.clientX - rect.left) * scaleX + offset.x,
       y: (e.clientY - rect.top) * scaleY + offset.y,
@@ -236,8 +238,9 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
     const svg = (e.currentTarget as Element).closest("svg");
     if (!svg) return;
     const rect = svg.getBoundingClientRect();
-    const scaleX = WIDTH / rect.width;
-    const scaleY = HEIGHT / rect.height;
+    const z = zoom();
+    const scaleX = (WIDTH * z) / rect.width;
+    const scaleY = (HEIGHT * z) / rect.height;
     const dx = (e.clientX - panStart.x) * scaleX;
     const dy = (e.clientY - panStart.y) * scaleY;
     setViewOffset({ x: panStart.ox - dx, y: panStart.oy - dy });
@@ -245,6 +248,37 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
 
   const handleBgPointerUp = () => {
     panStart = null;
+  };
+
+  const MIN_ZOOM = 0.3;
+  const MAX_ZOOM = 3;
+  const ZOOM_SENSITIVITY = 0.001;
+
+  const handleWheel = (e: WheelEvent) => {
+    e.preventDefault();
+    const svg = (e.currentTarget as Element) as SVGSVGElement;
+    const rect = svg.getBoundingClientRect();
+    const offset = viewOffset();
+    const z = zoom();
+
+    const mouseXFrac = (e.clientX - rect.left) / rect.width;
+    const mouseYFrac = (e.clientY - rect.top) / rect.height;
+    const svgX = offset.x + mouseXFrac * WIDTH * z;
+    const svgY = offset.y + mouseYFrac * HEIGHT * z;
+
+    const delta = 1 + e.deltaY * ZOOM_SENSITIVITY;
+    const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z * delta));
+
+    setViewOffset({
+      x: svgX - mouseXFrac * WIDTH * newZoom,
+      y: svgY - mouseYFrac * HEIGHT * newZoom,
+    });
+    setZoom(newZoom);
+  };
+
+  const handleResetView = () => {
+    setZoom(1);
+    setViewOffset({ x: 0, y: 0 });
   };
 
   const handleNodeClick = (nodeId: string) => {
@@ -268,7 +302,7 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
   return (
     <div>
       <svg
-        viewBox={`${viewOffset().x} ${viewOffset().y} ${WIDTH} ${HEIGHT}`}
+        viewBox={`${viewOffset().x} ${viewOffset().y} ${WIDTH * zoom()} ${HEIGHT * zoom()}`}
         style={{
           width: "100%",
           height: "auto",
@@ -277,13 +311,15 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
           "border-radius": "6px",
           cursor: panStart ? "grabbing" : "grab",
           "user-select": "none",
+          "touch-action": "none",
         }}
+        onWheel={handleWheel}
       >
         <rect
           x={viewOffset().x}
           y={viewOffset().y}
-          width={WIDTH}
-          height={HEIGHT}
+          width={WIDTH * zoom()}
+          height={HEIGHT * zoom()}
           fill="transparent"
           onPointerDown={handleBgPointerDown}
           onPointerMove={handleBgPointerMove}
@@ -362,7 +398,7 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
         </For>
       </svg>
 
-      <div class="flex gap-3 flex-wrap mt-1.5 text-[11px] text-tg-text-dim">
+      <div class="flex gap-3 flex-wrap mt-1.5 text-[11px] text-tg-text-dim items-center">
         {(["self", "relay", "peer", "bootstrap"] as const).map((type) => {
           const count = () => layout().nodes.filter((n) => n.nodeType === type).length;
           return (
@@ -380,6 +416,14 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
           {" "}
           <span style={{ color: "#2196F3" }}>―</span> WS
         </span>
+        <Show when={zoom() !== 1 || viewOffset().x !== 0 || viewOffset().y !== 0}>
+          <button
+            class="ml-auto border border-tg-border rounded px-1.5 py-px text-[10px] text-tg-text-dim hover:text-tg-text cursor-pointer"
+            onClick={handleResetView}
+          >
+            Reset view
+          </button>
+        </Show>
       </div>
 
       <Show when={selectedNodeInfo()}>

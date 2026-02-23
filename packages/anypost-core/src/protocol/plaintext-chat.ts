@@ -53,7 +53,7 @@ export type NetworkEvent = {
   readonly timestamp: number;
   readonly type: "peer-connect" | "peer-disconnect" | "subscription-change"
     | "pubsub-message" | "dial-attempt" | "dial-success" | "dial-failure"
-    | "relay-reservation" | "relay-harvest" | "address-change" | "gossipsub-mesh" | "info";
+    | "relay-reservation" | "relay-harvest" | "relay-candidate" | "address-change" | "gossipsub-mesh" | "sync" | "info";
   readonly detail: string;
 };
 

@@ -1,37 +1,22 @@
 import { createSignal, Show } from "solid-js";
-import { formatPeerIdShort } from "anypost-core/protocol";
-
-type MemberInfo = {
-  readonly peerId: string;
-  readonly displayName?: string;
-};
 
 type HeaderBarProps = {
   readonly peerId: string;
   readonly connectionStatus: "connecting" | "connected" | "disconnected";
-  readonly displayName: string;
   readonly activeGroupId: string | null;
   readonly activeGroupName?: string;
-  readonly members: readonly MemberInfo[];
+  readonly memberCount: number;
   readonly showBackButton: boolean;
   readonly onBackPress: () => void;
   readonly onDevDrawerToggle: () => void;
   readonly onGroupInfoToggle: () => void;
 };
 
-const statusDotColor = (status: HeaderBarProps["connectionStatus"]): string => {
-  switch (status) {
-    case "connected": return "bg-tg-success";
-    case "connecting": return "bg-tg-warning";
-    case "disconnected": return "bg-tg-danger";
-  }
-};
-
 const statusLabel = (status: HeaderBarProps["connectionStatus"]): string => {
   switch (status) {
-    case "connected": return "Connected";
-    case "connecting": return "Connecting...";
-    case "disconnected": return "Disconnected";
+    case "connected": return "connected";
+    case "connecting": return "connecting...";
+    case "disconnected": return "disconnected";
   }
 };
 
@@ -48,12 +33,20 @@ export const HeaderBar = (props: HeaderBarProps) => {
   const groupDisplayName = () => {
     if (props.activeGroupName) return props.activeGroupName;
     const id = props.activeGroupId;
-    if (!id) return "No group";
+    if (!id) return "Anypost";
     return `${id.slice(0, 8)}...`;
   };
 
+  const subtitle = () => {
+    if (!props.activeGroupId) return statusLabel(props.connectionStatus);
+    if (props.memberCount > 0) {
+      return `${props.memberCount} ${props.memberCount === 1 ? "member" : "members"}`;
+    }
+    return statusLabel(props.connectionStatus);
+  };
+
   return (
-    <div class="flex items-center gap-3 px-4 py-3 bg-tg-header border-b border-tg-border">
+    <div class="flex items-center gap-3 px-4 py-2.5 bg-tg-header border-b border-tg-border">
       <Show when={props.showBackButton}>
         <button
           class="sm:hidden text-tg-accent text-lg p-1 -ml-1"
@@ -69,40 +62,18 @@ export const HeaderBar = (props: HeaderBarProps) => {
         class="flex flex-col flex-1 min-w-0 text-left hover:bg-tg-hover rounded-lg px-2 py-1 -mx-2 -my-1 cursor-pointer"
         onClick={() => props.onGroupInfoToggle()}
       >
-        <div class="flex items-center gap-2">
-          <span class="font-semibold text-tg-text truncate">
-            {props.displayName || groupDisplayName()}
-          </span>
-        </div>
-        <div class="flex items-center gap-1.5">
-          <div class={`w-2 h-2 rounded-full ${statusDotColor(props.connectionStatus)}`} />
-          <span class="text-xs text-tg-text-dim">
-            {statusLabel(props.connectionStatus)}
-          </span>
-          <Show when={props.members.length > 0}>
-            <span class="text-xs text-tg-text-dim ml-1">
-              · {props.members.length} {props.members.length === 1 ? "member" : "members"}
-            </span>
-          </Show>
-          <Show when={props.activeGroupId}>
-            <span class="text-xs text-tg-text-dim ml-1 font-mono truncate hidden sm:inline">
-              {props.activeGroupId}
-            </span>
-          </Show>
-        </div>
-        <Show when={props.members.length > 0}>
-          <div class="text-[11px] text-tg-text-dim truncate">
-            {props.members.map((m) =>
-              m.displayName ?? formatPeerIdShort(m.peerId)
-            ).join(", ")}
-          </div>
-        </Show>
+        <span class="font-semibold text-tg-text truncate text-[15px] leading-tight">
+          {groupDisplayName()}
+        </span>
+        <span class="text-xs text-tg-text-dim leading-tight">
+          {subtitle()}
+        </span>
       </button>
 
       <Show when={props.peerId}>
         <button
           onClick={copyPeerId}
-          class="flex items-center gap-1.5 text-xs border border-tg-border rounded-lg px-2.5 py-1 hidden sm:flex hover:bg-tg-hover cursor-pointer"
+          class="flex items-center gap-1.5 text-xs border border-tg-border rounded-lg px-2.5 py-1 hidden sm:flex hover:bg-tg-hover cursor-pointer shrink-0"
         >
           <span class="text-tg-text-dim">Your ID</span>
           <span class="font-mono text-tg-text">{props.peerId.slice(0, 12)}...</span>
@@ -111,7 +82,7 @@ export const HeaderBar = (props: HeaderBarProps) => {
       </Show>
 
       <button
-        class="text-tg-text-dim hover:text-tg-text p-1"
+        class="text-tg-text-dim hover:text-tg-text p-1 shrink-0"
         onClick={() => props.onDevDrawerToggle()}
         title="Developer Tools"
       >

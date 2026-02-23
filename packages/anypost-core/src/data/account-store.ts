@@ -18,6 +18,8 @@ export type AccountStore = {
   readonly deleteAccountKey: () => Promise<void>;
   readonly isBackedUp: () => Promise<boolean>;
   readonly setBackedUp: (backedUp: boolean) => Promise<void>;
+  readonly getPeerPrivateKey: () => Promise<Uint8Array | null>;
+  readonly savePeerPrivateKey: (key: Uint8Array) => Promise<void>;
   readonly destroy: () => Promise<void>;
   readonly close: () => void;
 };
@@ -72,6 +74,16 @@ export const openAccountStore = async (): Promise<AccountStore> => {
 
     setBackedUp: async (backedUp: boolean) => {
       await db.put("account", backedUp, "backedUp");
+    },
+
+    getPeerPrivateKey: async () => {
+      const key = await db.get("account", "peerPrivateKey");
+      if (!(key instanceof Uint8Array)) return null;
+      return key;
+    },
+
+    savePeerPrivateKey: async (key: Uint8Array) => {
+      await db.put("account", new Uint8Array(key), "peerPrivateKey");
     },
 
     destroy: async () => {

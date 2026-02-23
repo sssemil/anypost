@@ -6,9 +6,10 @@ import { GENESIS_HASH, toHex } from "./action-chain.js";
 import { generateAccountKey } from "../crypto/identity.js";
 
 const TEST_RELAY_ADDR = "/ip4/127.0.0.1/tcp/4001/ws/p2p/12D3KooWTestRelay";
+const TEST_ADMIN_PEER_ID = "12D3KooWTestAdminPeerId";
 
 const createGenesisInvite = (
-  overrides?: Partial<{ relayAddr: string }>,
+  overrides?: Partial<{ relayAddr: string; adminPeerId: string }>,
 ): GroupInvite => {
   const accountKey = generateAccountKey();
   const genesisEnvelope = createSignedActionEnvelope({
@@ -21,6 +22,7 @@ const createGenesisInvite = (
   return {
     genesisEnvelope,
     relayAddr: overrides?.relayAddr ?? TEST_RELAY_ADDR,
+    adminPeerId: overrides?.adminPeerId ?? TEST_ADMIN_PEER_ID,
   };
 };
 
@@ -91,6 +93,7 @@ describe("Group invite", () => {
       const invite: GroupInvite = {
         genesisEnvelope: envelope,
         relayAddr: TEST_RELAY_ADDR,
+        adminPeerId: TEST_ADMIN_PEER_ID,
       };
 
       const encoded = encodeGroupInvite(invite);
@@ -117,6 +120,7 @@ describe("Group invite", () => {
       const invite: GroupInvite = {
         genesisEnvelope: envelope,
         relayAddr: TEST_RELAY_ADDR,
+        adminPeerId: TEST_ADMIN_PEER_ID,
       };
 
       const encoded = encodeGroupInvite(invite);
@@ -135,6 +139,33 @@ describe("Group invite", () => {
           .replace(/\//g, "_")
           .replace(/=+$/, ""),
       );
+
+      expect(result.success).toBe(false);
+    });
+
+    it("should round-trip adminPeerId", () => {
+      const invite = createGenesisInvite({ adminPeerId: "12D3KooWCustomPeerId" });
+
+      const encoded = encodeGroupInvite(invite);
+      const result = decodeGroupInvite(encoded);
+
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.data.adminPeerId).toBe("12D3KooWCustomPeerId");
+    });
+
+    it("should reject invite missing adminPeerId", () => {
+      const invite = createGenesisInvite();
+      const encoded = encodeGroupInvite(invite);
+
+      const decoded = JSON.parse(atob(encoded.replace(/-/g, "+").replace(/_/g, "/")));
+      delete decoded.adminPeerId;
+      const tampered = btoa(JSON.stringify(decoded))
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+
+      const result = decodeGroupInvite(tampered);
 
       expect(result.success).toBe(false);
     });

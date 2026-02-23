@@ -133,6 +133,7 @@ export { createMultiGroupChat } from "./multi-group-chat.js";
 export type {
   MultiGroupChat,
   MultiGroupChatMessageEvent,
+  JoinRequestEvent,
 } from "./multi-group-chat.js";
 export {
   ActionPayloadSchema,
@@ -169,3 +170,19 @@ export {
 } from "./action-chain-state.js";
 export { encodeGroupInvite, decodeGroupInvite } from "./group-invite.js";
 export type { GroupInvite } from "./group-invite.js";
+export {
+  createRelayCandidateState,
+  addCandidate as addRelayCandidate,
+  removeCandidate as removeRelayCandidate,
+  updateRtt as updateRelayRtt,
+  markReservationActive,
+  markReservationLost,
+  getReservedCount,
+  getCandidatesByRtt,
+  getCandidateAddresses,
+  DEFAULT_MAX_CANDIDATES,
+} from "./relay-candidate-state.js";
+export type {
+  RelayCandidateEntry,
+  RelayCandidateState,
+} from "./relay-candidate-state.js";

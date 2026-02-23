@@ -19,7 +19,7 @@ export type MultiGroupState = {
 };
 
 export type MultiGroupEvent =
-  | { readonly type: "group-joined"; readonly groupId: string }
+  | { readonly type: "group-joined"; readonly groupId: string; readonly groupName?: string; readonly hasActionChain?: boolean }
   | { readonly type: "group-created"; readonly groupId: string; readonly groupName: string }
   | { readonly type: "group-left"; readonly groupId: string }
   | { readonly type: "group-selected"; readonly groupId: string }
@@ -36,6 +36,8 @@ export const createMultiGroupState = (): MultiGroupState => ({
 const handleGroupJoined = (
   state: MultiGroupState,
   groupId: string,
+  groupName?: string,
+  hasActionChain?: boolean,
 ): MultiGroupState => {
   if (state.groups.has(groupId)) return state;
 
@@ -45,8 +47,8 @@ const handleGroupJoined = (
     messages: [],
     unreadCount: 0,
     seenPeerIds: new Set(),
-    hasActionChain: false,
-    groupName: undefined,
+    hasActionChain: hasActionChain ?? false,
+    groupName,
     pendingApproval: true,
   };
 
@@ -165,7 +167,7 @@ export const transitionMultiGroup = (
 ): MultiGroupState => {
   switch (event.type) {
     case "group-joined":
-      return handleGroupJoined(state, event.groupId);
+      return handleGroupJoined(state, event.groupId, event.groupName, event.hasActionChain);
     case "group-created":
       return handleGroupCreated(state, event.groupId, event.groupName);
     case "group-left":

@@ -108,6 +108,9 @@ importers:
       '@libp2p/circuit-relay-v2':
         specifier: ^3.2.24
         version: 3.2.24
+      '@libp2p/crypto':
+        specifier: ^5.1.8
+        version: 5.1.13
       '@libp2p/dcutr':
         specifier: ^2.0.38
         version: 2.0.38

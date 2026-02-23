@@ -218,6 +218,44 @@ describe("Action chain state", () => {
       expect(result.data.pendingJoins.has(toHex(joiner.publicKey))).toBe(false);
     });
 
+    it("should allow admin to approve member directly without join-request", () => {
+      const creator = generateAccountKey();
+      const newMember = generateAccountKey();
+
+      const genesis = makeAction({
+        accountKey: creator,
+        parentHashes: [GENESIS_HASH],
+        payload: { type: "group-created", groupName: "Group" },
+      });
+      const state1 = applyAction(
+        createActionChainGroupState(DEFAULT_GROUP_ID),
+        genesis,
+      );
+      if (!state1.success) throw new Error("Setup failed");
+
+      const approval = makeAction({
+        accountKey: creator,
+        parentHashes: [genesis.hash],
+        payload: {
+          type: "member-approved",
+          memberPublicKey: pubKey(newMember),
+          role: "member",
+        },
+        timestamp: 2000,
+      });
+
+      const result = applyAction(state1.data, approval);
+
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      const member = result.data.members.get(toHex(newMember.publicKey));
+      expect(member).toBeDefined();
+      expect(member!.role).toBe("member");
+      expect(member!.joinedAt).toBe(2000);
+      expect(result.data.pendingJoins.size).toBe(0);
+    });
+
     it("should reject approval from non-admin", () => {
       const creator = generateAccountKey();
       const member1 = generateAccountKey();
@@ -586,6 +624,114 @@ describe("Action chain state", () => {
       expect(member!.role).toBe("admin");
     });
 
+    it("should reject role change by non-admin", () => {
+      const creator = generateAccountKey();
+      const member1 = generateAccountKey();
+      const member2 = generateAccountKey();
+
+      const genesis = makeAction({
+        accountKey: creator,
+        parentHashes: [GENESIS_HASH],
+        payload: { type: "group-created", groupName: "Group" },
+      });
+      let state = applyAction(
+        createActionChainGroupState(DEFAULT_GROUP_ID),
+        genesis,
+      );
+      if (!state.success) throw new Error("Setup failed");
+
+      for (const m of [member1, member2]) {
+        const approval = makeAction({
+          accountKey: creator,
+          parentHashes: [genesis.hash],
+          payload: {
+            type: "member-approved",
+            memberPublicKey: pubKey(m),
+            role: "member",
+          },
+        });
+        state = applyAction(state.data, approval);
+        if (!state.success) throw new Error("Setup failed");
+      }
+
+      const roleChange = makeAction({
+        accountKey: member1,
+        parentHashes: [genesis.hash],
+        payload: {
+          type: "role-changed",
+          memberPublicKey: pubKey(member2),
+          newRole: "admin",
+        },
+      });
+
+      const result = applyAction(state.data, roleChange);
+
+      expect(result.success).toBe(false);
+    });
+
+    it("should allow promoted admin to approve new members", () => {
+      const creator = generateAccountKey();
+      const promotee = generateAccountKey();
+      const thirdMember = generateAccountKey();
+
+      const genesis = makeAction({
+        accountKey: creator,
+        parentHashes: [GENESIS_HASH],
+        payload: { type: "group-created", groupName: "Group" },
+      });
+      let state = applyAction(
+        createActionChainGroupState(DEFAULT_GROUP_ID),
+        genesis,
+      );
+      if (!state.success) throw new Error("Setup failed");
+
+      const approvePromotee = makeAction({
+        accountKey: creator,
+        parentHashes: [genesis.hash],
+        payload: {
+          type: "member-approved",
+          memberPublicKey: pubKey(promotee),
+          role: "member",
+        },
+      });
+      state = applyAction(state.data, approvePromotee);
+      if (!state.success) throw new Error("Setup failed");
+
+      const promote = makeAction({
+        accountKey: creator,
+        parentHashes: [approvePromotee.hash],
+        payload: {
+          type: "role-changed",
+          memberPublicKey: pubKey(promotee),
+          newRole: "admin",
+        },
+      });
+      state = applyAction(state.data, promote);
+      if (!state.success) throw new Error("Setup failed");
+
+      const approveThird = makeAction({
+        accountKey: promotee,
+        parentHashes: [promote.hash],
+        payload: {
+          type: "member-approved",
+          memberPublicKey: pubKey(thirdMember),
+          role: "member",
+        },
+        timestamp: 5000,
+      });
+
+      const result = applyAction(state.data, approveThird);
+
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      expect(result.data.members.size).toBe(3);
+      const third = result.data.members.get(toHex(thirdMember.publicKey));
+      expect(third).toBeDefined();
+      expect(third!.role).toBe("member");
+      expect(third!.joinedAt).toBe(5000);
+    });
+
     it("should reject role change on own account", () => {
       const creator = generateAccountKey();
 
@@ -732,6 +878,40 @@ describe("Action chain state", () => {
       expect(
         result.data.readReceipts.get(toHex(creator.publicKey)),
       ).toBe(msg.id);
+    });
+
+    it("should reject read receipt from non-member", () => {
+      const creator = generateAccountKey();
+      const outsider = generateAccountKey();
+
+      const genesis = makeAction({
+        accountKey: creator,
+        parentHashes: [GENESIS_HASH],
+        payload: { type: "group-created", groupName: "Group" },
+      });
+      const state1 = applyAction(
+        createActionChainGroupState(DEFAULT_GROUP_ID),
+        genesis,
+      );
+      if (!state1.success) throw new Error("Setup failed");
+
+      const msg = makeAction({
+        accountKey: creator,
+        parentHashes: [genesis.hash],
+        payload: { type: "message", text: "Hello" },
+      });
+      const state2 = applyAction(state1.data, msg);
+      if (!state2.success) throw new Error("Setup failed");
+
+      const receipt = makeAction({
+        accountKey: outsider,
+        parentHashes: [msg.hash],
+        payload: { type: "read-receipt", upToActionId: msg.id },
+      });
+
+      const result = applyAction(state2.data, receipt);
+
+      expect(result.success).toBe(false);
     });
   });
 

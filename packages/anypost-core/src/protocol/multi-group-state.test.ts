@@ -569,6 +569,21 @@ describe("Multi-group state machine", () => {
       expect(group?.hasActionChain).toBe(false);
     });
 
+    it("should accept hasActionChain and groupName on group-joined", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, {
+        type: "group-joined",
+        groupId: "group-1",
+        groupName: "Invited Group",
+        hasActionChain: true,
+      });
+
+      const group = getActiveGroup(state);
+      expect(group?.hasActionChain).toBe(true);
+      expect(group?.groupName).toBe("Invited Group");
+      expect(group?.pendingApproval).toBe(true);
+    });
+
     it("should set hasActionChain to true for group-created events", () => {
       let state = createMultiGroupState();
       state = transitionMultiGroup(state, {
