@@ -762,6 +762,7 @@ export const createMultiGroupChat = async (
       readonly targetPeerId: string;
       readonly requestKnownHash?: Uint8Array;
       readonly headHash?: Uint8Array;
+      readonly nextCursorHash?: Uint8Array;
       readonly envelopes: ReadonlyArray<{
         readonly signedBytes: Uint8Array;
         readonly signature: Uint8Array;
@@ -778,6 +779,7 @@ export const createMultiGroupChat = async (
         targetPeerId: payload.targetPeerId,
         requestKnownHash: payload.requestKnownHash,
         headHash: payload.headHash,
+        nextCursorHash: payload.nextCursorHash,
         envelopes: payload.envelopes,
       }),
     );
@@ -820,6 +822,7 @@ export const createMultiGroupChat = async (
       readonly targetPeerId: string;
       readonly requestKnownHash?: Uint8Array;
       readonly headHash?: Uint8Array;
+      readonly nextCursorHash?: Uint8Array;
       readonly envelopes: ReadonlyArray<{
         readonly signedBytes: Uint8Array;
         readonly signature: Uint8Array;
@@ -840,6 +843,7 @@ export const createMultiGroupChat = async (
       readonly targetPeerId: string;
       readonly requestKnownHash?: Uint8Array;
       readonly headHash?: Uint8Array;
+      readonly nextCursorHash?: Uint8Array;
       readonly envelopes: ReadonlyArray<{
         readonly signedBytes: Uint8Array;
         readonly signature: Uint8Array;
@@ -857,9 +861,10 @@ export const createMultiGroupChat = async (
   const publishSyncRequest = async (
     groupId: string,
     targetPeerId?: string,
+    knownHashOverride?: Uint8Array,
   ): Promise<void> => {
     const topic = groupTopic(groupId);
-    const knownHash = getLatestKnownHash(groupId);
+    const knownHash = knownHashOverride ? Uint8Array.from(knownHashOverride) : getLatestKnownHash(groupId);
     const senderPublicKey = new Uint8Array(accountKey.publicKey);
     const signature = signSyncRequest({
       groupId,
@@ -900,6 +905,9 @@ export const createMultiGroupChat = async (
     const missing = getMissingEnvelopesForKnownHash(groupId, requestKnownHash);
     const responseEnvelopes = missing.slice(0, MAX_SYNC_ENVELOPES_PER_RESPONSE);
     const headHash = getLatestKnownHash(groupId);
+    const nextCursorHash = missing.length > responseEnvelopes.length && responseEnvelopes.length > 0
+      ? Uint8Array.from(responseEnvelopes[responseEnvelopes.length - 1].hash)
+      : undefined;
     const senderPublicKey = new Uint8Array(accountKey.publicKey);
     const signature = signSyncResponse({
       groupId,
@@ -908,6 +916,7 @@ export const createMultiGroupChat = async (
       targetPeerId,
       requestKnownHash,
       headHash,
+      nextCursorHash,
       envelopes: responseEnvelopes,
     });
     const wireMessage: WireMessage = {
@@ -922,6 +931,7 @@ export const createMultiGroupChat = async (
           ? Uint8Array.from(requestKnownHash)
           : undefined,
         headHash: headHash ? Uint8Array.from(headHash) : undefined,
+        nextCursorHash: nextCursorHash ? Uint8Array.from(nextCursorHash) : undefined,
         envelopes: responseEnvelopes.map((envelope) => ({
           signedBytes: new Uint8Array(envelope.signedBytes),
           signature: new Uint8Array(envelope.signature),
@@ -942,12 +952,16 @@ export const createMultiGroupChat = async (
     );
   };
 
-  const requestSyncFromPeer = (groupId: string, targetPeerId: string) => {
+  const requestSyncFromPeer = (
+    groupId: string,
+    targetPeerId: string,
+    knownHashOverride?: Uint8Array,
+  ) => {
     if (targetPeerId === ownPeerId) return;
     if (isMembershipEnforcedGroup(groupId)) {
       if (!isOwnMemberOfGroup(groupId)) return;
     }
-    void publishSyncRequest(groupId, targetPeerId).catch(() => {});
+    void publishSyncRequest(groupId, targetPeerId, knownHashOverride).catch(() => {});
   };
 
   const requestSyncFromConnectedPeers = (groupId: string) => {
@@ -1660,6 +1674,11 @@ export const createMultiGroupChat = async (
         "sync",
         `Applied ${accepted}/${payload.envelopes.length} sync envelope(s) from ${senderPeerId.slice(0, 12)}... for group ${matchedGroupId.slice(0, 8)}...`,
       );
+
+      if (payload.nextCursorHash) {
+        requestSyncFromPeer(matchedGroupId, senderPeerId, payload.nextCursorHash);
+        return;
+      }
 
       if (payload.headHash) {
         const localHead = getLatestKnownHash(matchedGroupId);

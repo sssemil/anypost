@@ -882,6 +882,49 @@ describe("MultiGroupChat", () => {
     expect(byPeer?.get(alice.peerId)?.lastReceivedEnvelopeCount).toBeGreaterThan(0);
   });
 
+  it("should paginate sync responses when missed history exceeds one page", { timeout: 45_000 }, async () => {
+    const alice = await createTestNode();
+    const bobAccountKey = generateAccountKey();
+    const bob1 = await createTestNode(bobAccountKey);
+
+    const { groupId, genesisEnvelope } = await alice.chat.createGroup("Paged Catchup");
+    await bob1.chat.connectTo(alice.chat.multiaddrs[0]);
+    await waitFor(500);
+
+    const joinRequestReceived = new Promise<JoinRequestEvent>((resolve) => {
+      alice.chat.onJoinRequest((evt) => resolve(evt));
+    });
+    const invite: GroupInvite = {
+      genesisEnvelope,
+      relayAddr: alice.chat.multiaddrs[0].toString(),
+      adminPeerId: alice.peerId,
+    };
+    await bob1.chat.joinViaInvite(invite);
+    const joinRequest = await joinRequestReceived;
+    await alice.chat.approveJoin(groupId, joinRequest.requesterPublicKey);
+    await waitUntil(() => bob1.chat.getActionChainEnvelopes(groupId).length >= 2);
+
+    const bobPeerKey = bob1.chat.getPeerPrivateKey();
+    const bobEnvelopes = bob1.chat.getActionChainEnvelopes(groupId);
+
+    await bob1.chat.stop();
+    instances.splice(instances.indexOf(bob1.chat), 1);
+
+    const missedCount = 280;
+    for (let i = 0; i < missedCount; i++) {
+      await alice.chat.sendMessage(groupId, `paged-${i}`);
+    }
+
+    const bob2 = await createTestNodeWithPeerKey(bobPeerKey, bobAccountKey);
+    bob2.chat.joinGroup(groupId);
+    bob2.chat.loadActionChain(groupId, bobEnvelopes);
+    await bob2.chat.connectTo(alice.chat.multiaddrs[0]);
+
+    await waitUntil(() => bob2.messages.length >= missedCount, 30_000);
+    expect(bob2.messages.some((m) => m.text === "paged-0")).toBe(true);
+    expect(bob2.messages.some((m) => m.text === `paged-${missedCount - 1}`)).toBe(true);
+  });
+
   it("should map admin publicKey to peerId immediately on joinViaInvite", async () => {
     const admin = await createTestNode();
     const joiner = await createTestNode();

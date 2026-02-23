@@ -79,6 +79,7 @@ const SyncResponsePayloadSchema = z.object({
   targetPeerId: PeerIdSchema,
   requestKnownHash: Uint8ArraySchema.optional(),
   headHash: Uint8ArraySchema.optional(),
+  nextCursorHash: Uint8ArraySchema.optional(),
   envelopes: z.array(SignedActionEnvelopeWireSchema),
 });
 

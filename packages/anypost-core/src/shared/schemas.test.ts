@@ -318,6 +318,7 @@ describe("WireMessageSchema", () => {
         targetPeerId: "12D3KooWQkVLLv8c9r7y9ZwzhsMvy4c8h6ivm8xv3vN4K8n9sYf2",
         requestKnownHash: new Uint8Array(32).fill(1),
         headHash: new Uint8Array(32).fill(2),
+        nextCursorHash: new Uint8Array(32).fill(6),
         envelopes: [
           {
             signedBytes: new Uint8Array([1, 2, 3]),
