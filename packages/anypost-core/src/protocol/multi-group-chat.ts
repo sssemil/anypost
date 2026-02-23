@@ -226,6 +226,8 @@ const OUTGOING_SYNC_REQUEST_WINDOW_MS = 10_000;
 const OUTGOING_SYNC_REQUEST_MAX = 60;
 const OUTGOING_APPROVAL_WINDOW_MS = 30_000;
 const OUTGOING_APPROVAL_MAX = 10;
+const SYNC_REQUEST_TRACK_TTL_MS = 60_000;
+const MAX_SYNC_REQUEST_TRACKED = 4_096;
 
 export const createMultiGroupChat = async (
   options: CreateMultiGroupChatOptions,
@@ -367,6 +369,8 @@ export const createMultiGroupChat = async (
   const outgoingJoinRequestRate = new Map<string, RateWindow>();
   const outgoingSyncRequestRate = new Map<string, RateWindow>();
   const outgoingApprovalRate = new Map<string, RateWindow>();
+  const pendingSyncRequests = new Map<string, number>();
+  const seenSyncResponses = new Map<string, number>();
 
   const isRateLimited = (
     bucket: Map<string, RateWindow>,
@@ -384,6 +388,24 @@ export const createMultiGroupChat = async (
     const nextCount = current.count + 1;
     bucket.set(key, { windowStartMs: current.windowStartMs, count: nextCount });
     return nextCount > maxEvents;
+  };
+
+  const createSyncRequestKey = (groupId: string, peerId: string, requestId: string): string =>
+    `${groupId}:${peerId}:${requestId}`;
+
+  const pruneTimedMap = (bucket: Map<string, number>, ttlMs: number, maxEntries: number) => {
+    const now = Date.now();
+    for (const [key, atMs] of bucket.entries()) {
+      if (now - atMs > ttlMs) {
+        bucket.delete(key);
+      }
+    }
+
+    if (bucket.size <= maxEntries) return;
+    const oldestEntries = [...bucket.entries()].sort((a, b) => a[1] - b[1]);
+    for (let idx = 0; idx < oldestEntries.length - maxEntries; idx += 1) {
+      bucket.delete(oldestEntries[idx][0]);
+    }
   };
 
   const cloneSyncProgressState = (): SyncProgressState =>
@@ -808,6 +830,7 @@ export const createMultiGroupChat = async (
       readonly groupId: string;
       readonly senderPeerId: string;
       readonly senderPublicKey: Uint8Array;
+      readonly requestId?: string;
       readonly targetPeerId?: string;
       readonly knownHash?: Uint8Array;
     },
@@ -818,6 +841,7 @@ export const createMultiGroupChat = async (
         groupId: payload.groupId,
         senderPeerId: payload.senderPeerId,
         senderPublicKey: payload.senderPublicKey,
+        requestId: payload.requestId,
         targetPeerId: payload.targetPeerId,
         knownHash: payload.knownHash,
       }),
@@ -828,6 +852,7 @@ export const createMultiGroupChat = async (
       readonly groupId: string;
       readonly senderPeerId: string;
       readonly senderPublicKey: Uint8Array;
+      readonly requestId?: string;
       readonly targetPeerId: string;
       readonly requestKnownHash?: Uint8Array;
       readonly headHash?: Uint8Array;
@@ -845,6 +870,7 @@ export const createMultiGroupChat = async (
         groupId: payload.groupId,
         senderPeerId: payload.senderPeerId,
         senderPublicKey: payload.senderPublicKey,
+        requestId: payload.requestId,
         targetPeerId: payload.targetPeerId,
         requestKnownHash: payload.requestKnownHash,
         headHash: payload.headHash,
@@ -858,6 +884,7 @@ export const createMultiGroupChat = async (
       readonly groupId: string;
       readonly senderPeerId: string;
       readonly senderPublicKey: Uint8Array;
+      readonly requestId?: string;
       readonly targetPeerId?: string;
       readonly knownHash?: Uint8Array;
     },
@@ -872,6 +899,7 @@ export const createMultiGroupChat = async (
       readonly groupId: string;
       readonly senderPeerId: string;
       readonly senderPublicKey: Uint8Array;
+      readonly requestId?: string;
       readonly targetPeerId?: string;
       readonly knownHash?: Uint8Array;
       readonly signature: Uint8Array;
@@ -888,6 +916,7 @@ export const createMultiGroupChat = async (
       readonly groupId: string;
       readonly senderPeerId: string;
       readonly senderPublicKey: Uint8Array;
+      readonly requestId?: string;
       readonly targetPeerId: string;
       readonly requestKnownHash?: Uint8Array;
       readonly headHash?: Uint8Array;
@@ -909,6 +938,7 @@ export const createMultiGroupChat = async (
       readonly groupId: string;
       readonly senderPeerId: string;
       readonly senderPublicKey: Uint8Array;
+      readonly requestId?: string;
       readonly targetPeerId: string;
       readonly requestKnownHash?: Uint8Array;
       readonly headHash?: Uint8Array;
@@ -945,11 +975,13 @@ export const createMultiGroupChat = async (
 
     const topic = groupTopic(groupId);
     const knownHash = knownHashOverride ? Uint8Array.from(knownHashOverride) : getLatestKnownHash(groupId);
+    const requestId = targetPeerId ? crypto.randomUUID() : undefined;
     const senderPublicKey = new Uint8Array(accountKey.publicKey);
     const signature = signSyncRequest({
       groupId,
       senderPeerId: ownPeerId,
       senderPublicKey,
+      requestId,
       targetPeerId,
       knownHash,
     });
@@ -960,12 +992,18 @@ export const createMultiGroupChat = async (
         senderPeerId: ownPeerId,
         senderPublicKey,
         signature: new Uint8Array(Array.from(signature)),
+        requestId,
         targetPeerId,
         knownHash: knownHash ? Uint8Array.from(knownHash) : undefined,
       },
     };
     await pubsub.publish(topic, encodeWireMessage(wireMessage));
-    if (targetPeerId) {
+    if (targetPeerId && requestId) {
+      pruneTimedMap(pendingSyncRequests, SYNC_REQUEST_TRACK_TTL_MS, MAX_SYNC_REQUEST_TRACKED);
+      pendingSyncRequests.set(
+        createSyncRequestKey(groupId, targetPeerId, requestId),
+        Date.now(),
+      );
       patchSyncProgress(groupId, targetPeerId, {
         lastRequestedAtMs: Date.now(),
         lastRequestKnownHashHex: knownHash ? toHex(knownHash) : null,
@@ -981,6 +1019,7 @@ export const createMultiGroupChat = async (
     groupId: string,
     targetPeerId: string,
     requestKnownHash?: Uint8Array,
+    requestId?: string,
   ): Promise<void> => {
     const missing = getMissingEnvelopesForKnownHash(groupId, requestKnownHash);
     const responseEnvelopes = missing.slice(0, MAX_SYNC_ENVELOPES_PER_RESPONSE);
@@ -993,6 +1032,7 @@ export const createMultiGroupChat = async (
       groupId,
       senderPeerId: ownPeerId,
       senderPublicKey,
+      requestId,
       targetPeerId,
       requestKnownHash,
       headHash,
@@ -1006,6 +1046,7 @@ export const createMultiGroupChat = async (
         senderPeerId: ownPeerId,
         senderPublicKey,
         signature: new Uint8Array(Array.from(signature)),
+        requestId,
         targetPeerId,
         requestKnownHash: requestKnownHash
           ? Uint8Array.from(requestKnownHash)
@@ -1720,7 +1761,12 @@ export const createMultiGroupChat = async (
         }
       }
 
-      publishSyncResponse(matchedGroupId, senderPeerId, payload.knownHash).catch(() => {});
+      publishSyncResponse(
+        matchedGroupId,
+        senderPeerId,
+        payload.knownHash,
+        payload.requestId,
+      ).catch(() => {});
       return;
     }
 
@@ -1735,6 +1781,24 @@ export const createMultiGroupChat = async (
           `Rejected sync response with invalid signature from ${senderPeerId.slice(0, 12)}...`,
         );
         return;
+      }
+
+      if (payload.requestId) {
+        pruneTimedMap(pendingSyncRequests, SYNC_REQUEST_TRACK_TTL_MS, MAX_SYNC_REQUEST_TRACKED);
+        pruneTimedMap(seenSyncResponses, SYNC_REQUEST_TRACK_TTL_MS, MAX_SYNC_REQUEST_TRACKED);
+        const requestKey = createSyncRequestKey(matchedGroupId, senderPeerId, payload.requestId);
+        if (seenSyncResponses.has(requestKey)) {
+          return;
+        }
+        if (!pendingSyncRequests.has(requestKey)) {
+          emit(
+            "sync",
+            `Rejected unsolicited sync response ${payload.requestId.slice(0, 8)} from ${senderPeerId.slice(0, 12)}...`,
+          );
+          return;
+        }
+        pendingSyncRequests.delete(requestKey);
+        seenSyncResponses.set(requestKey, Date.now());
       }
 
       const senderPublicKeyHex = toHex(payload.senderPublicKey);
@@ -2126,6 +2190,11 @@ export const createMultiGroupChat = async (
       }
     }
     outgoingJoinRequestRate.delete(groupId);
+    for (const bucket of [pendingSyncRequests, seenSyncResponses]) {
+      for (const key of [...bucket.keys()]) {
+        if (key.startsWith(`${groupId}:`)) bucket.delete(key);
+      }
+    }
     joinRetryState = removeJoinRetry(joinRetryState, groupId);
     emitJoinRetryState();
     groupDiscoveryManager?.leaveGroup(groupId);
@@ -2529,6 +2598,8 @@ export const createMultiGroupChat = async (
       outgoingJoinRequestRate.clear();
       outgoingSyncRequestRate.clear();
       outgoingApprovalRate.clear();
+      pendingSyncRequests.clear();
+      seenSyncResponses.clear();
       await node.stop();
     },
   };

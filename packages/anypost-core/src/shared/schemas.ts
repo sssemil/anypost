@@ -58,6 +58,7 @@ const SyncRequestPayloadSchema = z.object({
   senderPeerId: PeerIdSchema,
   senderPublicKey: Uint8ArraySchema,
   signature: Uint8ArraySchema,
+  requestId: z.string().uuid().optional(),
   targetPeerId: PeerIdSchema.optional(),
   // Legacy field kept for backward compatibility with old peers.
   stateVector: Uint8ArraySchema.optional(),
@@ -76,6 +77,7 @@ const SyncResponsePayloadSchema = z.object({
   senderPeerId: PeerIdSchema,
   senderPublicKey: Uint8ArraySchema,
   signature: Uint8ArraySchema,
+  requestId: z.string().uuid().optional(),
   targetPeerId: PeerIdSchema,
   requestKnownHash: Uint8ArraySchema.optional(),
   headHash: Uint8ArraySchema.optional(),
