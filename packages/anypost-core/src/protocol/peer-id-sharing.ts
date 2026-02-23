@@ -41,3 +41,11 @@ export const buildCircuitRelayAddresses = (
     (relayAddr) =>
       `${relayAddr}/p2p-circuit/p2p/${request.targetPeerId}`,
   );
+
+const CIRCUIT_RELAY_DELIMITER = "/p2p-circuit/";
+
+export const extractRelayBaseAddress = (addr: string): string | null => {
+  const idx = addr.indexOf(CIRCUIT_RELAY_DELIMITER);
+  if (idx === -1) return null;
+  return addr.slice(0, idx);
+};

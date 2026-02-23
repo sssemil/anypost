@@ -4,7 +4,11 @@ import * as raw from "multiformats/codecs/raw";
 
 export const ANYPOST_RELAY_NAMESPACE = "anypost-relay";
 export const ANYPOST_CHAT_NAMESPACE = "anypost/chat/1.0.0";
+export const ANYPOST_GROUP_NAMESPACE_PREFIX = "anypost/group/";
 export const DEFAULT_TARGET_RELAY_POOL_SIZE = 4;
+
+export const createGroupProviderNamespace = (groupId: string): string =>
+  `${ANYPOST_GROUP_NAMESPACE_PREFIX}${groupId}`;
 
 export const createProviderCid = async (namespace: string): Promise<CID> => {
   const bytes = new TextEncoder().encode(namespace);

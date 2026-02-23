@@ -77,8 +77,10 @@ export type { RelayStatus, RelayEntry } from "./relay-health.js";
 export {
   ANYPOST_RELAY_NAMESPACE,
   ANYPOST_CHAT_NAMESPACE,
+  ANYPOST_GROUP_NAMESPACE_PREFIX,
   DEFAULT_TARGET_RELAY_POOL_SIZE,
   createProviderCid,
+  createGroupProviderNamespace,
   createBrowserDhtConfig,
   createRelayDhtConfig,
 } from "./dht-config.js";
@@ -99,6 +101,7 @@ export {
   formatPeerIdForDisplay,
   formatSenderDisplay,
   buildCircuitRelayAddresses,
+  extractRelayBaseAddress,
 } from "./peer-id-sharing.js";
 export {
   createMultiGroupState,
@@ -116,8 +119,51 @@ export type {
   MultiGroupEvent,
 } from "./multi-group-state.js";
 export { startRelayPoolManager, discoverRelays } from "./relay-discovery.js";
+export {
+  createGroupDiscoveryState,
+} from "./group-discovery-state.js";
+export type {
+  DiscoveredPeer,
+  GroupDiscoveryEntry,
+  GroupDiscoveryState,
+} from "./group-discovery-state.js";
+export { createGroupDiscoveryManager } from "./group-discovery.js";
+export type { GroupDiscoveryManager } from "./group-discovery.js";
 export { createMultiGroupChat } from "./multi-group-chat.js";
 export type {
   MultiGroupChat,
   MultiGroupChatMessageEvent,
 } from "./multi-group-chat.js";
+export {
+  ActionPayloadSchema,
+  ActionRoleSchema,
+  SignableActionSchema,
+  SignedActionEnvelopeSchema,
+  GENESIS_HASH,
+  toHex,
+} from "./action-chain.js";
+export type {
+  ActionPayload,
+  ActionRole,
+  SignableAction,
+  SignedAction,
+  SignedActionEnvelope,
+  GroupMember,
+  ActionChainGroupState,
+} from "./action-chain.js";
+export {
+  createSignedActionEnvelope,
+  verifyAndDecodeAction,
+} from "./action-signing.js";
+export {
+  createActionDagState,
+  appendAction,
+  topologicalOrder,
+  getTips,
+} from "./action-dag.js";
+export type { ActionDagState } from "./action-dag.js";
+export {
+  createActionChainGroupState,
+  applyAction,
+  deriveGroupState,
+} from "./action-chain-state.js";

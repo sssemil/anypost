@@ -2,12 +2,14 @@ import { describe, it, expect, afterEach } from "vitest";
 import { createMultiGroupChat } from "./multi-group-chat.js";
 import type { MultiGroupChat } from "./multi-group-chat.js";
 import type { RelayPoolState } from "./relay-pool.js";
+import { generateAccountKey } from "../crypto/identity.js";
 
 const waitFor = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 const GROUP_A = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a01";
 const GROUP_B = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a02";
+const TEST_ACCOUNT_KEY = generateAccountKey();
 
 describe("MultiGroupChat", () => {
   const instances: MultiGroupChat[] = [];
@@ -19,6 +21,7 @@ describe("MultiGroupChat", () => {
 
   it("should start and return a peer ID", async () => {
     const chat = await createMultiGroupChat({
+      accountKey: TEST_ACCOUNT_KEY,
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
       useTransports: "tcp",
     });
@@ -29,6 +32,7 @@ describe("MultiGroupChat", () => {
 
   it("should have no joined groups initially", async () => {
     const chat = await createMultiGroupChat({
+      accountKey: TEST_ACCOUNT_KEY,
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
       useTransports: "tcp",
     });
@@ -39,6 +43,7 @@ describe("MultiGroupChat", () => {
 
   it("should track joined groups", async () => {
     const chat = await createMultiGroupChat({
+      accountKey: TEST_ACCOUNT_KEY,
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
       useTransports: "tcp",
     });
@@ -52,6 +57,7 @@ describe("MultiGroupChat", () => {
 
   it("should remove group on leave", async () => {
     const chat = await createMultiGroupChat({
+      accountKey: TEST_ACCOUNT_KEY,
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
       useTransports: "tcp",
     });
@@ -65,12 +71,14 @@ describe("MultiGroupChat", () => {
 
   it("should exchange messages on the same group", async () => {
     const chat1 = await createMultiGroupChat({
+      accountKey: TEST_ACCOUNT_KEY,
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
       useTransports: "tcp",
     });
     instances.push(chat1);
 
     const chat2 = await createMultiGroupChat({
+      accountKey: TEST_ACCOUNT_KEY,
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
       useTransports: "tcp",
     });
@@ -97,12 +105,14 @@ describe("MultiGroupChat", () => {
 
   it("should route messages to correct group", async () => {
     const chat1 = await createMultiGroupChat({
+      accountKey: TEST_ACCOUNT_KEY,
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
       useTransports: "tcp",
     });
     instances.push(chat1);
 
     const chat2 = await createMultiGroupChat({
+      accountKey: TEST_ACCOUNT_KEY,
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
       useTransports: "tcp",
     });
@@ -135,12 +145,14 @@ describe("MultiGroupChat", () => {
 
   it("should not receive messages after leaving a group", async () => {
     const chat1 = await createMultiGroupChat({
+      accountKey: TEST_ACCOUNT_KEY,
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
       useTransports: "tcp",
     });
     instances.push(chat1);
 
     const chat2 = await createMultiGroupChat({
+      accountKey: TEST_ACCOUNT_KEY,
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
       useTransports: "tcp",
     });
@@ -168,6 +180,7 @@ describe("MultiGroupChat", () => {
 
   it("should stop cleanly", async () => {
     const chat = await createMultiGroupChat({
+      accountKey: TEST_ACCOUNT_KEY,
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
       useTransports: "tcp",
     });
@@ -178,6 +191,7 @@ describe("MultiGroupChat", () => {
   it("should accept onRelayPoolStateChange option without error", async () => {
     const states: RelayPoolState[] = [];
     const chat = await createMultiGroupChat({
+      accountKey: TEST_ACCOUNT_KEY,
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
       useTransports: "tcp",
       onRelayPoolStateChange: (state) => states.push(state),
@@ -189,6 +203,7 @@ describe("MultiGroupChat", () => {
 
   it("should expose addRelay method", async () => {
     const chat = await createMultiGroupChat({
+      accountKey: TEST_ACCOUNT_KEY,
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
       useTransports: "tcp",
     });
@@ -199,6 +214,7 @@ describe("MultiGroupChat", () => {
 
   it("should stop cleanly with onRelayPoolStateChange configured", async () => {
     const chat = await createMultiGroupChat({
+      accountKey: TEST_ACCOUNT_KEY,
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
       useTransports: "tcp",
       onRelayPoolStateChange: () => {},

@@ -304,6 +304,43 @@ describe("WireMessageSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("should validate signed_action type", () => {
+    const wireMsg = {
+      type: "signed_action" as const,
+      signedBytes: new Uint8Array([1, 2, 3]),
+      signature: new Uint8Array(64).fill(0),
+      hash: new Uint8Array(32).fill(0),
+    };
+
+    const result = WireMessageSchema.safeParse(wireMsg);
+
+    expect(result.success).toBe(true);
+  });
+
+  it("should validate join_request type", () => {
+    const wireMsg = {
+      type: "join_request" as const,
+      groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+      requesterPublicKey: new Uint8Array(32).fill(1),
+    };
+
+    const result = WireMessageSchema.safeParse(wireMsg);
+
+    expect(result.success).toBe(true);
+  });
+
+  it("should reject join_request with non-UUID groupId", () => {
+    const wireMsg = {
+      type: "join_request" as const,
+      groupId: "not-a-uuid",
+      requesterPublicKey: new Uint8Array(32).fill(1),
+    };
+
+    const result = WireMessageSchema.safeParse(wireMsg);
+
+    expect(result.success).toBe(false);
+  });
+
   it("should reject unknown message types", () => {
     const wireMsg = {
       type: "unknown_type",

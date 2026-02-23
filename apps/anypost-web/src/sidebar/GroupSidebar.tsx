@@ -8,6 +8,7 @@ import {
 
 type GroupItem = {
   readonly groupId: string;
+  readonly groupName?: string;
   readonly unreadCount: number;
   readonly seenPeerCount: number;
   readonly lastMessage?: { readonly text: string; readonly timestamp: number };
@@ -145,14 +146,14 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
                 }}
               >
                 <div class={`w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold text-sm shrink-0 ${avatarColor(group.groupId)}`}>
-                  {group.groupId.charAt(0).toUpperCase()}
+                  {(group.groupName ?? group.groupId).charAt(0).toUpperCase()}
                 </div>
 
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center justify-between">
                     <span class="flex items-center gap-1.5 min-w-0">
-                      <span class="font-mono text-sm text-tg-text truncate">
-                        {group.groupId.slice(0, 8)}...
+                      <span class="text-sm text-tg-text truncate" classList={{ "font-mono": !group.groupName }}>
+                        {group.groupName ?? `${group.groupId.slice(0, 8)}...`}
                       </span>
                       <Show when={group.seenPeerCount > 0}>
                         <span class="text-[10px] text-tg-text-dim shrink-0">

@@ -1,10 +1,11 @@
 import { createSignal, For, Show } from "solid-js";
-import type { NetworkStatus, RelayPoolState } from "anypost-core/protocol";
+import type { NetworkStatus, RelayPoolState, GroupDiscoveryState } from "anypost-core/protocol";
 import { TopologyGraph } from "./TopologyGraph.js";
 
 type NetworkPanelProps = {
   readonly networkStatus: NetworkStatus | null;
   readonly relayPoolState: RelayPoolState | null;
+  readonly groupDiscoveryState: GroupDiscoveryState | null;
   readonly displayName: string;
   readonly latencyMap: ReadonlyMap<string, number>;
   readonly onAddRelay?: (addr: string) => void;
@@ -131,6 +132,78 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                     </div>
                   </Show>
                 </div>
+              )}
+            </Show>
+
+            <Show when={props.groupDiscoveryState}>
+              {(discovery) => (
+                <Show when={discovery().groups.size > 0}>
+                  <div class="mb-3 pb-3 border-b border-tg-border">
+                    <div class="flex items-center gap-2 mb-1.5">
+                      <span class="text-tg-text-dim">Group Discovery</span>
+                      <span class="text-tg-text">
+                        {discovery().groups.size} group{discovery().groups.size !== 1 ? "s" : ""}
+                      </span>
+                      <span class="text-tg-text-dim text-[10px]">
+                        {[...discovery().groups.values()].reduce((sum, g) => sum + g.peers.length, 0)} peers found
+                      </span>
+                    </div>
+                    <For each={[...discovery().groups.values()]}>
+                      {(group) => (
+                        <div class="p-2 mb-1.5 bg-tg-sidebar rounded-lg border border-tg-border">
+                          <div class="flex items-center justify-between mb-1">
+                            <code class="font-bold text-tg-text">{group.groupId.slice(0, 8)}...</code>
+                            <div class="flex items-center gap-2">
+                              <Show when={group.isAdvertising}>
+                                <span class="px-1.5 rounded-full text-[10px] bg-tg-success/20 text-tg-success">
+                                  advertising
+                                </span>
+                              </Show>
+                              <Show
+                                when={group.isSearching}
+                                fallback={
+                                  <span class="px-1.5 rounded-full text-[10px] bg-tg-text-dim/20 text-tg-text-dim">
+                                    idle
+                                  </span>
+                                }
+                              >
+                                <span class="px-1.5 rounded-full text-[10px] bg-tg-accent/20 text-tg-accent">
+                                  searching...
+                                </span>
+                              </Show>
+                            </div>
+                          </div>
+                          <div class="text-tg-text-dim mb-1">
+                            Searches: {group.searchCount}
+                            <Show when={group.lastSearchAt !== null}>
+                              {" "}(last: {Math.round((Date.now() - group.lastSearchAt!) / 1000)}s ago)
+                            </Show>
+                          </div>
+                          <Show
+                            when={group.peers.length > 0}
+                            fallback={
+                              <div class="text-tg-text-dim text-[10px]">No peers discovered yet</div>
+                            }
+                          >
+                            <div class="text-tg-text-dim text-[10px] mb-0.5">
+                              Peers ({group.peers.length}):
+                            </div>
+                            <For each={group.peers}>
+                              {(peer) => (
+                                <div class="pl-2 text-tg-text break-all text-[10px]">
+                                  {peer.peerId.slice(0, 20)}...
+                                  <Show when={peer.addrs.length > 0}>
+                                    <span class="text-tg-text-dim ml-1">{peer.addrs[0]}</span>
+                                  </Show>
+                                </div>
+                              )}
+                            </For>
+                          </Show>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </Show>
               )}
             </Show>
 

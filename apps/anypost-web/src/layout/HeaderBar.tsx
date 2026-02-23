@@ -11,6 +11,7 @@ type HeaderBarProps = {
   readonly connectionStatus: "connecting" | "connected" | "disconnected";
   readonly displayName: string;
   readonly activeGroupId: string | null;
+  readonly activeGroupName?: string;
   readonly members: readonly MemberInfo[];
   readonly showBackButton: boolean;
   readonly onBackPress: () => void;
@@ -43,7 +44,8 @@ export const HeaderBar = (props: HeaderBarProps) => {
     }).catch(() => {});
   };
 
-  const truncatedGroupId = () => {
+  const groupDisplayName = () => {
+    if (props.activeGroupName) return props.activeGroupName;
     const id = props.activeGroupId;
     if (!id) return "No group";
     return `${id.slice(0, 8)}...`;
@@ -65,7 +67,7 @@ export const HeaderBar = (props: HeaderBarProps) => {
       <div class="flex flex-col flex-1 min-w-0">
         <div class="flex items-center gap-2">
           <span class="font-semibold text-tg-text truncate">
-            {props.displayName || truncatedGroupId()}
+            {props.displayName || groupDisplayName()}
           </span>
         </div>
         <div class="flex items-center gap-1.5">

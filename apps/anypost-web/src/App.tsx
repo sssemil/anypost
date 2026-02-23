@@ -9,7 +9,7 @@ import {
   getSeenPeerIds,
   getGroupMembers,
 } from "anypost-core/protocol";
-import type { MultiGroupChat, MultiGroupState, NetworkStatus, NetworkEvent, RelayPoolState } from "anypost-core/protocol";
+import type { MultiGroupChat, MultiGroupState, NetworkStatus, NetworkEvent, RelayPoolState, GroupDiscoveryState } from "anypost-core/protocol";
 import {
   generateAccountKey,
   exportAccountKey,
@@ -48,7 +48,6 @@ import {
   deserializeGroups,
 } from "./group-persistence.js";
 
-const DEFAULT_GROUP_ID = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11";
 const ENV_RELAY_MULTIADDR = import.meta.env.VITE_RELAY_MULTIADDR as string | undefined;
 const GROUPS_STORAGE_KEY = "anypost:groups";
 const MAX_EVENTS = 200;
@@ -70,6 +69,7 @@ export const App = () => {
   const [chatStatus, setChatStatus] = createSignal<"connecting" | "connected" | "disconnected">("connecting");
   const [displayName, setDisplayNameState] = createSignal("");
   const [relayPoolState, setRelayPoolState] = createSignal<RelayPoolState | null>(null);
+  const [groupDiscoveryState, setGroupDiscoveryState] = createSignal<GroupDiscoveryState | null>(null);
   const [networkStatus, setNetworkStatus] = createSignal<NetworkStatus | null>(null);
   const [eventLog, setEventLog] = createSignal<readonly NetworkEvent[]>([]);
   const [latencyMap, setLatencyMap] = createSignal<ReadonlyMap<string, number>>(new Map());
@@ -247,12 +247,18 @@ export const App = () => {
   const restorePersistedGroups = () => {
     const persisted = loadPersistedGroups();
     if (!persisted || persisted.joinedGroups.length === 0) {
-      dispatchGroupEvent({ type: "group-joined", groupId: DEFAULT_GROUP_ID });
       return;
     }
 
+    const actionChainSet = new Set(persisted.actionChainGroups);
+
     for (const groupId of persisted.joinedGroups) {
-      dispatchGroupEvent({ type: "group-joined", groupId });
+      if (actionChainSet.has(groupId)) {
+        const groupName = persisted.groupNames[groupId] ?? "Unnamed Group";
+        dispatchGroupEvent({ type: "group-created", groupId, groupName });
+      } else {
+        dispatchGroupEvent({ type: "group-joined", groupId });
+      }
       chat?.joinGroup(groupId);
 
       const messages = persisted.messages[groupId];
@@ -268,24 +274,20 @@ export const App = () => {
     }
   };
 
-  const startChat = async (_accountKey: AccountKey) => {
+  const startChat = async (accountKey: AccountKey) => {
     try {
       const bootstrapPeers = ENV_RELAY_MULTIADDR ? [ENV_RELAY_MULTIADDR] : [];
 
       chat = await createMultiGroupChat({
+        accountKey,
         bootstrapPeers,
         onRelayPoolStateChange: setRelayPoolState,
+        onGroupDiscoveryStateChange: setGroupDiscoveryState,
       });
 
       setChatStatus("connected");
 
       restorePersistedGroups();
-
-      const currentJoined = chat.getJoinedGroups();
-      if (currentJoined.length === 0) {
-        chat.joinGroup(DEFAULT_GROUP_ID);
-      }
-
       refreshNetworkStatus();
 
       chat.onPeerChange(() => {
@@ -367,11 +369,14 @@ export const App = () => {
   };
 
   const handleCreateGroup = () => {
-    const groupId = crypto.randomUUID();
-    chat?.joinGroup(groupId);
-    dispatchGroupEvent({ type: "group-joined", groupId });
-    dispatchGroupEvent({ type: "group-selected", groupId });
-    dispatchMobileView({ type: "group-selected" });
+    const currentChat = chat;
+    if (!currentChat) return;
+
+    currentChat.createGroup("New Group").then((groupId) => {
+      dispatchGroupEvent({ type: "group-created", groupId, groupName: "New Group" });
+      dispatchGroupEvent({ type: "group-selected", groupId });
+      dispatchMobileView({ type: "group-selected" });
+    }).catch(() => {});
   };
 
   const handleLeaveGroup = (groupId: string) => {
@@ -411,11 +416,18 @@ export const App = () => {
     }));
   };
 
+  const activeGroupName = () => {
+    const activeId = groupState().activeGroupId;
+    if (!activeId) return undefined;
+    return groupState().groups.get(activeId)?.groupName;
+  };
+
   const sidebarGroups = () =>
     getGroupList(groupState()).map((g) => {
       const lastMsg = g.messages.length > 0 ? g.messages[g.messages.length - 1] : undefined;
       return {
         groupId: g.groupId,
+        groupName: g.groupName,
         unreadCount: g.unreadCount,
         seenPeerCount: getSeenPeerIds(groupState(), g.groupId).size,
         lastMessage: lastMsg
@@ -463,6 +475,7 @@ export const App = () => {
                 connectionStatus={chatStatus()}
                 displayName={displayName()}
                 activeGroupId={groupState().activeGroupId}
+                activeGroupName={activeGroupName()}
                 members={activeGroupMemberList()}
                 showBackButton={mobileView().currentView === "chat"}
                 onBackPress={() => dispatchMobileView({ type: "back-pressed" })}
@@ -515,6 +528,7 @@ export const App = () => {
                 <NetworkPanel
                   networkStatus={networkStatus()}
                   relayPoolState={relayPoolState()}
+                  groupDiscoveryState={groupDiscoveryState()}
                   displayName={displayName()}
                   latencyMap={latencyMap()}
                   onAddRelay={handleAddRelay}

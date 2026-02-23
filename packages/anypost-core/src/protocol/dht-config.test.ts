@@ -2,8 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   ANYPOST_RELAY_NAMESPACE,
   ANYPOST_CHAT_NAMESPACE,
+  ANYPOST_GROUP_NAMESPACE_PREFIX,
   DEFAULT_TARGET_RELAY_POOL_SIZE,
   createProviderCid,
+  createGroupProviderNamespace,
   createBrowserDhtConfig,
   createRelayDhtConfig,
 } from "./dht-config.js";
@@ -19,6 +21,10 @@ describe("DHT config constants", () => {
 
   it("should define a target relay pool size of 4", () => {
     expect(DEFAULT_TARGET_RELAY_POOL_SIZE).toBe(4);
+  });
+
+  it("should define the group namespace prefix", () => {
+    expect(ANYPOST_GROUP_NAMESPACE_PREFIX).toBe("anypost/group/");
   });
 });
 
@@ -49,6 +55,31 @@ describe("createProviderCid", () => {
 
     expect(cid.multihash.code).toBe(0x12);
     expect(cid.multihash.digest.length).toBe(32);
+  });
+});
+
+describe("createGroupProviderNamespace", () => {
+  it("should concatenate the group prefix with the group ID", () => {
+    const namespace = createGroupProviderNamespace("abc-123");
+
+    expect(namespace).toBe("anypost/group/abc-123");
+  });
+
+  it("should produce different namespaces for different group IDs", () => {
+    const ns1 = createGroupProviderNamespace("group-1");
+    const ns2 = createGroupProviderNamespace("group-2");
+
+    expect(ns1).not.toBe(ns2);
+  });
+
+  it("should produce different CIDs for different groups when used with createProviderCid", async () => {
+    const ns1 = createGroupProviderNamespace("group-1");
+    const ns2 = createGroupProviderNamespace("group-2");
+
+    const cid1 = await createProviderCid(ns1);
+    const cid2 = await createProviderCid(ns2);
+
+    expect(cid1.toString()).not.toBe(cid2.toString());
   });
 });
 

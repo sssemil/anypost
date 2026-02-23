@@ -133,5 +133,38 @@ describe("Group persistence", () => {
       expect(data.messages).toEqual({});
       expect(data.seenPeerIds).toEqual({});
     });
+
+    it("should persist action chain group names and flags", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, {
+        type: "group-created",
+        groupId: "chain-group",
+        groupName: "My Chain Group",
+      });
+
+      const json = serializeGroups(state);
+      const data = deserializeGroups(json);
+
+      expect(data.actionChainGroups).toContain("chain-group");
+      expect(data.groupNames["chain-group"]).toBe("My Chain Group");
+    });
+
+    it("should not include non-chain groups in actionChainGroups", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, { type: "group-joined", groupId: "plain-group" });
+
+      const json = serializeGroups(state);
+      const data = deserializeGroups(json);
+
+      expect(data.actionChainGroups).toEqual([]);
+    });
+
+    it("should default actionChainGroups and groupNames for legacy data", () => {
+      const json = JSON.stringify({ joinedGroups: ["g1"], activeGroupId: "g1" });
+      const data = deserializeGroups(json);
+
+      expect(data.actionChainGroups).toEqual([]);
+      expect(data.groupNames).toEqual({});
+    });
   });
 });

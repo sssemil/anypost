@@ -23,8 +23,7 @@ describe("decodeWireMessage", () => {
     const result = decodeWireMessage(encoded);
 
     expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.type).toBe("encrypted_message");
+    if (result.success && result.data.type === "encrypted_message" && message.type === "encrypted_message") {
       expect(result.data.payload).toEqual(message.payload);
     }
   });
@@ -113,7 +112,7 @@ describe("round-trip", () => {
     const result = decodeWireMessage(encoded);
 
     expect(result.success).toBe(true);
-    if (result.success) {
+    if (result.success && result.data.type === "encrypted_message") {
       expect(result.data.payload).toEqual(message.payload);
     }
   });

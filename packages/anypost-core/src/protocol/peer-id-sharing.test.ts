@@ -5,6 +5,7 @@ import {
   formatPeerIdForDisplay,
   formatSenderDisplay,
   buildCircuitRelayAddresses,
+  extractRelayBaseAddress,
 } from "./peer-id-sharing.js";
 
 const VALID_ED25519_PEER_ID =
@@ -105,5 +106,35 @@ describe("buildCircuitRelayAddresses", () => {
     });
 
     expect(result).toEqual([]);
+  });
+});
+
+describe("extractRelayBaseAddress", () => {
+  it("should extract relay base address from a circuit relay multiaddr", () => {
+    const circuitAddr =
+      "/dns4/am6.bootstrap.libp2p.io/tcp/443/wss/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb/p2p-circuit/p2p/12D3KooWRm656Bq1E2FByEgTDpHXBqS7UJFCyLxR3pnR3pnQ";
+
+    expect(extractRelayBaseAddress(circuitAddr)).toBe(
+      "/dns4/am6.bootstrap.libp2p.io/tcp/443/wss/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
+    );
+  });
+
+  it("should extract relay base address from an ip4 websocket circuit addr", () => {
+    const circuitAddr =
+      "/ip4/1.2.3.4/tcp/9090/ws/p2p/12D3KooWRelay1/p2p-circuit/p2p/12D3KooWTarget";
+
+    expect(extractRelayBaseAddress(circuitAddr)).toBe(
+      "/ip4/1.2.3.4/tcp/9090/ws/p2p/12D3KooWRelay1",
+    );
+  });
+
+  it("should return null for an address without /p2p-circuit/", () => {
+    expect(
+      extractRelayBaseAddress("/ip4/1.2.3.4/tcp/9090/ws/p2p/12D3KooWRelay1"),
+    ).toBeNull();
+  });
+
+  it("should return null for an empty string", () => {
+    expect(extractRelayBaseAddress("")).toBeNull();
   });
 });

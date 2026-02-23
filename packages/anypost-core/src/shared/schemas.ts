@@ -72,6 +72,17 @@ export const WireMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("sync_request"),
     payload: SyncRequestPayloadSchema,
   }),
+  z.object({
+    type: z.literal("signed_action"),
+    signedBytes: Uint8ArraySchema,
+    signature: Uint8ArraySchema,
+    hash: Uint8ArraySchema,
+  }),
+  z.object({
+    type: z.literal("join_request"),
+    groupId: GroupIdSchema,
+    requesterPublicKey: Uint8ArraySchema,
+  }),
 ]);
 
 export type WireMessage = z.infer<typeof WireMessageSchema>;

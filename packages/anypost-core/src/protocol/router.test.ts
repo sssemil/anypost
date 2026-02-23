@@ -12,6 +12,8 @@ const createMockHandlers = (): MessageHandler => ({
   onEncryptedMessage: vi.fn(),
   onMlsCommit: vi.fn(),
   onSyncRequest: vi.fn(),
+  onSignedAction: vi.fn(),
+  onJoinRequest: vi.fn(),
 });
 
 describe("createRouter", () => {
@@ -22,7 +24,9 @@ describe("createRouter", () => {
 
     router.handleMessage(message);
 
-    expect(handlers.onEncryptedMessage).toHaveBeenCalledWith(message.payload);
+    if (message.type === "encrypted_message") {
+      expect(handlers.onEncryptedMessage).toHaveBeenCalledWith(message.payload);
+    }
   });
 
   it("should dispatch mls_commit to MLS handler", () => {
@@ -60,6 +64,42 @@ describe("createRouter", () => {
     expect(handlers.onSyncRequest).toHaveBeenCalledWith(message.payload);
   });
 
+  it("should dispatch signed_action to signed action handler", () => {
+    const handlers = createMockHandlers();
+    const router = createRouter(handlers);
+    const message: WireMessage = {
+      type: "signed_action",
+      signedBytes: new Uint8Array([1, 2, 3]),
+      signature: new Uint8Array(64).fill(0),
+      hash: new Uint8Array(32).fill(0),
+    };
+
+    router.handleMessage(message);
+
+    expect(handlers.onSignedAction).toHaveBeenCalledWith({
+      signedBytes: message.signedBytes,
+      signature: message.signature,
+      hash: message.hash,
+    });
+  });
+
+  it("should dispatch join_request to join request handler", () => {
+    const handlers = createMockHandlers();
+    const router = createRouter(handlers);
+    const message: WireMessage = {
+      type: "join_request",
+      groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+      requesterPublicKey: new Uint8Array(32).fill(1),
+    };
+
+    router.handleMessage(message);
+
+    expect(handlers.onJoinRequest).toHaveBeenCalledWith({
+      groupId: message.groupId,
+      requesterPublicKey: message.requesterPublicKey,
+    });
+  });
+
   it("should not call other handlers when dispatching a specific type", () => {
     const handlers = createMockHandlers();
     const router = createRouter(handlers);
@@ -70,6 +110,8 @@ describe("createRouter", () => {
     expect(handlers.onEncryptedMessage).toHaveBeenCalledTimes(1);
     expect(handlers.onMlsCommit).not.toHaveBeenCalled();
     expect(handlers.onSyncRequest).not.toHaveBeenCalled();
+    expect(handlers.onSignedAction).not.toHaveBeenCalled();
+    expect(handlers.onJoinRequest).not.toHaveBeenCalled();
   });
 });
 

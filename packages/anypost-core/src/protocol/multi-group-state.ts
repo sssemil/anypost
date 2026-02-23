@@ -7,6 +7,8 @@ export type GroupEntry = {
   readonly messages: readonly ChatMessageEvent[];
   readonly unreadCount: number;
   readonly seenPeerIds: ReadonlySet<string>;
+  readonly hasActionChain: boolean;
+  readonly groupName: string | undefined;
 };
 
 export type MultiGroupState = {
@@ -17,6 +19,7 @@ export type MultiGroupState = {
 
 export type MultiGroupEvent =
   | { readonly type: "group-joined"; readonly groupId: string }
+  | { readonly type: "group-created"; readonly groupId: string; readonly groupName: string }
   | { readonly type: "group-left"; readonly groupId: string }
   | { readonly type: "group-selected"; readonly groupId: string }
   | { readonly type: "message-received"; readonly groupId: string; readonly message: ChatMessageEvent }
@@ -40,6 +43,35 @@ const handleGroupJoined = (
     messages: [],
     unreadCount: 0,
     seenPeerIds: new Set(),
+    hasActionChain: false,
+    groupName: undefined,
+  };
+
+  const groups = new Map(state.groups);
+  groups.set(groupId, entry);
+
+  return {
+    groups,
+    activeGroupId: state.activeGroupId ?? groupId,
+    joinOrder: [...state.joinOrder, groupId],
+  };
+};
+
+const handleGroupCreated = (
+  state: MultiGroupState,
+  groupId: string,
+  groupName: string,
+): MultiGroupState => {
+  if (state.groups.has(groupId)) return state;
+
+  const entry: GroupEntry = {
+    groupId,
+    topic: groupTopic(groupId),
+    messages: [],
+    unreadCount: 0,
+    seenPeerIds: new Set(),
+    hasActionChain: true,
+    groupName,
   };
 
   const groups = new Map(state.groups);
@@ -117,6 +149,8 @@ export const transitionMultiGroup = (
   switch (event.type) {
     case "group-joined":
       return handleGroupJoined(state, event.groupId);
+    case "group-created":
+      return handleGroupCreated(state, event.groupId, event.groupName);
     case "group-left":
       return handleGroupLeft(state, event.groupId);
     case "group-selected":

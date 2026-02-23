@@ -560,6 +560,41 @@ describe("Multi-group state machine", () => {
     });
   });
 
+  describe("action chain groups", () => {
+    it("should default hasActionChain to false for joined groups", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, { type: "group-joined", groupId: "group-1" });
+
+      const group = getActiveGroup(state);
+      expect(group?.hasActionChain).toBe(false);
+    });
+
+    it("should set hasActionChain to true for group-created events", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, {
+        type: "group-created",
+        groupId: "group-1",
+        groupName: "My Group",
+      });
+
+      const group = getActiveGroup(state);
+      expect(group?.hasActionChain).toBe(true);
+      expect(group?.groupName).toBe("My Group");
+    });
+
+    it("should preserve groupName on action chain groups", () => {
+      let state = createMultiGroupState();
+      state = transitionMultiGroup(state, {
+        type: "group-created",
+        groupId: "group-1",
+        groupName: "Test Group",
+      });
+
+      const list = getGroupList(state);
+      expect(list[0].groupName).toBe("Test Group");
+    });
+  });
+
   describe("immutability", () => {
     it("should not mutate the original state on join", () => {
       const original = createMultiGroupState();
