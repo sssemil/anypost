@@ -363,6 +363,25 @@ describe("MultiGroupChat", () => {
     expect(chat.getJoinRetryState().get(groupId)?.status).toBe("cancelled");
   });
 
+  it("should rate-limit excessive join requests from a single peer", async () => {
+    const admin = await createTestNode();
+    const joiner = await createTestNode();
+    const { groupId } = await admin.chat.createGroup("Join Rate Limit");
+
+    joiner.chat.joinGroup(groupId);
+    await joiner.chat.connectTo(admin.chat.multiaddrs[0]);
+    await waitFor(400);
+
+    for (let i = 0; i < 12; i++) {
+      await joiner.chat.requestJoin(groupId);
+    }
+    await waitFor(400);
+
+    expect(
+      admin.events.some((evt) => evt.detail.includes("Rate-limited join request")),
+    ).toBe(true);
+  });
+
   it("should emit connection metrics and relay reservation state callbacks", async () => {
     const metrics: Array<{ timeToFirstPeerMs: number | null; reservationAttempts: number }> = [];
     const reservationStates: Array<{ entries: number; targetActive: number }> = [];

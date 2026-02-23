@@ -212,6 +212,16 @@ const BALANCED_DISCOVERY_SEARCH_SCHEDULE_MS = [0, 5_000] as const;
 const DIRECT_UPGRADE_WINDOW_MS = 60_000;
 const JOIN_RETRY_TICK_INTERVAL_MS = 2_000;
 const MAX_SYNC_ENVELOPES_PER_RESPONSE = 256;
+const INCOMING_JOIN_REQUEST_WINDOW_MS = 30_000;
+const INCOMING_JOIN_REQUEST_MAX = 8;
+const INCOMING_SYNC_REQUEST_WINDOW_MS = 10_000;
+const INCOMING_SYNC_REQUEST_MAX = 40;
+const OUTGOING_JOIN_REQUEST_WINDOW_MS = 30_000;
+const OUTGOING_JOIN_REQUEST_MAX = 10;
+const OUTGOING_SYNC_REQUEST_WINDOW_MS = 10_000;
+const OUTGOING_SYNC_REQUEST_MAX = 60;
+const OUTGOING_APPROVAL_WINDOW_MS = 30_000;
+const OUTGOING_APPROVAL_MAX = 10;
 
 export const createMultiGroupChat = async (
   options: CreateMultiGroupChatOptions,
@@ -342,6 +352,33 @@ export const createMultiGroupChat = async (
   const peerDiscoveryMetrics = new Map<string, MutablePeerDiscoveryMetrics>();
   let joinRetryState = createJoinRetryState(initialJoinRetryState);
   const syncProgressByGroup = new Map<string, Map<string, SyncPeerProgress>>();
+  type RateWindow = {
+    windowStartMs: number;
+    count: number;
+  };
+  const incomingJoinRequestRate = new Map<string, RateWindow>();
+  const incomingSyncRequestRate = new Map<string, RateWindow>();
+  const outgoingJoinRequestRate = new Map<string, RateWindow>();
+  const outgoingSyncRequestRate = new Map<string, RateWindow>();
+  const outgoingApprovalRate = new Map<string, RateWindow>();
+
+  const isRateLimited = (
+    bucket: Map<string, RateWindow>,
+    key: string,
+    maxEvents: number,
+    windowMs: number,
+  ): boolean => {
+    const now = Date.now();
+    const current = bucket.get(key);
+    if (!current || now - current.windowStartMs >= windowMs) {
+      bucket.set(key, { windowStartMs: now, count: 1 });
+      return false;
+    }
+
+    const nextCount = current.count + 1;
+    bucket.set(key, { windowStartMs: current.windowStartMs, count: nextCount });
+    return nextCount > maxEvents;
+  };
 
   const cloneSyncProgressState = (): ReadonlyMap<string, ReadonlyMap<string, SyncPeerProgress>> =>
     new Map(
@@ -863,6 +900,17 @@ export const createMultiGroupChat = async (
     targetPeerId?: string,
     knownHashOverride?: Uint8Array,
   ): Promise<void> => {
+    const rateKey = `${groupId}:${targetPeerId ?? "*"}`;
+    if (isRateLimited(
+      outgoingSyncRequestRate,
+      rateKey,
+      OUTGOING_SYNC_REQUEST_MAX,
+      OUTGOING_SYNC_REQUEST_WINDOW_MS,
+    )) {
+      emit("sync", `Rate-limited outgoing sync_request for ${groupId.slice(0, 8)}...`);
+      return;
+    }
+
     const topic = groupTopic(groupId);
     const knownHash = knownHashOverride ? Uint8Array.from(knownHashOverride) : getLatestKnownHash(groupId);
     const senderPublicKey = new Uint8Array(accountKey.publicKey);
@@ -974,6 +1022,16 @@ export const createMultiGroupChat = async (
     groupId: string,
     inviteGrant?: InviteGrantProof,
   ): Promise<void> => {
+    if (isRateLimited(
+      outgoingJoinRequestRate,
+      groupId,
+      OUTGOING_JOIN_REQUEST_MAX,
+      OUTGOING_JOIN_REQUEST_WINDOW_MS,
+    )) {
+      emit("info", `Rate-limited outgoing join request for ${groupId.slice(0, 8)}...`);
+      return;
+    }
+
     const topic = groupTopic(groupId);
     const wireMessage: WireMessage = {
       type: "join_request",
@@ -1595,6 +1653,18 @@ export const createMultiGroupChat = async (
       if (senderPeerId === "unknown") return;
       if (payload.senderPeerId !== senderPeerId) return;
       if (payload.targetPeerId && payload.targetPeerId !== ownPeerId) return;
+      if (isRateLimited(
+        incomingSyncRequestRate,
+        `${matchedGroupId}:${senderPeerId}`,
+        INCOMING_SYNC_REQUEST_MAX,
+        INCOMING_SYNC_REQUEST_WINDOW_MS,
+      )) {
+        emit(
+          "sync",
+          `Rate-limited sync request from ${senderPeerId.slice(0, 12)}...`,
+        );
+        return;
+      }
       if (!verifySyncRequest(payload)) {
         emit(
           "sync",
@@ -1705,6 +1775,19 @@ export const createMultiGroupChat = async (
     }
 
     if (wireMessage.type === "join_request") {
+      if (senderPeerId !== "unknown" && isRateLimited(
+        incomingJoinRequestRate,
+        `${matchedGroupId}:${senderPeerId}`,
+        INCOMING_JOIN_REQUEST_MAX,
+        INCOMING_JOIN_REQUEST_WINDOW_MS,
+      )) {
+        emit(
+          "info",
+          `Rate-limited join request from ${senderPeerId.slice(0, 12)}...`,
+        );
+        return;
+      }
+
       const requesterHex = toHex(wireMessage.requesterPublicKey);
       if (senderPeerId !== "unknown") {
         publicKeyToPeerId.set(requesterHex, senderPeerId);
@@ -1934,6 +2017,14 @@ export const createMultiGroupChat = async (
     const tips = getTips(dag);
     const parentHashes = tips.length > 0 ? tips : [GENESIS_HASH];
     const memberPublicKeyHex = toHex(memberPublicKey);
+    if (isRateLimited(
+      outgoingApprovalRate,
+      `${groupId}:${memberPublicKeyHex}`,
+      OUTGOING_APPROVAL_MAX,
+      OUTGOING_APPROVAL_WINDOW_MS,
+    )) {
+      throw new Error("Approval rate limit exceeded");
+    }
     let inviteTokenId = options?.inviteTokenId;
 
     if (!inviteTokenId) {
@@ -1991,6 +2082,17 @@ export const createMultiGroupChat = async (
     peerDiscoveryMetrics.delete(groupId);
     joinInviteGrantByGroup.delete(groupId);
     pendingJoinInviteGrantsByGroup.delete(groupId);
+    for (const bucket of [
+      incomingJoinRequestRate,
+      incomingSyncRequestRate,
+      outgoingSyncRequestRate,
+      outgoingApprovalRate,
+    ]) {
+      for (const key of [...bucket.keys()]) {
+        if (key.startsWith(`${groupId}:`)) bucket.delete(key);
+      }
+    }
+    outgoingJoinRequestRate.delete(groupId);
     joinRetryState = removeJoinRetry(joinRetryState, groupId);
     emitJoinRetryState();
     groupDiscoveryManager?.leaveGroup(groupId);
@@ -2388,6 +2490,11 @@ export const createMultiGroupChat = async (
       actionChainStates.clear();
       actionEnvelopes.clear();
       syncProgressByGroup.clear();
+      incomingJoinRequestRate.clear();
+      incomingSyncRequestRate.clear();
+      outgoingJoinRequestRate.clear();
+      outgoingSyncRequestRate.clear();
+      outgoingApprovalRate.clear();
       await node.stop();
     },
   };
