@@ -138,7 +138,9 @@ export const WireMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("join_request"),
     groupId: GroupIdSchema,
+    senderPeerId: PeerIdSchema,
     requesterPublicKey: Uint8ArraySchema,
+    signature: Uint8ArraySchema,
     inviteGrant: InviteGrantProofSchema.optional(),
   }),
 ]);

@@ -353,7 +353,9 @@ describe("WireMessageSchema", () => {
     const wireMsg = {
       type: "join_request" as const,
       groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+      senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
       requesterPublicKey: new Uint8Array(32).fill(1),
+      signature: new Uint8Array(64).fill(2),
     };
 
     const result = WireMessageSchema.safeParse(wireMsg);

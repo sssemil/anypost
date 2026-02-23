@@ -1006,6 +1006,52 @@ export const createMultiGroupChat = async (
       payload.senderPublicKey,
     );
 
+  const encodeJoinRequestSigningPayload = (
+    payload: {
+      readonly groupId: string;
+      readonly senderPeerId: string;
+      readonly requesterPublicKey: Uint8Array;
+      readonly inviteGrant?: InviteGrantProof;
+    },
+  ): Uint8Array =>
+    new Uint8Array(
+      encode({
+        type: "join_request",
+        groupId: payload.groupId,
+        senderPeerId: payload.senderPeerId,
+        requesterPublicKey: payload.requesterPublicKey,
+        inviteGrant: payload.inviteGrant,
+      }),
+    );
+
+  const signJoinRequest = (
+    payload: {
+      readonly groupId: string;
+      readonly senderPeerId: string;
+      readonly requesterPublicKey: Uint8Array;
+      readonly inviteGrant?: InviteGrantProof;
+    },
+  ): Uint8Array =>
+    new Uint8Array([...ed25519.sign(
+      encodeJoinRequestSigningPayload(payload),
+      accountKey.privateKey,
+    )]);
+
+  const verifyJoinRequest = (
+    payload: {
+      readonly groupId: string;
+      readonly senderPeerId: string;
+      readonly requesterPublicKey: Uint8Array;
+      readonly signature: Uint8Array;
+      readonly inviteGrant?: InviteGrantProof;
+    },
+  ): boolean =>
+    ed25519.verify(
+      payload.signature,
+      encodeJoinRequestSigningPayload(payload),
+      payload.requesterPublicKey,
+    );
+
   const publishSyncRequest = async (
     groupId: string,
     targetPeerId?: string,
@@ -1155,10 +1201,19 @@ export const createMultiGroupChat = async (
     }
 
     const topic = groupTopic(groupId);
+    const requesterPublicKey = new Uint8Array(accountKey.publicKey);
+    const signature = signJoinRequest({
+      groupId,
+      senderPeerId: ownPeerId,
+      requesterPublicKey,
+      inviteGrant,
+    });
     const wireMessage: WireMessage = {
       type: "join_request",
       groupId,
-      requesterPublicKey: new Uint8Array(accountKey.publicKey),
+      senderPeerId: ownPeerId,
+      requesterPublicKey,
+      signature: new Uint8Array(signature),
       inviteGrant,
     };
     await pubsub.publish(topic, encodeWireMessage(wireMessage));
@@ -1920,7 +1975,17 @@ export const createMultiGroupChat = async (
     }
 
     if (wireMessage.type === "join_request") {
-      if (senderPeerId !== "unknown" && isRateLimited(
+      if (senderPeerId === "unknown") return;
+      if (wireMessage.senderPeerId !== senderPeerId) return;
+      if (!verifyJoinRequest(wireMessage)) {
+        emit(
+          "info",
+          `Rejected join request with invalid signature from ${senderPeerId.slice(0, 12)}...`,
+        );
+        return;
+      }
+
+      if (isRateLimited(
         incomingJoinRequestRate,
         `${matchedGroupId}:${senderPeerId}`,
         INCOMING_JOIN_REQUEST_MAX,
@@ -1934,10 +1999,8 @@ export const createMultiGroupChat = async (
       }
 
       const requesterHex = toHex(wireMessage.requesterPublicKey);
-      if (senderPeerId !== "unknown") {
-        publicKeyToPeerId.set(requesterHex, senderPeerId);
-        notifyPublicKeyToPeerIdChange();
-      }
+      publicKeyToPeerId.set(requesterHex, senderPeerId);
+      notifyPublicKeyToPeerIdChange();
 
       const requesterAlreadyMember = actionChainStates.get(matchedGroupId)?.members.has(requesterHex) ?? false;
       let inviteTokenId: string | undefined;
@@ -1979,9 +2042,7 @@ export const createMultiGroupChat = async (
       }
 
       if (isOwnAdminOfGroup(matchedGroupId) && requesterAlreadyMember) {
-        if (senderPeerId !== "unknown") {
-          publishSyncResponse(matchedGroupId, senderPeerId).catch(() => {});
-        }
+        publishSyncResponse(matchedGroupId, senderPeerId).catch(() => {});
         emit("sync", `Triggered targeted sync for already-approved member ${requesterHex.slice(0, 12)}...`);
       }
 

@@ -114,14 +114,18 @@ describe("createRouter", () => {
     const message: WireMessage = {
       type: "join_request",
       groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+      senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
       requesterPublicKey: new Uint8Array(32).fill(1),
+      signature: new Uint8Array(64).fill(2),
     };
 
     router.handleMessage(message);
 
     expect(handlers.onJoinRequest).toHaveBeenCalledWith({
       groupId: message.groupId,
+      senderPeerId: message.senderPeerId,
       requesterPublicKey: message.requesterPublicKey,
+      signature: message.signature,
     });
   });
 

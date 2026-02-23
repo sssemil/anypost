@@ -12,7 +12,10 @@ type SignedActionPayload = {
 
 type JoinRequestPayload = {
   readonly groupId: string;
+  readonly senderPeerId: string;
   readonly requesterPublicKey: Uint8Array;
+  readonly signature: Uint8Array;
+  readonly inviteGrant?: Extract<WireMessage, { type: "join_request" }>["inviteGrant"];
 };
 
 export type MessageHandler = {
@@ -53,7 +56,10 @@ export const createRouter = (handlers: MessageHandler): Router => ({
       case "join_request":
         handlers.onJoinRequest({
           groupId: message.groupId,
+          senderPeerId: message.senderPeerId,
           requesterPublicKey: message.requesterPublicKey,
+          signature: message.signature,
+          inviteGrant: message.inviteGrant,
         });
         break;
     }
