@@ -88,6 +88,8 @@ describe("round-trip", () => {
       payload: {
         groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
         senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
+        senderPublicKey: new Uint8Array(32).fill(3),
+        signature: new Uint8Array(64).fill(4),
         targetPeerId: "12D3KooWQkVLLv8c9r7y9ZwzhsMvy4c8h6ivm8xv3vN4K8n9sYf2",
         knownHash: new Uint8Array([5, 6, 7, 8]),
       },
@@ -107,6 +109,8 @@ describe("round-trip", () => {
       payload: {
         groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
         senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
+        senderPublicKey: new Uint8Array(32).fill(3),
+        signature: new Uint8Array(64).fill(4),
         targetPeerId: "12D3KooWQkVLLv8c9r7y9ZwzhsMvy4c8h6ivm8xv3vN4K8n9sYf2",
         requestKnownHash: new Uint8Array([1, 2, 3]),
         headHash: new Uint8Array([4, 5, 6]),

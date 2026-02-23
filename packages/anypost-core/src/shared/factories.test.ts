@@ -64,6 +64,8 @@ describe("createWireMessage", () => {
       payload: {
         groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
         senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
+        senderPublicKey: new Uint8Array(32).fill(3),
+        signature: new Uint8Array(64).fill(4),
         knownHash: new Uint8Array([1, 2, 3]),
       },
     });

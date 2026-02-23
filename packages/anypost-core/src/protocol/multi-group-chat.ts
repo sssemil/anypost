@@ -1,5 +1,7 @@
 import { createLibp2p } from "libp2p";
 import { privateKeyFromRaw, generateKeyPair } from "@libp2p/crypto/keys";
+import { ed25519 } from "@noble/curves/ed25519.js";
+import { encode } from "cbor-x";
 import type { PubSub } from "@libp2p/interface";
 import { tcp } from "@libp2p/tcp";
 import { webSockets } from "@libp2p/websockets";
@@ -732,17 +734,147 @@ export const createMultiGroupChat = async (
   const canLocalPeerConsumeGroupUpdates = (groupId: string): boolean =>
     !isMembershipEnforcedGroup(groupId) || isOwnMemberOfGroup(groupId);
 
+  const encodeSyncRequestSigningPayload = (
+    payload: {
+      readonly groupId: string;
+      readonly senderPeerId: string;
+      readonly senderPublicKey: Uint8Array;
+      readonly targetPeerId?: string;
+      readonly knownHash?: Uint8Array;
+    },
+  ): Uint8Array =>
+    new Uint8Array(
+      encode({
+        type: "sync_request",
+        groupId: payload.groupId,
+        senderPeerId: payload.senderPeerId,
+        senderPublicKey: payload.senderPublicKey,
+        targetPeerId: payload.targetPeerId,
+        knownHash: payload.knownHash,
+      }),
+    );
+
+  const encodeSyncResponseSigningPayload = (
+    payload: {
+      readonly groupId: string;
+      readonly senderPeerId: string;
+      readonly senderPublicKey: Uint8Array;
+      readonly targetPeerId: string;
+      readonly requestKnownHash?: Uint8Array;
+      readonly headHash?: Uint8Array;
+      readonly envelopes: ReadonlyArray<{
+        readonly signedBytes: Uint8Array;
+        readonly signature: Uint8Array;
+        readonly hash: Uint8Array;
+      }>;
+    },
+  ): Uint8Array =>
+    new Uint8Array(
+      encode({
+        type: "sync_response",
+        groupId: payload.groupId,
+        senderPeerId: payload.senderPeerId,
+        senderPublicKey: payload.senderPublicKey,
+        targetPeerId: payload.targetPeerId,
+        requestKnownHash: payload.requestKnownHash,
+        headHash: payload.headHash,
+        envelopes: payload.envelopes,
+      }),
+    );
+
+  const signSyncRequest = (
+    payload: {
+      readonly groupId: string;
+      readonly senderPeerId: string;
+      readonly senderPublicKey: Uint8Array;
+      readonly targetPeerId?: string;
+      readonly knownHash?: Uint8Array;
+    },
+  ): Uint8Array =>
+    new Uint8Array([...ed25519.sign(
+      encodeSyncRequestSigningPayload(payload),
+      accountKey.privateKey,
+    )]);
+
+  const verifySyncRequest = (
+    payload: {
+      readonly groupId: string;
+      readonly senderPeerId: string;
+      readonly senderPublicKey: Uint8Array;
+      readonly targetPeerId?: string;
+      readonly knownHash?: Uint8Array;
+      readonly signature: Uint8Array;
+    },
+  ): boolean =>
+    ed25519.verify(
+      payload.signature,
+      encodeSyncRequestSigningPayload(payload),
+      payload.senderPublicKey,
+    );
+
+  const signSyncResponse = (
+    payload: {
+      readonly groupId: string;
+      readonly senderPeerId: string;
+      readonly senderPublicKey: Uint8Array;
+      readonly targetPeerId: string;
+      readonly requestKnownHash?: Uint8Array;
+      readonly headHash?: Uint8Array;
+      readonly envelopes: ReadonlyArray<{
+        readonly signedBytes: Uint8Array;
+        readonly signature: Uint8Array;
+        readonly hash: Uint8Array;
+      }>;
+    },
+  ): Uint8Array =>
+    new Uint8Array([...ed25519.sign(
+      encodeSyncResponseSigningPayload(payload),
+      accountKey.privateKey,
+    )]);
+
+  const verifySyncResponse = (
+    payload: {
+      readonly groupId: string;
+      readonly senderPeerId: string;
+      readonly senderPublicKey: Uint8Array;
+      readonly targetPeerId: string;
+      readonly requestKnownHash?: Uint8Array;
+      readonly headHash?: Uint8Array;
+      readonly envelopes: ReadonlyArray<{
+        readonly signedBytes: Uint8Array;
+        readonly signature: Uint8Array;
+        readonly hash: Uint8Array;
+      }>;
+      readonly signature: Uint8Array;
+    },
+  ): boolean =>
+    ed25519.verify(
+      payload.signature,
+      encodeSyncResponseSigningPayload(payload),
+      payload.senderPublicKey,
+    );
+
   const publishSyncRequest = async (
     groupId: string,
     targetPeerId?: string,
   ): Promise<void> => {
     const topic = groupTopic(groupId);
     const knownHash = getLatestKnownHash(groupId);
+    const senderPublicKey = new Uint8Array(accountKey.publicKey);
+    const signature = signSyncRequest({
+      groupId,
+      senderPeerId: ownPeerId,
+      senderPublicKey,
+      targetPeerId,
+      knownHash,
+    });
     const wireMessage: WireMessage = {
       type: "sync_request",
       payload: {
         groupId,
         senderPeerId: ownPeerId,
+        senderPublicKey,
+        signature: new Uint8Array(Array.from(signature)),
         targetPeerId,
         knownHash: knownHash ? Uint8Array.from(knownHash) : undefined,
       },
@@ -768,11 +900,23 @@ export const createMultiGroupChat = async (
     const missing = getMissingEnvelopesForKnownHash(groupId, requestKnownHash);
     const responseEnvelopes = missing.slice(0, MAX_SYNC_ENVELOPES_PER_RESPONSE);
     const headHash = getLatestKnownHash(groupId);
+    const senderPublicKey = new Uint8Array(accountKey.publicKey);
+    const signature = signSyncResponse({
+      groupId,
+      senderPeerId: ownPeerId,
+      senderPublicKey,
+      targetPeerId,
+      requestKnownHash,
+      headHash,
+      envelopes: responseEnvelopes,
+    });
     const wireMessage: WireMessage = {
       type: "sync_response",
       payload: {
         groupId,
         senderPeerId: ownPeerId,
+        senderPublicKey,
+        signature: new Uint8Array(Array.from(signature)),
         targetPeerId,
         requestKnownHash: requestKnownHash
           ? Uint8Array.from(requestKnownHash)
@@ -1437,13 +1581,24 @@ export const createMultiGroupChat = async (
       if (senderPeerId === "unknown") return;
       if (payload.senderPeerId !== senderPeerId) return;
       if (payload.targetPeerId && payload.targetPeerId !== ownPeerId) return;
+      if (!verifySyncRequest(payload)) {
+        emit(
+          "sync",
+          `Rejected sync request with invalid signature from ${senderPeerId.slice(0, 12)}...`,
+        );
+        return;
+      }
+
+      const senderPublicKeyHex = toHex(payload.senderPublicKey);
+      publicKeyToPeerId.set(senderPublicKeyHex, senderPeerId);
+      notifyPublicKeyToPeerIdChange();
 
       if (isMembershipEnforcedGroup(matchedGroupId)) {
         if (!isOwnMemberOfGroup(matchedGroupId)) return;
-        if (!isPeerMemberOfGroup(matchedGroupId, senderPeerId)) {
+        if (!actionChainStates.get(matchedGroupId)?.members.has(senderPublicKeyHex)) {
           emit(
             "sync",
-            `Rejected sync request from non-member ${senderPeerId.slice(0, 12)}... for group ${matchedGroupId.slice(0, 8)}...`,
+            `Rejected sync request from unknown member key ${senderPublicKeyHex.slice(0, 12)}... for group ${matchedGroupId.slice(0, 8)}...`,
           );
           return;
         }
@@ -1458,6 +1613,24 @@ export const createMultiGroupChat = async (
       if (payload.targetPeerId !== ownPeerId) return;
       if (senderPeerId === "unknown") return;
       if (payload.senderPeerId !== senderPeerId) return;
+      if (!verifySyncResponse(payload)) {
+        emit(
+          "sync",
+          `Rejected sync response with invalid signature from ${senderPeerId.slice(0, 12)}...`,
+        );
+        return;
+      }
+
+      const senderPublicKeyHex = toHex(payload.senderPublicKey);
+      publicKeyToPeerId.set(senderPublicKeyHex, senderPeerId);
+      notifyPublicKeyToPeerIdChange();
+      if (isMembershipEnforcedGroup(matchedGroupId) && !actionChainStates.get(matchedGroupId)?.members.has(senderPublicKeyHex)) {
+        emit(
+          "sync",
+          `Rejected sync response from unknown member key ${senderPublicKeyHex.slice(0, 12)}... for group ${matchedGroupId.slice(0, 8)}...`,
+        );
+        return;
+      }
 
       let accepted = 0;
       let lastAcceptedHashHex: string | null = null;

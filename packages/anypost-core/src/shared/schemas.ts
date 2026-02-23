@@ -56,6 +56,8 @@ const MlsCommitPayloadSchema = z.object({
 const SyncRequestPayloadSchema = z.object({
   groupId: GroupIdSchema,
   senderPeerId: PeerIdSchema,
+  senderPublicKey: Uint8ArraySchema,
+  signature: Uint8ArraySchema,
   targetPeerId: PeerIdSchema.optional(),
   // Legacy field kept for backward compatibility with old peers.
   stateVector: Uint8ArraySchema.optional(),
@@ -72,6 +74,8 @@ const SignedActionEnvelopeWireSchema = z.object({
 const SyncResponsePayloadSchema = z.object({
   groupId: GroupIdSchema,
   senderPeerId: PeerIdSchema,
+  senderPublicKey: Uint8ArraySchema,
+  signature: Uint8ArraySchema,
   targetPeerId: PeerIdSchema,
   requestKnownHash: Uint8ArraySchema.optional(),
   headHash: Uint8ArraySchema.optional(),
