@@ -243,6 +243,24 @@ describe("MultiGroupChat", () => {
     expect(envelopes[0].hash).toBeInstanceOf(Uint8Array);
   });
 
+  it("should rename a group via action chain", async () => {
+    const { chat } = await createTestNode();
+    const { groupId } = await chat.createGroup("Old Name");
+
+    await chat.renameGroup(groupId, "New Name");
+
+    const state = chat.getActionChainState(groupId);
+    expect(state).not.toBeNull();
+    expect(state!.groupName).toBe("New Name");
+  });
+
+  it("should reject renaming group to empty string", async () => {
+    const { chat } = await createTestNode();
+    const { groupId } = await chat.createGroup("Old Name");
+
+    await expect(chat.renameGroup(groupId, "   ")).rejects.toThrow("Group name cannot be empty");
+  });
+
   it("should return empty array for unknown group envelopes", async () => {
     const { chat } = await createTestNode();
 

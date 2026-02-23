@@ -129,6 +129,7 @@ export type MultiGroupChat = {
   readonly sendMessage: (groupId: string, text: string, displayName?: string) => Promise<void>;
   readonly createGroup: (name: string) => Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }>;
   readonly joinViaInvite: (invite: GroupInvite) => Promise<{ groupId: string }>;
+  readonly renameGroup: (groupId: string, newName: string) => Promise<void>;
   readonly approveJoin: (
     groupId: string,
     memberPublicKey: Uint8Array,
@@ -1671,6 +1672,27 @@ export const createMultiGroupChat = async (
       await runJoinRetryAttempt(groupId);
 
       return { groupId };
+    },
+    renameGroup: async (groupId: string, newName: string): Promise<void> => {
+      const trimmed = newName.trim();
+      if (trimmed.length === 0) throw new Error("Group name cannot be empty");
+      const dag = actionDags.get(groupId);
+      if (!dag) throw new Error("No action chain for this group");
+
+      const tips = getTips(dag);
+      const parentHashes = tips.length > 0 ? tips : [GENESIS_HASH];
+      const envelope = createSignedActionEnvelope({
+        accountKey,
+        groupId,
+        parentHashes,
+        payload: {
+          type: "group-renamed",
+          newName: trimmed,
+        },
+      });
+      processSignedAction(groupId, envelope);
+      await publishEnvelope(groupId, envelope);
+      emit("info", `Renamed group ${groupId.slice(0, 8)}... to "${trimmed}"`);
     },
     approveJoin: async (
       groupId: string,

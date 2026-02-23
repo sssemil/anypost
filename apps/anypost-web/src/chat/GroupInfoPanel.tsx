@@ -52,6 +52,7 @@ type GroupInfoPanelProps = {
   readonly onCancelJoinRetry: () => void;
   readonly onCreateInvite: ((options: InviteCreateOptions) => string | null) | null;
   readonly onSetJoinPolicy: ((joinPolicy: JoinPolicy) => Promise<string | null>) | null;
+  readonly onRenameGroup: ((newName: string) => Promise<string | null>) | null;
 };
 
 const truncatePeerId = (peerId: string): string =>
@@ -123,6 +124,9 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
   const [copiedInvite, setCopiedInvite] = createSignal(false);
   const [addPeerIdInput, setAddPeerIdInput] = createSignal("");
   const [addPeerIdError, setAddPeerIdError] = createSignal("");
+  const [renameInput, setRenameInput] = createSignal("");
+  const [renameError, setRenameError] = createSignal("");
+  const [renaming, setRenaming] = createSignal(false);
   const [inviteMode, setInviteMode] = createSignal<"targeted-peer" | "open">("open");
   const [inviteTargetPeerId, setInviteTargetPeerId] = createSignal("");
   const [inviteExpiresMinutesInput, setInviteExpiresMinutesInput] = createSignal("");
@@ -138,6 +142,11 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
   createEffect(() => {
     props.groupId;
     setEnvelopePage(0);
+  });
+
+  createEffect(() => {
+    setRenameInput(props.groupName);
+    setRenameError("");
   });
 
   const envelopeList = createMemo(() => [...props.actionEnvelopes].reverse());
@@ -257,6 +266,22 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
     }).catch(() => setJoinPolicyError("Failed to update join policy"));
   };
 
+  const handleRenameGroup = () => {
+    if (!props.onRenameGroup) return;
+    const nextName = renameInput().trim();
+    if (nextName.length === 0) {
+      setRenameError("Group name cannot be empty");
+      return;
+    }
+    setRenameError("");
+    setRenaming(true);
+    props.onRenameGroup(nextName).then((error) => {
+      if (error) setRenameError(error);
+    }).catch(() => setRenameError("Failed to rename group")).finally(() => {
+      setRenaming(false);
+    });
+  };
+
   return (
     <div class="space-y-4">
       <div>
@@ -345,6 +370,38 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
           </button>
           <Show when={inviteError()}>
             <p class="text-[10px] text-red-400">{inviteError()}</p>
+          </Show>
+        </div>
+      </Show>
+
+      <Show when={props.isAdmin}>
+        <div class="rounded border border-tg-border bg-tg-hover px-2 py-2 space-y-2">
+          <h4 class="text-xs font-medium text-tg-text-dim uppercase tracking-wider">
+            Rename Group
+          </h4>
+          <div class="flex gap-2">
+            <input
+              type="text"
+              class="flex-1 bg-tg-input text-tg-text text-xs px-2.5 py-1.5 rounded border border-tg-border focus:border-tg-accent focus:outline-none"
+              value={renameInput()}
+              onInput={(e) => {
+                setRenameInput(e.currentTarget.value);
+                setRenameError("");
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleRenameGroup();
+              }}
+            />
+            <button
+              class="text-xs bg-tg-accent text-white px-3 py-1.5 rounded hover:bg-tg-accent/80 cursor-pointer disabled:opacity-50"
+              disabled={renaming() || renameInput().trim().length === 0 || renameInput().trim() === props.groupName.trim()}
+              onClick={handleRenameGroup}
+            >
+              Rename
+            </button>
+          </div>
+          <Show when={renameError()}>
+            <p class="text-[10px] text-red-400">{renameError()}</p>
           </Show>
         </div>
       </Show>

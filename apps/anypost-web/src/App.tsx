@@ -910,6 +910,19 @@ export const App = () => {
     }
   };
 
+  const handleRenameGroup = async (newName: string): Promise<string | null> => {
+    const currentChat = chat;
+    const activeId = groupState().activeGroupId;
+    if (!currentChat || !activeId) return "No active group";
+    try {
+      await currentChat.renameGroup(activeId, newName);
+      refreshActionChainState();
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : "Failed to rename group";
+    }
+  };
+
   const handleAddByPeerId = (targetPeerId: string): string | null => {
     const currentChat = chat;
     const activeId = groupState().activeGroupId;
@@ -938,7 +951,8 @@ export const App = () => {
   const activeGroupName = () => {
     const activeId = groupState().activeGroupId;
     if (!activeId) return undefined;
-    return groupState().groups.get(activeId)?.groupName;
+    return chat?.getActionChainState(activeId)?.groupName
+      ?? groupState().groups.get(activeId)?.groupName;
   };
 
   const connectedPeerIds = (): ReadonlySet<string> => {
@@ -953,9 +967,10 @@ export const App = () => {
       const visiblePeerCount = [...getSeenPeerIds(groupState(), g.groupId)]
         .filter((peerId) => peerId !== SYSTEM_SENDER_ID)
         .length;
+      const chainName = chat?.getActionChainState(g.groupId)?.groupName;
       return {
         groupId: g.groupId,
-        groupName: g.groupName,
+        groupName: chainName ?? g.groupName,
         unreadCount: g.unreadCount,
         seenPeerCount: visiblePeerCount,
         lastMessage: lastMsg
@@ -1109,6 +1124,7 @@ export const App = () => {
                     : null
                 }
                 onSetJoinPolicy={isCurrentUserAdmin() ? handleSetJoinPolicy : null}
+                onRenameGroup={isCurrentUserAdmin() ? handleRenameGroup : null}
               />
             }
             mobileView={mobileView().currentView}
