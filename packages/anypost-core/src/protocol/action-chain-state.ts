@@ -144,12 +144,22 @@ const applyMemberLeft = (
   state: ActionChainGroupState,
   authorHex: string,
 ): Result<ActionChainGroupState, Error> => {
-  if (!isMember(state, authorHex)) {
+  const leavingMember = state.members.get(authorHex);
+  if (!leavingMember) {
     return Result.failure(new Error("Not a member"));
   }
 
   const members = new Map(state.members);
   members.delete(authorHex);
+
+  const hasAdmin = [...members.values()].some((member) => member.role === "admin");
+  if (!hasAdmin && members.size > 0 && leavingMember.role === "admin") {
+    const nextOwner = [...members.values()].sort((a, b) => {
+      if (a.joinedAt !== b.joinedAt) return a.joinedAt - b.joinedAt;
+      return a.publicKeyHex.localeCompare(b.publicKeyHex);
+    })[0];
+    members.set(nextOwner.publicKeyHex, { ...nextOwner, role: "admin" });
+  }
 
   return Result.success({ ...state, members });
 };

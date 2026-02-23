@@ -453,6 +453,89 @@ describe("Action chain state", () => {
 
       expect(result.success).toBe(false);
     });
+
+    it("should transfer admin role to earliest joined remaining member when admin leaves", () => {
+      const creator = generateAccountKey();
+      const memberA = generateAccountKey();
+      const memberB = generateAccountKey();
+
+      const genesis = makeAction({
+        accountKey: creator,
+        parentHashes: [GENESIS_HASH],
+        payload: { type: "group-created", groupName: "Group" },
+        timestamp: 1000,
+      });
+      let state = applyAction(
+        createActionChainGroupState(DEFAULT_GROUP_ID),
+        genesis,
+      );
+      if (!state.success) throw new Error("Setup failed");
+
+      const joinReqA = makeAction({
+        accountKey: memberA,
+        parentHashes: [genesis.hash],
+        payload: {
+          type: "join-request",
+          requesterPublicKey: pubKey(memberA),
+        },
+        timestamp: 2000,
+      });
+      state = applyAction(state.data, joinReqA);
+      if (!state.success) throw new Error("Setup failed");
+
+      const approveA = makeAction({
+        accountKey: creator,
+        parentHashes: [joinReqA.hash],
+        payload: {
+          type: "member-approved",
+          memberPublicKey: pubKey(memberA),
+          role: "member",
+        },
+        timestamp: 3000,
+      });
+      state = applyAction(state.data, approveA);
+      if (!state.success) throw new Error("Setup failed");
+
+      const joinReqB = makeAction({
+        accountKey: memberB,
+        parentHashes: [approveA.hash],
+        payload: {
+          type: "join-request",
+          requesterPublicKey: pubKey(memberB),
+        },
+        timestamp: 4000,
+      });
+      state = applyAction(state.data, joinReqB);
+      if (!state.success) throw new Error("Setup failed");
+
+      const approveB = makeAction({
+        accountKey: creator,
+        parentHashes: [joinReqB.hash],
+        payload: {
+          type: "member-approved",
+          memberPublicKey: pubKey(memberB),
+          role: "member",
+        },
+        timestamp: 5000,
+      });
+      state = applyAction(state.data, approveB);
+      if (!state.success) throw new Error("Setup failed");
+
+      const leave = makeAction({
+        accountKey: creator,
+        parentHashes: [approveB.hash],
+        payload: { type: "member-left" },
+        timestamp: 6000,
+      });
+      const result = applyAction(state.data, leave);
+
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      expect(result.data.members.has(toHex(creator.publicKey))).toBe(false);
+      expect(result.data.members.get(toHex(memberA.publicKey))?.role).toBe("admin");
+      expect(result.data.members.get(toHex(memberB.publicKey))?.role).toBe("member");
+    });
   });
 
   describe("applyAction — member-removed", () => {
