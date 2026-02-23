@@ -16,6 +16,7 @@ type HeaderBarProps = {
   readonly showBackButton: boolean;
   readonly onBackPress: () => void;
   readonly onDevDrawerToggle: () => void;
+  readonly onGroupInfoToggle: () => void;
 };
 
 const statusDotColor = (status: HeaderBarProps["connectionStatus"]): string => {
@@ -64,7 +65,10 @@ export const HeaderBar = (props: HeaderBarProps) => {
         </button>
       </Show>
 
-      <div class="flex flex-col flex-1 min-w-0">
+      <button
+        class="flex flex-col flex-1 min-w-0 text-left hover:bg-tg-hover rounded-lg px-2 py-1 -mx-2 -my-1 cursor-pointer"
+        onClick={() => props.onGroupInfoToggle()}
+      >
         <div class="flex items-center gap-2">
           <span class="font-semibold text-tg-text truncate">
             {props.displayName || groupDisplayName()}
@@ -93,7 +97,7 @@ export const HeaderBar = (props: HeaderBarProps) => {
             ).join(", ")}
           </div>
         </Show>
-      </div>
+      </button>
 
       <Show when={props.peerId}>
         <button

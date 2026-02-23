@@ -8,8 +8,9 @@ import {
   getGroupList,
   getSeenPeerIds,
   getGroupMembers,
+  toHex,
 } from "anypost-core/protocol";
-import type { MultiGroupChat, MultiGroupState, NetworkStatus, NetworkEvent, RelayPoolState, GroupDiscoveryState } from "anypost-core/protocol";
+import type { MultiGroupChat, MultiGroupState, NetworkStatus, NetworkEvent, RelayPoolState, GroupDiscoveryState, ActionChainGroupState } from "anypost-core/protocol";
 import {
   generateAccountKey,
   exportAccountKey,
@@ -39,6 +40,8 @@ import { MessageList } from "./chat/MessageList.js";
 import { MessageInput } from "./chat/MessageInput.js";
 import { NetworkPanel } from "./network/NetworkPanel.js";
 import { EventLog } from "./network/EventLog.js";
+import { GroupInfoPanel } from "./chat/GroupInfoPanel.js";
+import type { PendingJoinRequest } from "./chat/GroupInfoPanel.js";
 import {
   createMobileViewState,
   transitionMobileView,
@@ -74,10 +77,13 @@ export const App = () => {
   const [eventLog, setEventLog] = createSignal<readonly NetworkEvent[]>([]);
   const [latencyMap, setLatencyMap] = createSignal<ReadonlyMap<string, number>>(new Map());
   const [mobileView, setMobileView] = createSignal(createMobileViewState());
+  const [actionChainState, setActionChainState] = createSignal<ActionChainGroupState | null>(null);
+  const [pendingJoins, setPendingJoins] = createSignal<readonly PendingJoinRequest[]>([]);
 
   let chat: MultiGroupChat | undefined;
   let unsubscribeMessage: (() => void) | undefined;
   let unsubscribeEvents: (() => void) | undefined;
+  let unsubscribeJoinRequests: (() => void) | undefined;
   let statusInterval: ReturnType<typeof setInterval> | undefined;
   let pingInterval: ReturnType<typeof setInterval> | undefined;
 
@@ -110,6 +116,21 @@ export const App = () => {
 
     setLatencyMap(results);
   };
+
+  const refreshActionChainState = () => {
+    const activeId = groupState().activeGroupId;
+    if (!activeId || !chat) {
+      setActionChainState(null);
+      return;
+    }
+    setActionChainState(chat.getActionChainState(activeId));
+  };
+
+  createEffect(() => {
+    groupState().activeGroupId;
+    refreshActionChainState();
+    setPendingJoins([]);
+  });
 
   const dispatchGroupEvent = (event: Parameters<typeof transitionMultiGroup>[1]) => {
     setGroupState((s) => {
@@ -310,6 +331,16 @@ export const App = () => {
           message: msg,
         });
       });
+
+      unsubscribeJoinRequests = chat.onJoinRequest((evt) => {
+        if (evt.groupId === groupState().activeGroupId) {
+          const pubKeyHex = toHex(new Uint8Array(evt.requesterPublicKey));
+          setPendingJoins((prev) => {
+            if (prev.some((p) => p.publicKeyHex === pubKeyHex)) return prev;
+            return [...prev, { publicKeyHex: pubKeyHex, publicKey: new Uint8Array(evt.requesterPublicKey) }];
+          });
+        }
+      });
     } catch {
       setChatStatus("disconnected");
     }
@@ -318,6 +349,7 @@ export const App = () => {
   onCleanup(() => {
     unsubscribeMessage?.();
     unsubscribeEvents?.();
+    unsubscribeJoinRequests?.();
     if (statusInterval) clearInterval(statusInterval);
     if (pingInterval) clearInterval(pingInterval);
     chat?.stop();
@@ -406,6 +438,30 @@ export const App = () => {
     chat?.addRelay(addr);
   };
 
+  const ownPublicKeyHex = () => {
+    const key = getCurrentAccountKey();
+    return key ? toHex(new Uint8Array(key.publicKey)) : "";
+  };
+
+  const isCurrentUserAdmin = () => {
+    const state = actionChainState();
+    if (!state) return false;
+    const hex = ownPublicKeyHex();
+    return state.members.get(hex)?.role === "admin";
+  };
+
+  const handleApproveJoin = (memberPublicKey: Uint8Array) => {
+    const currentChat = chat;
+    const activeId = groupState().activeGroupId;
+    if (!currentChat || !activeId) return;
+
+    currentChat.approveJoin(activeId, memberPublicKey).then(() => {
+      const approvedHex = toHex(new Uint8Array(memberPublicKey));
+      setPendingJoins((prev) => prev.filter((p) => p.publicKeyHex !== approvedHex));
+      refreshActionChainState();
+    }).catch(() => {});
+  };
+
   const activeGroupMemberList = () => {
     const activeId = groupState().activeGroupId;
     if (!activeId) return [];
@@ -480,6 +536,7 @@ export const App = () => {
                 showBackButton={mobileView().currentView === "chat"}
                 onBackPress={() => dispatchMobileView({ type: "back-pressed" })}
                 onDevDrawerToggle={() => dispatchMobileView({ type: "dev-drawer-toggled" })}
+                onGroupInfoToggle={() => dispatchMobileView({ type: "group-info-toggled" })}
               />
             }
             sidebar={
@@ -539,9 +596,26 @@ export const App = () => {
                 />
               </>
             }
+            groupInfoContent={
+              <GroupInfoPanel
+                groupName={activeGroupName() ?? "Unknown Group"}
+                members={actionChainState()?.members ?? new Map()}
+                pendingJoins={pendingJoins()}
+                isAdmin={isCurrentUserAdmin()}
+                ownPublicKeyHex={ownPublicKeyHex()}
+                onApproveJoin={handleApproveJoin}
+              />
+            }
             mobileView={mobileView().currentView}
-            isDevDrawerOpen={mobileView().isDevDrawerOpen}
-            onDevDrawerClose={() => dispatchMobileView({ type: "dev-drawer-closed" })}
+            rightPanel={mobileView().rightPanel}
+            onRightPanelClose={() => {
+              const panel = mobileView().rightPanel;
+              if (panel === "dev-tools") {
+                dispatchMobileView({ type: "dev-drawer-closed" });
+              } else if (panel === "group-info") {
+                dispatchMobileView({ type: "group-info-closed" });
+              }
+            }}
           />
         </Show>
       </Match>

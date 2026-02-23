@@ -1,5 +1,6 @@
 import type { JSX } from "solid-js";
-import { Show } from "solid-js";
+import { Match, Show, Switch } from "solid-js";
+import type { RightPanel } from "./mobile-view-machine.js";
 
 type ChatLayoutProps = {
   readonly sidebar: JSX.Element;
@@ -7,9 +8,15 @@ type ChatLayoutProps = {
   readonly messageList: JSX.Element;
   readonly messageInput: JSX.Element;
   readonly devDrawerContent: JSX.Element;
+  readonly groupInfoContent: JSX.Element;
   readonly mobileView: "group-list" | "chat";
-  readonly isDevDrawerOpen: boolean;
-  readonly onDevDrawerClose: () => void;
+  readonly rightPanel: RightPanel;
+  readonly onRightPanelClose: () => void;
+};
+
+const PANEL_TITLES: Record<Exclude<RightPanel, "none">, string> = {
+  "dev-tools": "Developer Tools",
+  "group-info": "Group Info",
 };
 
 export const ChatLayout = (props: ChatLayoutProps) => {
@@ -44,19 +51,28 @@ export const ChatLayout = (props: ChatLayoutProps) => {
           </div>
         </div>
 
-        <Show when={props.isDevDrawerOpen}>
+        <Show when={props.rightPanel !== "none"}>
           <div class="w-full sm:w-[420px] sm:min-w-[420px] flex flex-col border-l border-tg-border bg-tg-sidebar">
             <div class="flex items-center justify-between px-4 py-3 border-b border-tg-border shrink-0">
-              <span class="font-semibold text-tg-text">Developer Tools</span>
+              <span class="font-semibold text-tg-text">
+                {PANEL_TITLES[props.rightPanel as Exclude<RightPanel, "none">]}
+              </span>
               <button
                 class="text-tg-text-dim hover:text-tg-text text-xl leading-none p-1 cursor-pointer"
-                onClick={() => props.onDevDrawerClose()}
+                onClick={() => props.onRightPanelClose()}
               >
                 &times;
               </button>
             </div>
             <div class="flex-1 overflow-y-auto p-4">
-              {props.devDrawerContent}
+              <Switch>
+                <Match when={props.rightPanel === "dev-tools"}>
+                  {props.devDrawerContent}
+                </Match>
+                <Match when={props.rightPanel === "group-info"}>
+                  {props.groupInfoContent}
+                </Match>
+              </Switch>
             </div>
           </div>
         </Show>

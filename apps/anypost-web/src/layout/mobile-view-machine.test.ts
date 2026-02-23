@@ -6,11 +6,11 @@ import {
 
 describe("Mobile view machine", () => {
   describe("createMobileViewState", () => {
-    it("should start on group-list view with dev drawer open", () => {
+    it("should start on group-list view with dev-tools panel open", () => {
       const state = createMobileViewState();
 
       expect(state.currentView).toBe("group-list");
-      expect(state.isDevDrawerOpen).toBe(true);
+      expect(state.rightPanel).toBe("dev-tools");
     });
   });
 
@@ -34,43 +34,95 @@ describe("Mobile view machine", () => {
       expect(next.currentView).toBe("group-list");
     });
 
-    it("should close dev drawer when going back", () => {
+    it("should close right panel when going back", () => {
       let state = createMobileViewState();
       state = transitionMobileView(state, { type: "group-selected" });
       state = transitionMobileView(state, { type: "dev-drawer-toggled" });
 
       const next = transitionMobileView(state, { type: "back-pressed" });
 
-      expect(next.isDevDrawerOpen).toBe(false);
+      expect(next.rightPanel).toBe("none");
     });
   });
 
   describe("dev-drawer-toggled event", () => {
-    it("should close dev drawer when open", () => {
+    it("should close dev-tools panel when open", () => {
       const state = createMobileViewState();
 
       const next = transitionMobileView(state, { type: "dev-drawer-toggled" });
 
-      expect(next.isDevDrawerOpen).toBe(false);
+      expect(next.rightPanel).toBe("none");
     });
 
-    it("should open dev drawer when closed", () => {
+    it("should open dev-tools panel when closed", () => {
       let state = createMobileViewState();
       state = transitionMobileView(state, { type: "dev-drawer-toggled" });
 
       const next = transitionMobileView(state, { type: "dev-drawer-toggled" });
 
-      expect(next.isDevDrawerOpen).toBe(true);
+      expect(next.rightPanel).toBe("dev-tools");
+    });
+
+    it("should replace group-info panel with dev-tools", () => {
+      let state = createMobileViewState();
+      state = transitionMobileView(state, { type: "group-info-toggled" });
+      expect(state.rightPanel).toBe("group-info");
+
+      const next = transitionMobileView(state, { type: "dev-drawer-toggled" });
+
+      expect(next.rightPanel).toBe("dev-tools");
     });
   });
 
   describe("dev-drawer-closed event", () => {
-    it("should close the dev drawer", () => {
+    it("should close the right panel", () => {
       const state = createMobileViewState();
 
       const next = transitionMobileView(state, { type: "dev-drawer-closed" });
 
-      expect(next.isDevDrawerOpen).toBe(false);
+      expect(next.rightPanel).toBe("none");
+    });
+  });
+
+  describe("group-info-toggled event", () => {
+    it("should open group-info panel when closed", () => {
+      let state = createMobileViewState();
+      state = transitionMobileView(state, { type: "dev-drawer-toggled" });
+      expect(state.rightPanel).toBe("none");
+
+      const next = transitionMobileView(state, { type: "group-info-toggled" });
+
+      expect(next.rightPanel).toBe("group-info");
+    });
+
+    it("should close group-info panel when open", () => {
+      let state = createMobileViewState();
+      state = transitionMobileView(state, { type: "group-info-toggled" });
+      expect(state.rightPanel).toBe("group-info");
+
+      const next = transitionMobileView(state, { type: "group-info-toggled" });
+
+      expect(next.rightPanel).toBe("none");
+    });
+
+    it("should replace dev-tools panel with group-info", () => {
+      const state = createMobileViewState();
+      expect(state.rightPanel).toBe("dev-tools");
+
+      const next = transitionMobileView(state, { type: "group-info-toggled" });
+
+      expect(next.rightPanel).toBe("group-info");
+    });
+  });
+
+  describe("group-info-closed event", () => {
+    it("should close the right panel", () => {
+      let state = createMobileViewState();
+      state = transitionMobileView(state, { type: "group-info-toggled" });
+
+      const next = transitionMobileView(state, { type: "group-info-closed" });
+
+      expect(next.rightPanel).toBe("none");
     });
   });
 
