@@ -1,5 +1,12 @@
 import { createSignal, For, Show } from "solid-js";
-import type { NetworkStatus, RelayPoolState, GroupDiscoveryState, RelayCandidateState } from "anypost-core/protocol";
+import type {
+  NetworkStatus,
+  RelayPoolState,
+  GroupDiscoveryState,
+  RelayCandidateState,
+  ConnectionMetrics,
+  RelayReservationState,
+} from "anypost-core/protocol";
 import { getCandidatesByRtt, getReservedCount } from "anypost-core/protocol";
 import { TopologyGraph } from "./TopologyGraph.js";
 
@@ -8,6 +15,8 @@ type NetworkPanelProps = {
   readonly relayPoolState: RelayPoolState | null;
   readonly groupDiscoveryState: GroupDiscoveryState | null;
   readonly relayCandidateState: RelayCandidateState | null;
+  readonly relayReservationState: RelayReservationState | null;
+  readonly connectionMetrics: ConnectionMetrics | null;
   readonly displayName: string;
   readonly latencyMap: ReadonlyMap<string, number>;
   readonly onAddRelay?: (addr: string) => void;
@@ -43,6 +52,12 @@ const relayStatusDot = (status: string) => {
         : "bg-tg-text-dim";
   return <span class={`inline-block w-2 h-2 rounded-full ${color}`} />;
 };
+
+const ratio = (num: number, den: number): string =>
+  den <= 0 ? "0%" : `${Math.round((num / den) * 100)}%`;
+
+const formatMs = (ms: number | null): string =>
+  ms === null ? "--" : `${Math.round(ms)}ms`;
 
 export const NetworkPanel = (props: NetworkPanelProps) => {
   const [showPanel, setShowPanel] = createSignal(true);
@@ -160,6 +175,62 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                           <Show when={candidate.rttMs !== null}>
                             {latencyBadge(candidate.rttMs!)}
                           </Show>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+              )}
+            </Show>
+
+            <Show when={props.connectionMetrics}>
+              {(metrics) => (
+                <div class="mb-3 pb-3 border-b border-tg-border">
+                  <div class="flex items-center gap-2 mb-1.5">
+                    <span class="text-tg-text-dim">Connection Metrics</span>
+                  </div>
+                  <div class="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] text-tg-text">
+                    <span class="text-tg-text-dim">TTFP</span>
+                    <span>{formatMs(metrics().timeToFirstPeerMs)}</span>
+                    <span class="text-tg-text-dim">Reservation success</span>
+                    <span>{ratio(metrics().reservationSuccesses, metrics().reservationAttempts)}</span>
+                    <span class="text-tg-text-dim">Renew success</span>
+                    <span>{ratio(metrics().renewSuccesses, metrics().renewAttempts)}</span>
+                    <span class="text-tg-text-dim">Direct-upgrade success</span>
+                    <span>{ratio(metrics().directUpgradeSuccesses, metrics().directUpgradeAttempts)}</span>
+                    <span class="text-tg-text-dim">Active reservations</span>
+                    <span>{metrics().activeReservations}</span>
+                    <span class="text-tg-text-dim">Rotations</span>
+                    <span>{metrics().rotationCount}</span>
+                  </div>
+                </div>
+              )}
+            </Show>
+
+            <Show when={props.relayReservationState}>
+              {(reservationState) => (
+                <Show when={reservationState().entries.size > 0}>
+                  <div class="mb-3 pb-3 border-b border-tg-border">
+                    <div class="flex items-center gap-2 mb-1.5">
+                      <span class="text-tg-text-dim">Reservation Manager</span>
+                      <span class="text-tg-text">
+                        {reservationState().entries.size} relay{reservationState().entries.size !== 1 ? "s" : ""}
+                      </span>
+                    </div>
+                    <For each={[...reservationState().entries.values()]}>
+                      {(entry) => (
+                        <div class="flex items-center gap-2 py-0.5">
+                          <span
+                            class="inline-block w-2 h-2 rounded-full"
+                            classList={{
+                              "bg-tg-success": entry.status === "active",
+                              "bg-tg-warning": entry.status === "renewing" || entry.status === "reserving",
+                              "bg-tg-danger": entry.status === "backoff",
+                              "bg-tg-text-dim": entry.status === "idle" || entry.status === "evicted",
+                            }}
+                          />
+                          <code class="text-tg-text flex-1">{entry.peerId.slice(0, 20)}...</code>
+                          <span class="text-[10px] text-tg-text-dim uppercase">{entry.status}</span>
                         </div>
                       )}
                     </For>

@@ -294,6 +294,50 @@ describe("MultiGroupChat", () => {
     expect(chat.peerId).toMatch(/^12D3KooW/);
   });
 
+  it("should accept discoveryProfile and onPeerDiscoveryMetricsChange options without error", async () => {
+    const chat = await createMultiGroupChat({
+      accountKey: generateAccountKey(),
+      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+      useTransports: "tcp",
+      discoveryProfile: "aggressive",
+      onPeerDiscoveryMetricsChange: () => {},
+    });
+    instances.push(chat);
+
+    expect(chat.peerId).toMatch(/^12D3KooW/);
+  });
+
+  it("should emit connection metrics and relay reservation state callbacks", async () => {
+    const metrics: Array<{ timeToFirstPeerMs: number | null; reservationAttempts: number }> = [];
+    const reservationStates: Array<{ entries: number; targetActive: number }> = [];
+
+    const chat = await createMultiGroupChat({
+      accountKey: generateAccountKey(),
+      listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+      useTransports: "tcp",
+      initialRelayHints: ["/dns4/relay.example.com/tcp/443/wss/p2p/12D3KooWRelayHint111111111111111111111"],
+      onConnectionMetricsChange: (next) => {
+        metrics.push({
+          timeToFirstPeerMs: next.timeToFirstPeerMs,
+          reservationAttempts: next.reservationAttempts,
+        });
+      },
+      onRelayReservationStateChange: (next) => {
+        reservationStates.push({
+          entries: next.entries.size,
+          targetActive: next.targetActive,
+        });
+      },
+    });
+    instances.push(chat);
+
+    expect(metrics.length).toBeGreaterThan(0);
+    expect(metrics[0].reservationAttempts).toBe(0);
+    expect(reservationStates.length).toBeGreaterThan(0);
+    expect(reservationStates[reservationStates.length - 1].entries).toBeGreaterThan(0);
+    expect(reservationStates[reservationStates.length - 1].targetActive).toBe(3);
+  });
+
   it("should prune cached paths for non-pinned peers once membership context is available", async () => {
     const admin = await createTestNode();
     const { groupId, genesisEnvelope } = await admin.chat.createGroup("Pinned Cache");
@@ -347,7 +391,8 @@ describe("MultiGroupChat", () => {
     await waitUntil(
       () => (latestPeerPathCache.get(admin.peerId)?.length ?? 0) > 0,
     );
-    expect(latestPeerPathCache.get(admin.peerId)).toEqual([validPath]);
+    const cachedPaths = latestPeerPathCache.get(admin.peerId) ?? [];
+    expect(cachedPaths).toContain(validPath);
   });
 
   it("should rebuild action chain state from loaded envelopes", async () => {

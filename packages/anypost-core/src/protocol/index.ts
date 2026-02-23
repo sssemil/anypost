@@ -134,6 +134,9 @@ export type {
   MultiGroupChat,
   MultiGroupChatMessageEvent,
   JoinRequestEvent,
+  DiscoveryProfile,
+  PeerDiscoveryMetrics,
+  ConnectionMetrics,
 } from "./multi-group-chat.js";
 export {
   ActionPayloadSchema,
@@ -186,3 +189,14 @@ export type {
   RelayCandidateEntry,
   RelayCandidateState,
 } from "./relay-candidate-state.js";
+export {
+  createRelayReservationManager,
+  DEFAULT_TARGET_ACTIVE_RELAYS,
+} from "./relay-reservation-manager.js";
+export type {
+  RelayReservationState,
+  RelayReservationEntry,
+  RelayReservationStatus,
+  RelayDialRequest,
+  RelayDialReason,
+} from "./relay-reservation-manager.js";

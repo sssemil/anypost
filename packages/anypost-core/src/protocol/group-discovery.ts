@@ -10,6 +10,7 @@ import {
   markAdvertising,
   addDiscoveredPeer,
   getNewPeers,
+  pruneExpiredPeers,
 } from "./group-discovery-state.js";
 
 type PeerInfo = {
@@ -26,6 +27,8 @@ type GroupDiscoveryManagerDeps = {
   readonly onStateChange: (state: GroupDiscoveryState) => void;
   readonly onPeerDiscovered: (groupId: string, peerId: string, addrs: readonly string[]) => void;
   readonly searchIntervalMs?: number;
+  readonly searchScheduleMs?: readonly number[];
+  readonly onSearchCompleted?: (groupId: string, searchRound: number, providersFound: number) => void;
 };
 
 export type GroupDiscoveryManager = {
@@ -35,15 +38,31 @@ export type GroupDiscoveryManager = {
 };
 
 const DEFAULT_SEARCH_INTERVAL_MS = 15_000;
+const DEFAULT_SEARCH_SCHEDULE_MS = [0, 1_500, 4_000, 9_000] as const;
+
+const normalizeAddresses = (addrs: readonly string[]): readonly string[] => {
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of addrs) {
+    const addr = raw.trim();
+    if (addr.length === 0 || seen.has(addr)) continue;
+    seen.add(addr);
+    deduped.push(addr);
+  }
+  return deduped;
+};
 
 export const createGroupDiscoveryManager = (
   deps: GroupDiscoveryManagerDeps,
 ): GroupDiscoveryManager => {
   const searchIntervalMs = deps.searchIntervalMs ?? DEFAULT_SEARCH_INTERVAL_MS;
+  const searchScheduleMs = deps.searchScheduleMs ?? DEFAULT_SEARCH_SCHEDULE_MS;
   let state = createGroupDiscoveryState({ searchIntervalMs });
   let stopped = false;
 
   const groupIntervals = new Map<string, ReturnType<typeof setInterval>>();
+  const groupBursts = new Map<string, ReturnType<typeof setTimeout>[]>();
+  const searchInFlight = new Set<string>();
 
   const updateState = (newState: GroupDiscoveryState) => {
     state = newState;
@@ -52,18 +71,23 @@ export const createGroupDiscoveryManager = (
 
   const runSearch = async (groupId: string) => {
     if (stopped || !state.groups.has(groupId)) return;
+    if (searchInFlight.has(groupId)) return;
+
+    searchInFlight.add(groupId);
 
     const namespace = createGroupProviderNamespace(groupId);
     const cid = await createProviderCid(namespace);
 
     updateState(markSearchStarted(state, groupId));
+    let providersFound = 0;
 
     try {
       for await (const provider of deps.contentRouting.findProviders(cid)) {
         if (stopped || !state.groups.has(groupId)) return;
 
         const peerId = provider.id.toString();
-        const addrs = provider.multiaddrs.map((ma) => ma.toString());
+        const addrs = normalizeAddresses(provider.multiaddrs.map((ma) => ma.toString()));
+        providersFound++;
 
         updateState(
           addDiscoveredPeer(state, groupId, {
@@ -78,7 +102,11 @@ export const createGroupDiscoveryManager = (
     } finally {
       if (state.groups.has(groupId)) {
         updateState(markSearchCompleted(state, groupId, Date.now()));
+        updateState(pruneExpiredPeers(state, Date.now()));
+        const searchRound = state.groups.get(groupId)?.searchCount ?? 0;
+        deps.onSearchCompleted?.(groupId, searchRound, providersFound);
       }
+      searchInFlight.delete(groupId);
     }
 
     const connectedSet = new Set(deps.getConnectedPeerIds());
@@ -107,7 +135,12 @@ export const createGroupDiscoveryManager = (
       const interval = setInterval(() => void runSearch(groupId), searchIntervalMs);
       groupIntervals.set(groupId, interval);
 
-      void runSearch(groupId);
+      const burstTimers = searchScheduleMs.map((delayMs) =>
+        setTimeout(() => {
+          void runSearch(groupId);
+        }, delayMs),
+      );
+      groupBursts.set(groupId, burstTimers);
     },
     leaveGroup: (groupId: string) => {
       const interval = groupIntervals.get(groupId);
@@ -115,6 +148,12 @@ export const createGroupDiscoveryManager = (
         clearInterval(interval);
         groupIntervals.delete(groupId);
       }
+      const bursts = groupBursts.get(groupId);
+      if (bursts) {
+        for (const timer of bursts) clearTimeout(timer);
+        groupBursts.delete(groupId);
+      }
+      searchInFlight.delete(groupId);
       updateState(removeGroup(state, groupId));
     },
     stop: () => {
@@ -122,7 +161,12 @@ export const createGroupDiscoveryManager = (
       for (const interval of groupIntervals.values()) {
         clearInterval(interval);
       }
+      for (const bursts of groupBursts.values()) {
+        for (const timer of bursts) clearTimeout(timer);
+      }
       groupIntervals.clear();
+      groupBursts.clear();
+      searchInFlight.clear();
     },
   };
 };

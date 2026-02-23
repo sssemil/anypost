@@ -10,7 +10,20 @@ import {
   toHex,
   encodeGroupInvite,
 } from "anypost-core/protocol";
-import type { MultiGroupChat, MultiGroupState, NetworkStatus, NetworkEvent, RelayPoolState, GroupDiscoveryState, RelayCandidateState, ActionChainGroupState, GroupInvite } from "anypost-core/protocol";
+import type {
+  MultiGroupChat,
+  MultiGroupState,
+  NetworkStatus,
+  NetworkEvent,
+  RelayPoolState,
+  GroupDiscoveryState,
+  RelayCandidateState,
+  ActionChainGroupState,
+  GroupInvite,
+  PeerDiscoveryMetrics,
+  ConnectionMetrics,
+  RelayReservationState,
+} from "anypost-core/protocol";
 import { getCandidatesByRtt } from "anypost-core/protocol";
 import {
   generateAccountKey,
@@ -24,6 +37,7 @@ import {
   getDisplayName,
 } from "anypost-core/data";
 import { openAccountStore } from "anypost-core/data";
+import type { AccountStore } from "anypost-core/data";
 import {
   createInitialState,
   transition,
@@ -61,6 +75,7 @@ const GROUPS_STORAGE_KEY = "anypost:groups";
 const ACTION_CHAINS_STORAGE_KEY = "anypost:action-chains";
 const PUBKEY_PEERID_STORAGE_KEY = "anypost:pubkey-peerid";
 const PENDING_JOINS_STORAGE_KEY = "anypost:pending-joins";
+const RELAY_HINTS_STORAGE_KEY = "anypost:relay-hints";
 const MAX_EVENTS = 200;
 
 const hexToBytes = (hex: string): Uint8Array<ArrayBuffer> => {
@@ -120,6 +135,47 @@ const savePendingJoins = (map: ReadonlyMap<string, readonly PendingJoinRequest[]
   localStorage.setItem(PENDING_JOINS_STORAGE_KEY, JSON.stringify(result));
 };
 
+const loadRelayHints = (): readonly string[] => {
+  try {
+    const json = localStorage.getItem(RELAY_HINTS_STORAGE_KEY);
+    if (!json) return [];
+    const parsed = JSON.parse(json) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((value): value is string => typeof value === "string");
+  } catch {
+    return [];
+  }
+};
+
+const saveRelayHints = (hints: readonly string[]) => {
+  localStorage.setItem(RELAY_HINTS_STORAGE_KEY, JSON.stringify([...hints]));
+};
+
+const relayHintStatusScore = (status: string): number => {
+  if (status === "active") return 4;
+  if (status === "renewing") return 3;
+  if (status === "reserving") return 2;
+  if (status === "idle") return 1;
+  return 0;
+};
+
+const pickRelayHintsFromState = (
+  state: RelayReservationState,
+  maxHints = 6,
+): readonly string[] =>
+  [...state.entries.values()]
+    .filter((entry) => entry.addresses.length > 0)
+    .sort((a, b) => {
+      const statusDelta = relayHintStatusScore(b.status) - relayHintStatusScore(a.status);
+      if (statusDelta !== 0) return statusDelta;
+      if (a.rttMs === null && b.rttMs === null) return a.peerId.localeCompare(b.peerId);
+      if (a.rttMs === null) return 1;
+      if (b.rttMs === null) return -1;
+      return a.rttMs - b.rttMs;
+    })
+    .slice(0, maxHints)
+    .map((entry) => entry.addresses[0]);
+
 const loadPersistedGroups = () => {
   const json = localStorage.getItem(GROUPS_STORAGE_KEY);
   return json ? deserializeGroups(json) : null;
@@ -143,9 +199,12 @@ export const App = () => {
   const [relayPoolState, setRelayPoolState] = createSignal<RelayPoolState | null>(null);
   const [groupDiscoveryState, setGroupDiscoveryState] = createSignal<GroupDiscoveryState | null>(null);
   const [relayCandidateState, setRelayCandidateState] = createSignal<RelayCandidateState | null>(null);
+  const [relayReservationState, setRelayReservationState] = createSignal<RelayReservationState | null>(null);
   const [networkStatus, setNetworkStatus] = createSignal<NetworkStatus | null>(null);
   const [eventLog, setEventLog] = createSignal<readonly NetworkEvent[]>([]);
   const [latencyMap, setLatencyMap] = createSignal<ReadonlyMap<string, number>>(new Map());
+  const [connectionMetrics, setConnectionMetrics] = createSignal<ConnectionMetrics | null>(null);
+  const [peerDiscoveryMetricsByGroup, setPeerDiscoveryMetricsByGroup] = createSignal<ReadonlyMap<string, PeerDiscoveryMetrics>>(new Map());
   const [mobileView, setMobileView] = createSignal(createMobileViewState());
   const [actionChainState, setActionChainState] = createSignal<ActionChainGroupState | null>(null);
   const [pendingJoinsMap, setPendingJoinsMap] = createSignal<ReadonlyMap<string, readonly PendingJoinRequest[]>>(new Map());
@@ -195,6 +254,12 @@ export const App = () => {
       return;
     }
     setActionChainState(chat.getActionChainState(activeId));
+  };
+
+  const activeGroupDiscoveryMetrics = () => {
+    const activeId = groupState().activeGroupId;
+    if (!activeId) return null;
+    return peerDiscoveryMetricsByGroup().get(activeId) ?? null;
   };
 
   createEffect(() => {
@@ -381,6 +446,7 @@ export const App = () => {
   const startChat = async (accountKey: AccountKey) => {
     try {
       const bootstrapPeers = ENV_RELAY_MULTIADDR ? [ENV_RELAY_MULTIADDR] : [];
+      const initialRelayHints = loadRelayHints();
       type PeerPathCacheStoreCompat = {
         readonly getPeerPathCache?: () => Promise<ReadonlyMap<string, readonly string[]>>;
         readonly savePeerPathCache?: (cache: ReadonlyMap<string, readonly string[]>) => Promise<void>;
@@ -422,10 +488,24 @@ export const App = () => {
         peerPrivateKey,
         initialPublicKeyToPeerId,
         initialPeerPathCache,
+        initialRelayHints,
         bootstrapPeers,
+        discoveryProfile: "aggressive",
         onRelayPoolStateChange: setRelayPoolState,
         onGroupDiscoveryStateChange: setGroupDiscoveryState,
         onRelayCandidateStateChange: setRelayCandidateState,
+        onRelayReservationStateChange: (state) => {
+          setRelayReservationState(state);
+          saveRelayHints(pickRelayHintsFromState(state));
+        },
+        onConnectionMetricsChange: setConnectionMetrics,
+        onPeerDiscoveryMetricsChange: (metrics) => {
+          setPeerDiscoveryMetricsByGroup((prev) => {
+            const next = new Map(prev);
+            next.set(metrics.groupId, metrics);
+            return next;
+          });
+        },
         onPublicKeyToPeerIdChange: (map) => {
           setPublicKeyToPeerIdMap(map);
           savePublicKeyToPeerId(map);
@@ -830,6 +910,8 @@ export const App = () => {
                   relayPoolState={relayPoolState()}
                   groupDiscoveryState={groupDiscoveryState()}
                   relayCandidateState={relayCandidateState()}
+                  relayReservationState={relayReservationState()}
+                  connectionMetrics={connectionMetrics()}
                   displayName={displayName()}
                   latencyMap={latencyMap()}
                   onAddRelay={handleAddRelay}
@@ -845,6 +927,9 @@ export const App = () => {
                 groupId={groupState().activeGroupId}
                 groupName={activeGroupName() ?? "Unknown Group"}
                 members={actionChainState()?.members ?? new Map()}
+                actionEnvelopes={chat?.getActionChainEnvelopes(groupState().activeGroupId ?? "") ?? []}
+                connectionMetrics={connectionMetrics()}
+                activeGroupDiscoveryMetrics={activeGroupDiscoveryMetrics()}
                 pendingJoins={pendingJoinsMap().get(groupState().activeGroupId ?? "") ?? []}
                 isAdmin={isCurrentUserAdmin()}
                 ownPublicKeyHex={ownPublicKeyHex()}

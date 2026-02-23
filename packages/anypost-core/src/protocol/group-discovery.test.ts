@@ -247,4 +247,38 @@ describe("createGroupDiscoveryManager", () => {
 
     manager.stop();
   });
+
+  it("should normalize and deduplicate discovered peer addresses", async () => {
+    const fake = createFakeContentRouting();
+    const discovered: Array<{ peerId: string; addrs: readonly string[] }> = [];
+
+    fake.setFindProvidersResults([
+      {
+        id: { toString: () => "peer-1" },
+        multiaddrs: [
+          { toString: () => "  /ip4/1.2.3.4/tcp/4001/ws/p2p/peer-1  " },
+          { toString: () => "/ip4/1.2.3.4/tcp/4001/ws/p2p/peer-1" },
+          { toString: () => "" },
+        ],
+      },
+    ]);
+
+    const manager = createGroupDiscoveryManager({
+      contentRouting: fake.routing,
+      getConnectedPeerIds: () => [],
+      onStateChange: () => {},
+      onPeerDiscovered: (_groupId, peerId, addrs) => {
+        discovered.push({ peerId, addrs });
+      },
+    });
+
+    manager.joinGroup("group-1");
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(discovered).toHaveLength(1);
+    expect(discovered[0].peerId).toBe("peer-1");
+    expect(discovered[0].addrs).toEqual(["/ip4/1.2.3.4/tcp/4001/ws/p2p/peer-1"]);
+
+    manager.stop();
+  });
 });
