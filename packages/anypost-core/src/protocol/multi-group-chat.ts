@@ -2315,8 +2315,9 @@ export const createMultiGroupChat = async (
       return;
     }
 
+    const groupState = actionChainStates.get(payload.groupId);
     const requesterHex = toHex(payload.requesterPublicKey);
-    const requesterAlreadyMember = actionChainStates.get(payload.groupId)?.members.has(requesterHex) ?? false;
+    const requesterAlreadyMember = groupState?.members.has(requesterHex) ?? false;
     let inviteTokenId: string | undefined;
     let inviteValidationError: string | undefined;
     let autoApproved = false;
@@ -2342,15 +2343,26 @@ export const createMultiGroupChat = async (
       }
     }
 
-    const currentJoinPolicy = actionChainStates.get(payload.groupId)?.joinPolicy ?? "manual";
+    const currentJoinPolicy = groupState?.joinPolicy ?? "manual";
+    const expectedDirectMessagePeerId = groupState?.isDirectMessage && groupState.directMessagePeerIds
+      ? groupState.directMessagePeerIds.find((peerId) => peerId !== ownPeerId) ?? null
+      : null;
+    const directMessagePeerJoin = expectedDirectMessagePeerId !== null &&
+      senderPeerId === expectedDirectMessagePeerId;
+    const shouldAutoApproveByInvite =
+      currentJoinPolicy === "auto_with_invite" && inviteTokenId !== undefined;
+    const shouldAutoApproveDirectMessage = directMessagePeerJoin;
     if (
       isOwnAdminOfGroup(payload.groupId) &&
-      currentJoinPolicy === "auto_with_invite" &&
-      inviteTokenId !== undefined &&
-      !actionChainStates.get(payload.groupId)?.members.has(requesterHex)
+      !requesterAlreadyMember &&
+      (shouldAutoApproveByInvite || shouldAutoApproveDirectMessage)
     ) {
       autoApproved = true;
-      performApproveJoin(payload.groupId, payload.requesterPublicKey, { inviteTokenId }).catch(() => {
+      performApproveJoin(
+        payload.groupId,
+        payload.requesterPublicKey,
+        shouldAutoApproveByInvite ? { inviteTokenId } : undefined,
+      ).catch(() => {
         autoApproved = false;
       });
     }

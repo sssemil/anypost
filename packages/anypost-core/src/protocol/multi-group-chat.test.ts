@@ -770,6 +770,38 @@ describe("MultiGroupChat", () => {
     expect(request.inviteCode).toBe(inviteCode);
   });
 
+  it("should auto-approve DM joins without manual approval", async () => {
+    const alice = await createTestNode();
+    const bob = await createTestNode();
+
+    await alice.chat.connectTo(bob.chat.multiaddrs[0]);
+    await waitFor(400);
+
+    const groupId = crypto.randomUUID();
+    const { genesisEnvelope } = await alice.chat.createDirectMessageGroupWithId(groupId, [
+      alice.peerId,
+      bob.peerId,
+    ]);
+
+    const invite = buildInvite(alice, genesisEnvelope);
+    await bob.chat.joinViaInvite(invite);
+
+    await waitUntil(() => {
+      const aliceState = alice.chat.getActionChainState(groupId);
+      const bobState = bob.chat.getActionChainState(groupId);
+      const bobKeyHex = toHex(new Uint8Array(bob.accountKey.publicKey));
+      return !!aliceState && !!bobState &&
+        aliceState.members.has(bobKeyHex) &&
+        bobState.members.has(bobKeyHex);
+    }, 10_000);
+
+    await bob.chat.sendMessage(groupId, "hello-dm");
+    await waitUntil(
+      () => alice.messages.some((message) => message.groupId === groupId && message.text === "hello-dm"),
+      7_000,
+    );
+  });
+
   it("should converge membership after concurrent same-group creation", { timeout: 15_000 }, async () => {
     const alice = await createTestNode();
     const bob = await createTestNode();
