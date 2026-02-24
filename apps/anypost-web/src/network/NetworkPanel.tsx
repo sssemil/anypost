@@ -22,6 +22,29 @@ type NetworkPanelProps = {
   readonly latencyMap: ReadonlyMap<string, number>;
   readonly contactsBook: ContactsBook;
   readonly pinnedPeerIds: readonly string[];
+  readonly dmOutgoingDebug: readonly {
+    readonly requestKey: string;
+    readonly groupId: string;
+    readonly targetPeerId: string;
+    readonly connected: boolean;
+    readonly blocked: boolean;
+    readonly targetJoined: boolean;
+    readonly attemptCount: number;
+    readonly lastAttemptAt: number | null;
+    readonly nextAttemptAt: number;
+  }[];
+  readonly pendingDmDebug: readonly {
+    readonly requestId: string;
+    readonly senderPeerId: string;
+    readonly senderLabel: string;
+    readonly groupId: string;
+    readonly sentAt: number;
+  }[];
+  readonly profileSyncDebug: readonly {
+    readonly peerId: string;
+    readonly connected: boolean;
+    readonly lastRequestedAt: number | null;
+  }[];
   readonly onAddRelay?: (addr: string) => void;
 };
 
@@ -34,6 +57,9 @@ const GROUP_DISCOVERY_GROUPS_PER_PAGE = 6;
 const GROUP_DISCOVERY_PEERS_PER_PAGE = 8;
 const ADDRESSES_PER_PAGE = 8;
 const PINNED_PEERS_PER_PAGE = 10;
+const DM_OUTGOING_PER_PAGE = 8;
+const DM_PENDING_PER_PAGE = 8;
+const PROFILE_SYNC_PER_PAGE = 8;
 
 const latencyBadge = (ms: number) => {
   const classes = ms < 50
@@ -91,6 +117,9 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
   const [groupPeerPages, setGroupPeerPages] = createSignal<ReadonlyMap<string, number>>(new Map());
   const [addressesPage, setAddressesPage] = createSignal(0);
   const [pinnedPeerPage, setPinnedPeerPage] = createSignal(0);
+  const [dmOutgoingPage, setDmOutgoingPage] = createSignal(0);
+  const [dmPendingPage, setDmPendingPage] = createSignal(0);
+  const [profileSyncPage, setProfileSyncPage] = createSignal(0);
   const [peerSearch, setPeerSearch] = createSignal("");
   const [peerPage, setPeerPage] = createSignal(0);
   const [contactsSearch, setContactsSearch] = createSignal("");
@@ -325,6 +354,157 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                 </div>
               )}
             </Show>
+
+            <div class="mb-3 pb-3 border-b border-tg-border">
+              <div class="flex items-center gap-2 mb-1.5">
+                <span class="text-tg-text-dim">DM / Profile Debug</span>
+              </div>
+
+              <div class="text-[10px] text-tg-text-dim mb-1">Outgoing DM requests ({props.dmOutgoingDebug.length})</div>
+              <Show
+                when={props.dmOutgoingDebug.length > 0}
+                fallback={<div class="text-[10px] text-tg-text-dim mb-2">No outgoing DM requests queued.</div>}
+              >
+                {(() => {
+                  const totalPages = Math.max(1, Math.ceil(props.dmOutgoingDebug.length / DM_OUTGOING_PER_PAGE));
+                  const page = Math.min(dmOutgoingPage(), totalPages - 1);
+                  const paged = props.dmOutgoingDebug.slice(page * DM_OUTGOING_PER_PAGE, (page + 1) * DM_OUTGOING_PER_PAGE);
+                  return (
+                    <>
+                      <For each={paged}>
+                        {(row) => (
+                          <div class="p-1.5 mb-1 bg-tg-sidebar rounded border border-tg-border text-[10px]">
+                            <div class="text-tg-text">
+                              <code>{row.targetPeerId.slice(0, 12)}...</code> in <code>{row.groupId.slice(0, 8)}...</code>
+                            </div>
+                            <div class="text-tg-text-dim">
+                              status: {row.blocked ? "blocked" : row.targetJoined ? "target-joined" : row.connected ? "connected-pending" : "disconnected"}
+                              {" · "}attempts: {row.attemptCount}
+                            </div>
+                            <div class="text-tg-text-dim">
+                              last: {row.lastAttemptAt ? formatLastSeen(row.lastAttemptAt) : "never"}
+                              {" · "}next: {formatLastSeen(row.nextAttemptAt)}
+                            </div>
+                          </div>
+                        )}
+                      </For>
+                      <Show when={totalPages > 1}>
+                        <div class="flex justify-center items-center gap-2 mt-1 mb-2">
+                          <button
+                            onClick={() => setDmOutgoingPage(Math.max(0, page - 1))}
+                            disabled={page === 0}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                          >
+                            prev
+                          </button>
+                          <span class="text-tg-text-dim text-xs">{page + 1} / {totalPages}</span>
+                          <button
+                            onClick={() => setDmOutgoingPage(Math.min(totalPages - 1, page + 1))}
+                            disabled={page >= totalPages - 1}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                          >
+                            next
+                          </button>
+                        </div>
+                      </Show>
+                    </>
+                  );
+                })()}
+              </Show>
+
+              <div class="text-[10px] text-tg-text-dim mb-1 mt-2">Pending inbound DM requests ({props.pendingDmDebug.length})</div>
+              <Show
+                when={props.pendingDmDebug.length > 0}
+                fallback={<div class="text-[10px] text-tg-text-dim mb-2">No pending inbound DM requests.</div>}
+              >
+                {(() => {
+                  const totalPages = Math.max(1, Math.ceil(props.pendingDmDebug.length / DM_PENDING_PER_PAGE));
+                  const page = Math.min(dmPendingPage(), totalPages - 1);
+                  const paged = props.pendingDmDebug.slice(page * DM_PENDING_PER_PAGE, (page + 1) * DM_PENDING_PER_PAGE);
+                  return (
+                    <>
+                      <For each={paged}>
+                        {(row) => (
+                          <div class="p-1.5 mb-1 bg-tg-sidebar rounded border border-tg-border text-[10px]">
+                            <div class="text-tg-text">
+                              {row.senderLabel} <code>({row.senderPeerId.slice(0, 12)}...)</code>
+                            </div>
+                            <div class="text-tg-text-dim">
+                              group: <code>{row.groupId.slice(0, 8)}...</code> · sent {formatLastSeen(row.sentAt)}
+                            </div>
+                          </div>
+                        )}
+                      </For>
+                      <Show when={totalPages > 1}>
+                        <div class="flex justify-center items-center gap-2 mt-1 mb-2">
+                          <button
+                            onClick={() => setDmPendingPage(Math.max(0, page - 1))}
+                            disabled={page === 0}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                          >
+                            prev
+                          </button>
+                          <span class="text-tg-text-dim text-xs">{page + 1} / {totalPages}</span>
+                          <button
+                            onClick={() => setDmPendingPage(Math.min(totalPages - 1, page + 1))}
+                            disabled={page >= totalPages - 1}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                          >
+                            next
+                          </button>
+                        </div>
+                      </Show>
+                    </>
+                  );
+                })()}
+              </Show>
+
+              <div class="text-[10px] text-tg-text-dim mb-1 mt-2">Profile sync requests ({props.profileSyncDebug.length})</div>
+              <Show
+                when={props.profileSyncDebug.length > 0}
+                fallback={<div class="text-[10px] text-tg-text-dim">No profile sync activity yet.</div>}
+              >
+                {(() => {
+                  const totalPages = Math.max(1, Math.ceil(props.profileSyncDebug.length / PROFILE_SYNC_PER_PAGE));
+                  const page = Math.min(profileSyncPage(), totalPages - 1);
+                  const paged = props.profileSyncDebug.slice(page * PROFILE_SYNC_PER_PAGE, (page + 1) * PROFILE_SYNC_PER_PAGE);
+                  return (
+                    <>
+                      <For each={paged}>
+                        {(row) => (
+                          <div class="flex items-center justify-between gap-2 p-1.5 mb-1 bg-tg-sidebar rounded border border-tg-border text-[10px]">
+                            <code class="text-tg-text">{row.peerId.slice(0, 16)}...</code>
+                            <span class="text-tg-text-dim">{row.connected ? "connected" : "offline"}</span>
+                            <span class="text-tg-text-dim">
+                              {row.lastRequestedAt ? formatLastSeen(row.lastRequestedAt) : "never"}
+                            </span>
+                          </div>
+                        )}
+                      </For>
+                      <Show when={totalPages > 1}>
+                        <div class="flex justify-center items-center gap-2 mt-1">
+                          <button
+                            onClick={() => setProfileSyncPage(Math.max(0, page - 1))}
+                            disabled={page === 0}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                          >
+                            prev
+                          </button>
+                          <span class="text-tg-text-dim text-xs">{page + 1} / {totalPages}</span>
+                          <button
+                            onClick={() => setProfileSyncPage(Math.min(totalPages - 1, page + 1))}
+                            disabled={page >= totalPages - 1}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                          >
+                            next
+                          </button>
+                        </div>
+                      </Show>
+                    </>
+                  );
+                })()}
+              </Show>
+            </div>
 
             <Show when={props.relayReservationState}>
               {(reservationState) => (

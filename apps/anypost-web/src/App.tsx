@@ -328,6 +328,7 @@ export const App = () => {
   const [outgoingDirectMessageRequests, setOutgoingDirectMessageRequests] = createSignal<readonly OutgoingDirectMessageRequest[]>(
     loadOutgoingDirectMessageRequests(),
   );
+  const [profileSyncDebugTick, setProfileSyncDebugTick] = createSignal(0);
 
   let chat: MultiGroupChat | undefined;
   let unsubscribeMessage: (() => void) | undefined;
@@ -1335,6 +1336,7 @@ export const App = () => {
     if (now - lastRequestedAt < PROFILE_SYNC_REQUEST_COOLDOWN_MS) return;
 
     profileSyncLastRequestAtByPeer.set(target, now);
+    setProfileSyncDebugTick((value) => value + 1);
     void currentChat.requestProfile(target).catch(() => {});
   };
 
@@ -1845,6 +1847,53 @@ export const App = () => {
       };
     });
 
+  const dmOutgoingDebugRows = () => {
+    const _tick = profileSyncDebugTick();
+    _tick;
+    return outgoingDirectMessageRequests().map((entry) => ({
+      requestKey: entry.requestKey,
+      groupId: entry.groupId,
+      targetPeerId: entry.targetPeerId,
+      connected: connectedPeerIds().has(entry.targetPeerId),
+      blocked: blockedPeerIds().has(entry.targetPeerId),
+      targetJoined: targetPeerHasJoinedGroup(entry.groupId, entry.targetPeerId),
+      attemptCount: entry.attemptCount,
+      lastAttemptAt: entry.lastAttemptAt,
+      nextAttemptAt: entry.nextAttemptAt,
+    }));
+  };
+
+  const pendingDmDebugRows = () =>
+    pendingDirectMessageRequests().map((request) => {
+      const contact = contactsBook().get(request.senderPeerId);
+      return {
+        requestId: request.requestId,
+        senderPeerId: request.senderPeerId,
+        senderLabel: contact?.nickname
+          ?? contact?.selfName
+          ?? `${request.senderPeerId.slice(0, 12)}...${request.senderPeerId.slice(-4)}`,
+        groupId: request.groupId,
+        sentAt: request.sentAt,
+      };
+    });
+
+  const profileSyncDebugRows = () => {
+    const _tick = profileSyncDebugTick();
+    _tick;
+    const connected = connectedPeerIds();
+    const peerIds = new Set<string>([
+      ...connected,
+      ...profileSyncLastRequestAtByPeer.keys(),
+    ]);
+    return [...peerIds]
+      .sort((a, b) => a.localeCompare(b))
+      .map((peerId) => ({
+        peerId,
+        connected: connected.has(peerId),
+        lastRequestedAt: profileSyncLastRequestAtByPeer.get(peerId) ?? null,
+      }));
+  };
+
   const appVersion = () => {
     const fromEnv = import.meta.env.VITE_APP_VERSION as string | undefined;
     return fromEnv && fromEnv.trim().length > 0 ? fromEnv.trim() : "dev";
@@ -1985,6 +2034,9 @@ export const App = () => {
                   latencyMap={latencyMap()}
                   contactsBook={contactsBook()}
                   pinnedPeerIds={pinnedPeerIds()}
+                  dmOutgoingDebug={dmOutgoingDebugRows()}
+                  pendingDmDebug={pendingDmDebugRows()}
+                  profileSyncDebug={profileSyncDebugRows()}
                   onAddRelay={handleAddRelay}
                 />
                 <EventLog
