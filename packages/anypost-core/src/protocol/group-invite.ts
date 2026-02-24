@@ -9,7 +9,7 @@ import {
 
 export type GroupInvite = {
   readonly genesisEnvelope: SignedActionEnvelope;
-  readonly relayAddr: string;
+  readonly relayAddr?: string;
   readonly adminPeerId: string;
   readonly inviteGrant?: InviteGrantProof;
 };
@@ -18,7 +18,7 @@ type SerializedInvite = {
   readonly signedBytes: string;
   readonly signature: string;
   readonly hash: string;
-  readonly relayAddr: string;
+  readonly relayAddr?: string;
   readonly adminPeerId: string;
   readonly inviteGrant?: {
     readonly claims: InviteGrantProof["claims"];
@@ -73,7 +73,6 @@ export const decodeGroupInvite = (code: string): Result<GroupInvite, Error> => {
       !("signedBytes" in parsed) ||
       !("signature" in parsed) ||
       !("hash" in parsed) ||
-      !("relayAddr" in parsed) ||
       !("adminPeerId" in parsed)
     ) {
       return Result.failure(new Error("Invalid invite format"));
@@ -87,6 +86,16 @@ export const decodeGroupInvite = (code: string): Result<GroupInvite, Error> => {
       adminPeerId,
       inviteGrant: serializedInviteGrant,
     } = parsed as SerializedInvite;
+
+    if (typeof signedBytes !== "string" || typeof signature !== "string" || typeof hash !== "string") {
+      return Result.failure(new Error("Invalid invite format"));
+    }
+    if (typeof adminPeerId !== "string" || adminPeerId.trim().length === 0) {
+      return Result.failure(new Error("Invalid invite format"));
+    }
+    if (relayAddr !== undefined && typeof relayAddr !== "string") {
+      return Result.failure(new Error("Invalid invite format"));
+    }
 
     const envelope: SignedActionEnvelope = {
       signedBytes: hexToBytes(signedBytes),
@@ -132,7 +141,7 @@ export const decodeGroupInvite = (code: string): Result<GroupInvite, Error> => {
 
     return Result.success({
       genesisEnvelope: envelope,
-      relayAddr: relayAddr as string,
+      relayAddr: relayAddr?.trim() ? relayAddr.trim() : undefined,
       adminPeerId,
       inviteGrant,
     });

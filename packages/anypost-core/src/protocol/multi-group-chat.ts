@@ -2818,11 +2818,14 @@ export const createMultiGroupChat = async (
         joinInviteGrantByGroup.delete(groupId);
       }
 
-      if (!relayPeers.includes(invite.relayAddr)) {
-        relayPeers.push(invite.relayAddr);
-        emit("info", `Relay added from invite: ${invite.relayAddr.slice(0, 40)}...`);
+      const inviteRelayAddr = invite.relayAddr?.trim();
+      if (inviteRelayAddr) {
+        if (!relayPeers.includes(inviteRelayAddr)) {
+          relayPeers.push(inviteRelayAddr);
+          emit("info", `Relay added from invite: ${inviteRelayAddr.slice(0, 40)}...`);
+        }
+        relayReservationManager.ingestRelayAddress(inviteRelayAddr);
       }
-      relayReservationManager.ingestRelayAddress(invite.relayAddr);
 
       processSignedAction(groupId, invite.genesisEnvelope);
 

@@ -1518,7 +1518,6 @@ export const App = () => {
     if (!envelopes || envelopes.length === 0) return { error: "Group has no genesis action", code: null };
 
     const relayAddr = getBestRelayAddress();
-    if (!relayAddr) return { error: "No relay address available", code: null };
     const accountKey = getCurrentAccountKey();
     if (!accountKey) return { error: "No account key available", code: null };
 
@@ -1547,7 +1546,7 @@ export const App = () => {
 
     const code = encodeGroupInvite({
       genesisEnvelope: envelopes[0],
-      relayAddr,
+      relayAddr: relayAddr ?? undefined,
       adminPeerId: currentChat.peerId,
       inviteGrant,
     });
@@ -1947,7 +1946,7 @@ export const App = () => {
                 onRetryJoinNow={handleRetryJoinNow}
                 onCancelJoinRetry={handleCancelJoinRetry}
                 onCreateInvite={
-                  (chat?.getActionChainEnvelopes(groupState().activeGroupId ?? "")?.length ?? 0) > 0 && getBestRelayAddress()
+                  (chat?.getActionChainEnvelopes(groupState().activeGroupId ?? "")?.length ?? 0) > 0
                     ? handleCreateInvite
                     : null
                 }

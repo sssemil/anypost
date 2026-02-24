@@ -167,6 +167,24 @@ describe("Group invite", () => {
       expect(result.data.adminPeerId).toBe("12D3KooWCustomPeerId");
     });
 
+    it("should decode invites without relayAddr", () => {
+      const invite = createGenesisInvite();
+      const encoded = encodeGroupInvite(invite);
+      const decoded = JSON.parse(atob(encoded.replace(/-/g, "+").replace(/_/g, "/")));
+      delete decoded.relayAddr;
+      const noRelayCode = btoa(JSON.stringify(decoded))
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+
+      const result = decodeGroupInvite(noRelayCode);
+
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.data.relayAddr).toBeUndefined();
+      expect(result.data.adminPeerId).toBe(TEST_ADMIN_PEER_ID);
+    });
+
     it("should reject invite missing adminPeerId", () => {
       const invite = createGenesisInvite();
       const encoded = encodeGroupInvite(invite);
