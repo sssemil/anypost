@@ -53,6 +53,7 @@ type GroupInfoPanelProps = {
   readonly publicKeyToPeerId: ReadonlyMap<string, string>;
   readonly connectedPeerIds: ReadonlySet<string>;
   readonly latencyMap: ReadonlyMap<string, number>;
+  readonly onStartDirectMessage?: ((peerId: string) => Promise<string | null> | string | null) | null;
   readonly onApproveJoin: (memberPublicKey: Uint8Array) => void;
   readonly onRemoveMember: (memberPublicKey: Uint8Array) => void;
   readonly onChangeMemberRole: ((memberPublicKey: Uint8Array, newRole: ActionRole) => Promise<string | null>) | null;
@@ -152,6 +153,8 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
   const [joinPolicyError, setJoinPolicyError] = createSignal("");
   const [roleActionError, setRoleActionError] = createSignal("");
   const [roleActionTargetHex, setRoleActionTargetHex] = createSignal<string | null>(null);
+  const [memberDirectMessageError, setMemberDirectMessageError] = createSignal("");
+  const [memberDirectMessagePendingPeerId, setMemberDirectMessagePendingPeerId] = createSignal<string | null>(null);
   const [envelopePage, setEnvelopePage] = createSignal(0);
   const [nowMs, setNowMs] = createSignal(Date.now());
 
@@ -335,6 +338,19 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
       if (error) setRoleActionError(error);
     }).catch(() => setRoleActionError("Failed to update member role")).finally(() => {
       setRoleActionTargetHex(null);
+    });
+  };
+
+  const handleStartDirectMessage = (peerId: string) => {
+    if (!props.onStartDirectMessage) return;
+    setMemberDirectMessageError("");
+    setMemberDirectMessagePendingPeerId(peerId);
+    Promise.resolve(props.onStartDirectMessage(peerId)).then((error) => {
+      if (error) setMemberDirectMessageError(error);
+    }).catch(() => {
+      setMemberDirectMessageError("Failed to open direct chat");
+    }).finally(() => {
+      setMemberDirectMessagePendingPeerId(null);
     });
   };
 
@@ -553,6 +569,7 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
                     ? !isOwn() && member.role === "member"
                     : false;
               const roleActionPending = () => roleActionTargetHex() === member.publicKeyHex;
+              const canStartDirectMessage = () => !!peerId() && !isOwn() && !!props.onStartDirectMessage;
 
               return (
                 <div class="flex items-center justify-between py-1.5 px-2 rounded hover:bg-tg-hover">
@@ -579,6 +596,18 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
                   <div class="flex items-center gap-2 shrink-0">
                     <Show when={!isOwn() && latency() !== undefined}>
                       <span class="text-[10px] text-tg-text-dim">{latency()}ms</span>
+                    </Show>
+                    <Show when={canStartDirectMessage()}>
+                      <button
+                        class="text-[10px] text-tg-accent hover:text-tg-accent/80 px-1.5 py-0.5 rounded hover:bg-tg-accent/10 cursor-pointer disabled:opacity-50"
+                        disabled={memberDirectMessagePendingPeerId() === peerId()}
+                        onClick={() => {
+                          const pid = peerId();
+                          if (pid) handleStartDirectMessage(pid);
+                        }}
+                      >
+                        DM
+                      </button>
                     </Show>
                     <RoleBadge role={member.role} />
                     <Show when={canPromoteToAdmin()}>
@@ -625,6 +654,9 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
       </div>
       <Show when={roleActionError()}>
         <p class="text-[10px] text-red-400 mt-1">{roleActionError()}</p>
+      </Show>
+      <Show when={memberDirectMessageError()}>
+        <p class="text-[10px] text-red-400 mt-1">{memberDirectMessageError()}</p>
       </Show>
 
       <Show when={props.isAdmin && props.pendingJoins.length > 0}>

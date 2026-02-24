@@ -10,6 +10,7 @@ type HeaderBarProps = {
   readonly onBackPress: () => void;
   readonly onProfileToggle: () => void;
   readonly onDevDrawerToggle: () => void;
+  readonly onAboutToggle: () => void;
   readonly onContactsToggle: () => void;
   readonly onGroupInfoToggle: () => void;
 };
@@ -123,6 +124,15 @@ export const HeaderBar = (props: HeaderBarProps) => {
             }}
           >
             Developer Tools
+          </button>
+          <button
+            class="w-full text-left px-3 py-2 text-xs text-tg-text hover:bg-tg-hover cursor-pointer border-t border-tg-border"
+            onClick={() => {
+              setMenuOpen(false);
+              props.onAboutToggle();
+            }}
+          >
+            About
           </button>
         </div>
       </Show>

@@ -11,6 +11,7 @@ type ChatLayoutProps = {
   readonly groupInfoContent: JSX.Element;
   readonly contactsContent: JSX.Element;
   readonly profileContent: JSX.Element;
+  readonly aboutContent: JSX.Element;
   readonly mobileView: "group-list" | "chat";
   readonly rightPanel: RightPanel;
   readonly onRightPanelClose: () => void;
@@ -21,6 +22,7 @@ const PANEL_TITLES: Record<Exclude<RightPanel, "none">, string> = {
   "group-info": "Group Info",
   "contacts": "Contacts",
   "profile": "Profile",
+  "about": "About",
 };
 
 export const ChatLayout = (props: ChatLayoutProps) => {
@@ -81,6 +83,9 @@ export const ChatLayout = (props: ChatLayoutProps) => {
                 </Match>
                 <Match when={props.rightPanel === "profile"}>
                   {props.profileContent}
+                </Match>
+                <Match when={props.rightPanel === "about"}>
+                  {props.aboutContent}
                 </Match>
               </Switch>
             </div>

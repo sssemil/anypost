@@ -68,6 +68,7 @@ import { EventLog } from "./network/EventLog.js";
 import { GroupInfoPanel } from "./chat/GroupInfoPanel.js";
 import { ContactsBookPage } from "./contacts/ContactsBookPage.js";
 import { ProfilePage } from "./profile/ProfilePage.js";
+import { AboutPage } from "./about/AboutPage.js";
 import type {
   PendingJoinRequest,
   InviteCreateOptions,
@@ -98,10 +99,16 @@ const PUBKEY_PEERID_STORAGE_KEY = "anypost:pubkey-peerid";
 const PENDING_JOINS_STORAGE_KEY = "anypost:pending-joins";
 const RELAY_HINTS_STORAGE_KEY = "anypost:relay-hints";
 const PENDING_DM_REQUESTS_STORAGE_KEY = "anypost:pending-dm-requests";
+const OUTGOING_DM_REQUESTS_STORAGE_KEY = "anypost:outgoing-dm-requests";
 const MAX_EVENTS = 200;
 const SYSTEM_SENDER_ID = "__system__";
 const CONTACTS_LAST_SEEN_UPDATE_MS = 60_000;
 const CONTACTS_SELF_NAME_HISTORY_LIMIT = 12;
+const OUTGOING_DM_RETRY_BASE_MS = 12_000;
+const OUTGOING_DM_RETRY_MAX_MS = 120_000;
+const OUTGOING_DM_RETRY_SWEEP_MS = 4_000;
+const OUTGOING_DM_RETRY_MAX_AGE_MS = 20 * 60_000;
+const PROJECT_GITHUB_URL = "https://github.com/sssemil/anypost";
 
 const hexToBytes = (hex: string): Uint8Array<ArrayBuffer> => {
   const buf = new ArrayBuffer(hex.length / 2);
@@ -123,6 +130,18 @@ type PendingDirectMessageRequest = {
   readonly groupName: string;
   readonly inviteCode: string;
   readonly sentAt: number;
+};
+
+type OutgoingDirectMessageRequest = {
+  readonly requestKey: string;
+  readonly targetPeerId: string;
+  readonly groupId: string;
+  readonly groupName: string;
+  readonly inviteCode: string;
+  readonly createdAt: number;
+  readonly lastAttemptAt: number | null;
+  readonly attemptCount: number;
+  readonly nextAttemptAt: number;
 };
 
 const loadPublicKeyToPeerId = (): ReadonlyMap<string, string> => {
@@ -191,6 +210,38 @@ const loadPendingDirectMessageRequests = (): readonly PendingDirectMessageReques
 
 const savePendingDirectMessageRequests = (requests: readonly PendingDirectMessageRequest[]) => {
   localStorage.setItem(PENDING_DM_REQUESTS_STORAGE_KEY, JSON.stringify(requests));
+};
+
+const loadOutgoingDirectMessageRequests = (): readonly OutgoingDirectMessageRequest[] => {
+  try {
+    const json = localStorage.getItem(OUTGOING_DM_REQUESTS_STORAGE_KEY);
+    if (!json) return [];
+    const parsed = JSON.parse(json) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry): entry is OutgoingDirectMessageRequest =>
+      typeof entry === "object" &&
+      entry !== null &&
+      typeof (entry as Record<string, unknown>).requestKey === "string" &&
+      typeof (entry as Record<string, unknown>).targetPeerId === "string" &&
+      typeof (entry as Record<string, unknown>).groupId === "string" &&
+      typeof (entry as Record<string, unknown>).groupName === "string" &&
+      typeof (entry as Record<string, unknown>).inviteCode === "string" &&
+      typeof (entry as Record<string, unknown>).createdAt === "number" &&
+      (typeof (entry as Record<string, unknown>).lastAttemptAt === "number" ||
+        (entry as Record<string, unknown>).lastAttemptAt === null) &&
+      typeof (entry as Record<string, unknown>).attemptCount === "number" &&
+      typeof (entry as Record<string, unknown>).nextAttemptAt === "number")
+      .map((entry) => ({
+        ...entry,
+        attemptCount: Math.max(0, Math.floor(entry.attemptCount)),
+      }));
+  } catch {
+    return [];
+  }
+};
+
+const saveOutgoingDirectMessageRequests = (requests: readonly OutgoingDirectMessageRequest[]) => {
+  localStorage.setItem(OUTGOING_DM_REQUESTS_STORAGE_KEY, JSON.stringify(requests));
 };
 
 const loadRelayHints = (): readonly string[] => {
@@ -274,6 +325,9 @@ export const App = () => {
   const [pendingDirectMessageRequests, setPendingDirectMessageRequests] = createSignal<readonly PendingDirectMessageRequest[]>(
     loadPendingDirectMessageRequests(),
   );
+  const [outgoingDirectMessageRequests, setOutgoingDirectMessageRequests] = createSignal<readonly OutgoingDirectMessageRequest[]>(
+    loadOutgoingDirectMessageRequests(),
+  );
 
   let chat: MultiGroupChat | undefined;
   let unsubscribeMessage: (() => void) | undefined;
@@ -282,6 +336,7 @@ export const App = () => {
   let unsubscribeDirectMessageRequests: (() => void) | undefined;
   let statusInterval: ReturnType<typeof setInterval> | undefined;
   let pingInterval: ReturnType<typeof setInterval> | undefined;
+  let outgoingDmRetrySweepInFlight = false;
 
   const dispatchMobileView = (event: Parameters<typeof transitionMobileView>[1]) => {
     setMobileView((s) => transitionMobileView(s, event));
@@ -317,6 +372,12 @@ export const App = () => {
     requests: readonly PendingDirectMessageRequest[],
   ) => {
     savePendingDirectMessageRequests(requests);
+  };
+
+  const persistOutgoingDirectMessageRequests = (
+    requests: readonly OutgoingDirectMessageRequest[],
+  ) => {
+    saveOutgoingDirectMessageRequests(requests);
   };
 
   const upsertContact = (
@@ -944,6 +1005,8 @@ export const App = () => {
         if (dmPeerId && blockedPeerIds().has(msg.senderPeerId)) {
           return;
         }
+        removeOutgoingDirectMessageRequests((entry) =>
+          entry.groupId === msg.groupId && entry.targetPeerId === msg.senderPeerId);
         upsertContact(msg.senderPeerId, {
           selfName: msg.senderDisplayName,
           groupId: msg.groupId,
@@ -1013,6 +1076,15 @@ export const App = () => {
       const key = getCurrentAccountKey();
       if (key) void startChat(key);
     }
+  });
+
+  createEffect(() => {
+    if (chatStatus() !== "connected" || !chat) return;
+    void runOutgoingDirectMessageRequestSweep();
+    const interval = setInterval(() => {
+      void runOutgoingDirectMessageRequestSweep();
+    }, OUTGOING_DM_RETRY_SWEEP_MS);
+    onCleanup(() => clearInterval(interval));
   });
 
   const handleSendMessage = (text: string) => {
@@ -1093,6 +1165,139 @@ export const App = () => {
     });
   };
 
+  const targetPeerHasJoinedGroup = (groupId: string, targetPeerId: string): boolean => {
+    const chainState = chat?.getActionChainState(groupId);
+    if (!chainState) return false;
+    const map = publicKeyToPeerIdMap();
+    for (const member of chainState.members.values()) {
+      if (map.get(member.publicKeyHex) === targetPeerId) return true;
+    }
+    return false;
+  };
+
+  const buildOutgoingDmRequestKey = (groupId: string, targetPeerId: string): string =>
+    `${groupId}:${targetPeerId}`;
+
+  const upsertOutgoingDirectMessageRequest = (
+    request: {
+      readonly targetPeerId: string;
+      readonly groupId: string;
+      readonly groupName: string;
+      readonly inviteCode: string;
+    },
+    options?: {
+      readonly bumpForImmediateRetry?: boolean;
+    },
+  ) => {
+    const now = Date.now();
+    const requestKey = buildOutgoingDmRequestKey(request.groupId, request.targetPeerId);
+    const immediateRetry = options?.bumpForImmediateRetry ?? true;
+
+    setOutgoingDirectMessageRequests((prev) => {
+      const existing = prev.find((entry) => entry.requestKey === requestKey);
+      const nextEntry: OutgoingDirectMessageRequest = existing
+        ? {
+            ...existing,
+            groupName: request.groupName,
+            inviteCode: request.inviteCode,
+            nextAttemptAt: immediateRetry ? now : existing.nextAttemptAt,
+          }
+        : {
+            requestKey,
+            targetPeerId: request.targetPeerId,
+            groupId: request.groupId,
+            groupName: request.groupName,
+            inviteCode: request.inviteCode,
+            createdAt: now,
+            lastAttemptAt: null,
+            attemptCount: 0,
+            nextAttemptAt: now,
+          };
+      const next = [nextEntry, ...prev.filter((entry) => entry.requestKey !== requestKey)];
+      persistOutgoingDirectMessageRequests(next);
+      return next;
+    });
+  };
+
+  const removeOutgoingDirectMessageRequests = (predicate: (entry: OutgoingDirectMessageRequest) => boolean) => {
+    setOutgoingDirectMessageRequests((prev) => {
+      const next = prev.filter((entry) => !predicate(entry));
+      if (next.length === prev.length) return prev;
+      persistOutgoingDirectMessageRequests(next);
+      return next;
+    });
+  };
+
+  const runOutgoingDirectMessageRequestSweep = async () => {
+    const currentChat = chat;
+    if (!currentChat || outgoingDmRetrySweepInFlight) return;
+    const snapshot = outgoingDirectMessageRequests();
+    if (snapshot.length === 0) return;
+
+    outgoingDmRetrySweepInFlight = true;
+    try {
+      const now = Date.now();
+      const nextQueue: OutgoingDirectMessageRequest[] = [];
+
+      for (const entry of snapshot) {
+        if (now - entry.createdAt >= OUTGOING_DM_RETRY_MAX_AGE_MS) {
+          continue;
+        }
+        if (targetPeerHasJoinedGroup(entry.groupId, entry.targetPeerId)) {
+          continue;
+        }
+        if (blockedPeerIds().has(entry.targetPeerId)) {
+          continue;
+        }
+        if (entry.nextAttemptAt > now) {
+          nextQueue.push(entry);
+          continue;
+        }
+
+        try {
+          void currentChat.connectToPeerId(entry.targetPeerId).catch(() => {});
+          await currentChat.sendDirectMessageRequest({
+            targetPeerId: entry.targetPeerId,
+            groupId: entry.groupId,
+            groupName: entry.groupName,
+            inviteCode: entry.inviteCode,
+          });
+        } catch {
+          // Retry with backoff whether publish succeeded or failed.
+        }
+
+        const nextAttemptCount = entry.attemptCount + 1;
+        const delay = Math.min(
+          OUTGOING_DM_RETRY_BASE_MS * (2 ** Math.min(nextAttemptCount, 4)),
+          OUTGOING_DM_RETRY_MAX_MS,
+        );
+        nextQueue.push({
+          ...entry,
+          attemptCount: nextAttemptCount,
+          lastAttemptAt: now,
+          nextAttemptAt: now + delay,
+        });
+      }
+
+      const unchanged = snapshot.length === nextQueue.length &&
+        snapshot.every((entry, idx) => {
+          const next = nextQueue[idx];
+          return !!next &&
+            entry.requestKey === next.requestKey &&
+            entry.attemptCount === next.attemptCount &&
+            entry.lastAttemptAt === next.lastAttemptAt &&
+            entry.nextAttemptAt === next.nextAttemptAt &&
+            entry.groupName === next.groupName &&
+            entry.inviteCode === next.inviteCode;
+        });
+      if (unchanged) return;
+      persistOutgoingDirectMessageRequests(nextQueue);
+      setOutgoingDirectMessageRequests(nextQueue);
+    } finally {
+      outgoingDmRetrySweepInFlight = false;
+    }
+  };
+
   const handleStartDirectMessage = async (targetPeerId: string): Promise<string | null> => {
     const currentChat = chat;
     if (!currentChat) return "Not connected";
@@ -1153,12 +1358,13 @@ export const App = () => {
         targetPeerId: trimmedTarget,
       });
       if (!invite.error && invite.code) {
-        void currentChat.sendDirectMessageRequest({
+        upsertOutgoingDirectMessageRequest({
           targetPeerId: trimmedTarget,
           groupId: dmGroupId,
           groupName: currentChat.getActionChainState(dmGroupId)?.groupName ?? "Direct Message",
           inviteCode: invite.code,
-        }).catch(() => {});
+        });
+        void runOutgoingDirectMessageRequestSweep();
       }
 
       void currentChat.connectToPeerId(trimmedTarget).catch(() => {});
@@ -1168,9 +1374,27 @@ export const App = () => {
     }
   };
 
+  const handleStartDirectMessageFromContacts = async (targetPeerId: string): Promise<string | null> => {
+    const error = await handleStartDirectMessage(targetPeerId);
+    if (!error) {
+      dispatchMobileView({ type: "contacts-closed" });
+    }
+    return error;
+  };
+
+  const handleStartDirectMessageFromGroupInfo = async (targetPeerId: string): Promise<string | null> => {
+    const error = await handleStartDirectMessage(targetPeerId);
+    if (!error) {
+      dispatchMobileView({ type: "group-info-closed" });
+    }
+    return error;
+  };
+
   const upsertPendingDirectMessageRequest = (event: DirectMessageRequestEvent) => {
     setPendingDirectMessageRequests((prev) => {
       if (prev.some((request) => request.requestId === event.requestId)) return prev;
+      const collapsed = prev.filter((request) =>
+        !(request.senderPeerId === event.senderPeerId && request.groupId === event.groupId));
       const next = [
         {
           requestId: event.requestId,
@@ -1180,7 +1404,7 @@ export const App = () => {
           inviteCode: event.inviteCode,
           sentAt: event.sentAt,
         },
-        ...prev,
+        ...collapsed,
       ].slice(0, 100);
       persistPendingDirectMessageRequests(next);
       return next;
@@ -1206,12 +1430,17 @@ export const App = () => {
     const error = await handleJoinViaInvite(decoded.data);
     if (!error) {
       setDirectMessagePeerForGroup(request.groupId, request.senderPeerId);
+      removeOutgoingDirectMessageRequests((entry) =>
+        entry.groupId === request.groupId && entry.targetPeerId === request.senderPeerId);
       removePendingDirectMessageRequest(requestId);
     }
     return error;
   };
 
   const handleDeclineDirectMessageRequest = (requestId: string) => {
+    const request = pendingDirectMessageRequests().find((entry) => entry.requestId === requestId);
+    if (!request) return;
+    setPeerBlocked(request.senderPeerId, true);
     removePendingDirectMessageRequest(requestId);
   };
 
@@ -1546,6 +1775,11 @@ export const App = () => {
       };
     });
 
+  const appVersion = () => {
+    const fromEnv = import.meta.env.VITE_APP_VERSION as string | undefined;
+    return fromEnv && fromEnv.trim().length > 0 ? fromEnv.trim() : "dev";
+  };
+
   return (
     <Switch>
       <Match when={onboardingState().status === "checking"}>
@@ -1599,6 +1833,7 @@ export const App = () => {
                 onBackPress={() => dispatchMobileView({ type: "back-pressed" })}
                 onProfileToggle={() => dispatchMobileView({ type: "profile-toggled" })}
                 onDevDrawerToggle={() => dispatchMobileView({ type: "dev-drawer-toggled" })}
+                onAboutToggle={() => dispatchMobileView({ type: "about-toggled" })}
                 onContactsToggle={() => dispatchMobileView({ type: "contacts-toggled" })}
                 onGroupInfoToggle={() => dispatchMobileView({ type: "group-info-toggled" })}
               />
@@ -1704,6 +1939,7 @@ export const App = () => {
                 directMessagePeerLabel={directMessagePeerLabel(activeDirectMessagePeerId())}
                 directMessageBlocked={isDirectMessageBlocked(activeDirectMessagePeerId())}
                 onSetDirectMessageBlocked={(peerId, blocked) => setPeerBlocked(peerId, blocked)}
+                onStartDirectMessage={handleStartDirectMessageFromGroupInfo}
                 onApproveJoin={handleApproveJoin}
                 onRemoveMember={handleRemoveMember}
                 onChangeMemberRole={isCurrentUserAdmin() ? handleChangeMemberRole : null}
@@ -1722,9 +1958,11 @@ export const App = () => {
             contactsContent={
               <ContactsBookPage
                 contactsBook={contactsBook()}
+                ownPeerId={chat!.peerId}
                 connectedPeerIds={connectedPeerIds()}
                 latencyMap={latencyMap()}
                 onSetNickname={handleSetContactNickname}
+                onStartDirectMessage={handleStartDirectMessageFromContacts}
               />
             }
             profileContent={
@@ -1732,6 +1970,12 @@ export const App = () => {
                 peerId={chat!.peerId}
                 displayName={displayName()}
                 onSaveDisplayName={handleProfileDisplayNameSave}
+              />
+            }
+            aboutContent={
+              <AboutPage
+                githubUrl={PROJECT_GITHUB_URL}
+                appVersion={appVersion()}
               />
             }
             mobileView={mobileView().currentView}
@@ -1746,6 +1990,8 @@ export const App = () => {
                 dispatchMobileView({ type: "contacts-closed" });
               } else if (panel === "profile") {
                 dispatchMobileView({ type: "profile-closed" });
+              } else if (panel === "about") {
+                dispatchMobileView({ type: "about-closed" });
               }
             }}
           />

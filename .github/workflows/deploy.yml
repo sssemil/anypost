@@ -31,6 +31,9 @@ jobs:
 
       - run: pnpm --filter anypost-core run build
 
+      - name: Set web app version
+        run: echo "VITE_APP_VERSION=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
       - run: pnpm --filter anypost-web run build
 
       - uses: actions/upload-pages-artifact@v3

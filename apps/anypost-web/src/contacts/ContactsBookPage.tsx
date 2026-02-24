@@ -3,9 +3,11 @@ import type { ContactsBook } from "anypost-core/data";
 
 type ContactsBookPageProps = {
   readonly contactsBook: ContactsBook;
+  readonly ownPeerId: string;
   readonly connectedPeerIds: ReadonlySet<string>;
   readonly latencyMap: ReadonlyMap<string, number>;
   readonly onSetNickname: (peerId: string, nickname: string | null) => void;
+  readonly onStartDirectMessage?: ((peerId: string) => Promise<string | null> | string | null) | null;
 };
 
 const CONTACTS_PER_PAGE = 12;
@@ -26,6 +28,8 @@ export const ContactsBookPage = (props: ContactsBookPageProps) => {
   const [search, setSearch] = createSignal("");
   const [page, setPage] = createSignal(0);
   const [nicknameDrafts, setNicknameDrafts] = createSignal<ReadonlyMap<string, string>>(new Map());
+  const [directMessageErrorByPeerId, setDirectMessageErrorByPeerId] = createSignal<ReadonlyMap<string, string>>(new Map());
+  const [startingDirectMessages, setStartingDirectMessages] = createSignal<ReadonlySet<string>>(new Set());
 
   const getNicknameDraft = (peerId: string, currentNickname: string | null): string =>
     nicknameDrafts().get(peerId) ?? (currentNickname ?? "");
@@ -45,6 +49,49 @@ export const ContactsBookPage = (props: ContactsBookPageProps) => {
       next.delete(peerId);
       return next;
     });
+  };
+
+  const clearDirectMessageError = (peerId: string) => {
+    setDirectMessageErrorByPeerId((prev) => {
+      if (!prev.has(peerId)) return prev;
+      const next = new Map(prev);
+      next.delete(peerId);
+      return next;
+    });
+  };
+
+  const handleStartDirectMessage = async (peerId: string) => {
+    if (!props.onStartDirectMessage) return;
+    clearDirectMessageError(peerId);
+    setStartingDirectMessages((prev) => {
+      if (prev.has(peerId)) return prev;
+      const next = new Set(prev);
+      next.add(peerId);
+      return next;
+    });
+
+    try {
+      const result = await props.onStartDirectMessage(peerId);
+      if (!result) return;
+      setDirectMessageErrorByPeerId((prev) => {
+        const next = new Map(prev);
+        next.set(peerId, result);
+        return next;
+      });
+    } catch {
+      setDirectMessageErrorByPeerId((prev) => {
+        const next = new Map(prev);
+        next.set(peerId, "Failed to open direct chat");
+        return next;
+      });
+    } finally {
+      setStartingDirectMessages((prev) => {
+        if (!prev.has(peerId)) return prev;
+        const next = new Set(prev);
+        next.delete(peerId);
+        return next;
+      });
+    }
   };
 
   return (
@@ -100,9 +147,20 @@ export const ContactsBookPage = (props: ContactsBookPageProps) => {
                             {contact.nickname ?? contact.selfName ?? "(unknown name)"}
                           </span>
                         </div>
-                        <span class="text-[10px] text-tg-text-dim shrink-0">
-                          {formatLastSeen(contact.lastSeenAt)}
-                        </span>
+                        <div class="flex items-center gap-2 shrink-0">
+                          <Show when={props.onStartDirectMessage && contact.peerId !== props.ownPeerId}>
+                            <button
+                              class="border border-tg-border rounded px-2 py-0.5 text-[10px] text-tg-accent hover:text-tg-accent/80 cursor-pointer disabled:opacity-40"
+                              disabled={startingDirectMessages().has(contact.peerId)}
+                              onClick={() => void handleStartDirectMessage(contact.peerId)}
+                            >
+                              DM
+                            </button>
+                          </Show>
+                          <span class="text-[10px] text-tg-text-dim">
+                            {formatLastSeen(contact.lastSeenAt)}
+                          </span>
+                        </div>
                       </div>
 
                       <div class="mt-1 text-[10px] text-tg-text-dim">
@@ -155,6 +213,11 @@ export const ContactsBookPage = (props: ContactsBookPageProps) => {
                           <span>{Math.round(props.latencyMap.get(contact.peerId)!)}ms</span>
                         </Show>
                       </div>
+                      <Show when={directMessageErrorByPeerId().has(contact.peerId)}>
+                        <div class="mt-1 text-[10px] text-red-400">
+                          {directMessageErrorByPeerId().get(contact.peerId)}
+                        </div>
+                      </Show>
                     </div>
                   )}
                 </For>
