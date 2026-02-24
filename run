@@ -12,6 +12,7 @@ Commands:
   relay          Build and start the relay node
   web            Start the web app dev server
   dev            Start both relay and web app (Ctrl+C stops both)
+  e2e-record     Run headless Chromium Alice/Bob scenario + download diagnostics logs
   build          Build all packages
   test           Run all tests
   typecheck      Type-check all packages
@@ -79,6 +80,11 @@ cmd_typecheck() {
   pnpm run typecheck
 }
 
+cmd_e2e_record() {
+  shift || true
+  pnpm --filter anypost-web run e2e:record -- "$@"
+}
+
 if [[ $# -eq 0 ]]; then
   usage
   exit 1
@@ -88,6 +94,7 @@ case "$1" in
   relay)     cmd_relay ;;
   web)       cmd_web ;;
   dev)       cmd_dev ;;
+  e2e-record) cmd_e2e_record "$@" ;;
   build)     cmd_build ;;
   test)      cmd_test ;;
   typecheck) cmd_typecheck ;;
