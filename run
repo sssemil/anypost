@@ -11,7 +11,7 @@ Usage: ./run <command>
 Commands:
   relay          Build and start the relay node
   web            Start the web app dev server
-  electron       Start the Electron desktop app in dev mode
+  electron       Start the Electron desktop app in dev mode (optional profile name)
   dev            Start both relay and web app (Ctrl+C stops both)
   e2e-record     Run headless Chromium Alice/Bob scenario + download diagnostics logs
   e2e-dm-refresh Run headless Chromium DM refresh continuity integration test
@@ -46,7 +46,13 @@ cmd_web() {
 }
 
 cmd_electron() {
-  pnpm --filter anypost-electron run dev
+  shift || true
+  local profile="${1:-}"
+  if [[ -n "$profile" ]]; then
+    ANYPOST_PROFILE="$profile" pnpm --filter anypost-electron run dev
+  else
+    pnpm --filter anypost-electron run dev
+  fi
 }
 
 cmd_dev() {

@@ -12,6 +12,7 @@ Guidance for coding agents working in this repository.
 - Install: `pnpm install --frozen-lockfile`
 - Dev web: `./run web`
 - Dev electron: `./run electron`
+  - Profiled instance: `./run electron alice`
 - Build all: `./run build`
 - Test all: `./run test`
 - Typecheck all: `./run typecheck`

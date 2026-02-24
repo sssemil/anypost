@@ -23,6 +23,40 @@ const pendingDeepLinks: string[] = [];
 
 const RELAY_READVERTISE_INTERVAL_MS = 12 * 60 * 60 * 1_000;
 const APP_PROTOCOL = "anypost";
+const MAX_PROFILE_LENGTH = 64;
+
+const normalizeProfileName = (value: string): string =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, "-")
+    .replace(/[-_.]{2,}/g, "-")
+    .replace(/^[-_.]+|[-_.]+$/g, "")
+    .slice(0, MAX_PROFILE_LENGTH);
+
+const parseProfileFromArgv = (argv: readonly string[]): string | null => {
+  for (let idx = 0; idx < argv.length; idx += 1) {
+    const arg = argv[idx];
+    if (arg.startsWith("--profile=")) {
+      const normalized = normalizeProfileName(arg.slice("--profile=".length));
+      return normalized.length > 0 ? normalized : null;
+    }
+    if (arg === "--profile") {
+      const next = argv[idx + 1];
+      if (!next) return null;
+      const normalized = normalizeProfileName(next);
+      return normalized.length > 0 ? normalized : null;
+    }
+  }
+  const fromEnv = normalizeProfileName(process.env.ANYPOST_PROFILE ?? "");
+  return fromEnv.length > 0 ? fromEnv : null;
+};
+
+const activeProfile = parseProfileFromArgv(process.argv);
+if (activeProfile) {
+  const userDataPath = path.join(app.getPath("appData"), "Anypost", activeProfile);
+  app.setPath("userData", userDataPath);
+}
 
 let relayState: RelayState = {
   running: false,
@@ -261,14 +295,17 @@ const shutdownApp = async () => {
   }
 };
 
-const gotLock = app.requestSingleInstanceLock();
+const enforceSingleInstanceLock = activeProfile === null;
+const gotLock = enforceSingleInstanceLock ? app.requestSingleInstanceLock() : true;
 if (!gotLock) {
   app.quit();
 } else {
-  app.on("second-instance", (_event, argv) => {
-    for (const url of extractDeepLinks(argv)) enqueueDeepLink(url);
-    focusMainWindow();
-  });
+  if (enforceSingleInstanceLock) {
+    app.on("second-instance", (_event, argv) => {
+      for (const url of extractDeepLinks(argv)) enqueueDeepLink(url);
+      focusMainWindow();
+    });
+  }
 
   app.on("open-url", (event, url) => {
     event.preventDefault();
@@ -276,6 +313,9 @@ if (!gotLock) {
   });
 
   app.whenReady().then(async () => {
+    if (activeProfile) {
+      console.log(`[electron] Running profile "${activeProfile}" at ${app.getPath("userData")}`);
+    }
     app.setAsDefaultProtocolClient(APP_PROTOCOL);
     registerIpcHandlers();
     await startEmbeddedRelay();
