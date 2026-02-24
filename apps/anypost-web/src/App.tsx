@@ -108,6 +108,9 @@ const PROFILE_SYNC_REQUEST_COOLDOWN_MS = 15_000;
 const DM_SELF_JOIN_REQUEST_COOLDOWN_MS = 15_000;
 const OUTGOING_DM_RETRY_INTERVAL_MS = 5_000;
 const OUTGOING_DM_RETRY_SWEEP_MS = 4_000;
+const DEVTOOLS_RECORD_DURATION_MS = 3 * 60_000;
+const DEVTOOLS_RECORD_SNAPSHOT_MS = 1_000;
+const DEVTOOLS_RECORD_MAX_ENTRIES = 25_000;
 const PROJECT_GITHUB_URL = "https://github.com/sssemil/anypost";
 
 const hexToBytes = (hex: string): Uint8Array<ArrayBuffer> => {
@@ -142,6 +145,27 @@ type OutgoingDirectMessageRequest = {
   readonly lastAttemptAt: number | null;
   readonly attemptCount: number;
   readonly nextAttemptAt: number;
+};
+
+type DiagnosticsRecorderStatus = "idle" | "recording" | "ready";
+type DiagnosticsEntry = {
+  readonly timestamp: number;
+  readonly type: string;
+  readonly payload: unknown;
+};
+type DiagnosticsRecordingArtifact = {
+  readonly url: string;
+  readonly filename: string;
+  readonly sizeBytes: number;
+  readonly generatedAt: number;
+};
+type DiagnosticsRecorderState = {
+  readonly status: DiagnosticsRecorderStatus;
+  readonly startedAt: number | null;
+  readonly endsAt: number | null;
+  readonly remainingMs: number;
+  readonly entryCount: number;
+  readonly artifact: DiagnosticsRecordingArtifact | null;
 };
 
 const loadPublicKeyToPeerId = (): ReadonlyMap<string, string> => {
@@ -329,6 +353,14 @@ export const App = () => {
     loadOutgoingDirectMessageRequests(),
   );
   const [profileSyncDebugTick, setProfileSyncDebugTick] = createSignal(0);
+  const [diagnosticsRecorder, setDiagnosticsRecorder] = createSignal<DiagnosticsRecorderState>({
+    status: "idle",
+    startedAt: null,
+    endsAt: null,
+    remainingMs: 0,
+    entryCount: 0,
+    artifact: null,
+  });
 
   let chat: MultiGroupChat | undefined;
   let unsubscribeMessage: (() => void) | undefined;
@@ -340,6 +372,10 @@ export const App = () => {
   let outgoingDmRetrySweepInFlight = false;
   const profileSyncLastRequestAtByPeer = new Map<string, number>();
   const dmSelfJoinLastRequestAtByGroup = new Map<string, number>();
+  let diagnosticsSnapshotInterval: ReturnType<typeof setInterval> | undefined;
+  let diagnosticsProgressInterval: ReturnType<typeof setInterval> | undefined;
+  let diagnosticsStopTimeout: ReturnType<typeof setTimeout> | undefined;
+  let diagnosticsEntries: DiagnosticsEntry[] = [];
 
   const dispatchMobileView = (event: Parameters<typeof transitionMobileView>[1]) => {
     setMobileView((s) => transitionMobileView(s, event));
@@ -381,6 +417,166 @@ export const App = () => {
     requests: readonly OutgoingDirectMessageRequest[],
   ) => {
     saveOutgoingDirectMessageRequests(requests);
+  };
+
+  const createRecordingFilename = (atMs: number): string => {
+    const date = new Date(atMs);
+    const pad = (value: number) => value.toString().padStart(2, "0");
+    return `anypost-devtools-recording-${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}.json`;
+  };
+
+  const clearDiagnosticsTimers = () => {
+    if (diagnosticsSnapshotInterval) clearInterval(diagnosticsSnapshotInterval);
+    if (diagnosticsProgressInterval) clearInterval(diagnosticsProgressInterval);
+    if (diagnosticsStopTimeout) clearTimeout(diagnosticsStopTimeout);
+    diagnosticsSnapshotInterval = undefined;
+    diagnosticsProgressInterval = undefined;
+    diagnosticsStopTimeout = undefined;
+  };
+
+  const appendDiagnosticsEntry = (type: string, payload: unknown) => {
+    if (diagnosticsRecorder().status !== "recording") return;
+    diagnosticsEntries.push({
+      timestamp: Date.now(),
+      type,
+      payload,
+    });
+    if (diagnosticsEntries.length > DEVTOOLS_RECORD_MAX_ENTRIES) {
+      diagnosticsEntries = diagnosticsEntries.slice(diagnosticsEntries.length - DEVTOOLS_RECORD_MAX_ENTRIES);
+    }
+  };
+
+  const buildDiagnosticsSnapshot = () => {
+    const status = chat?.getNetworkStatus();
+    return {
+      chatStatus: chatStatus(),
+      activeGroupId: groupState().activeGroupId,
+      connectedPeerIds: status?.peers.map((peer) => peer.peerId) ?? [],
+      pendingDmRequestCount: pendingDirectMessageRequests().length,
+      outgoingDmRequests: outgoingDirectMessageRequests().map((entry) => ({
+        requestKey: entry.requestKey,
+        groupId: entry.groupId,
+        targetPeerId: entry.targetPeerId,
+        attemptCount: entry.attemptCount,
+        lastAttemptAt: entry.lastAttemptAt,
+        nextAttemptAt: entry.nextAttemptAt,
+        blocked: blockedPeerIds().has(entry.targetPeerId),
+        targetJoined: targetPeerHasJoinedGroup(entry.groupId, entry.targetPeerId),
+      })),
+      profileSyncLastRequestAtByPeer: [...profileSyncLastRequestAtByPeer.entries()],
+      connectionMetrics: connectionMetrics(),
+      relayReservationSummary: relayReservationState()
+        ? [...relayReservationState()!.entries.values()].map((entry) => ({
+            peerId: entry.peerId,
+            status: entry.status,
+            rttMs: entry.rttMs,
+            addresses: entry.addresses,
+            reservationExpiresAtMs: entry.reservationExpiresAtMs,
+            nextAttemptAtMs: entry.nextAttemptAtMs,
+          }))
+        : [],
+    };
+  };
+
+  const finishDiagnosticsRecording = (reason: "timeout" | "manual") => {
+    if (diagnosticsRecorder().status !== "recording") return;
+    clearDiagnosticsTimers();
+    appendDiagnosticsEntry("recording-finished", { reason });
+
+    const startedAt = diagnosticsRecorder().startedAt ?? Date.now();
+    const endedAt = Date.now();
+    const payload = {
+      schemaVersion: 1,
+      appVersion: (() => {
+        const fromEnv = import.meta.env.VITE_APP_VERSION as string | undefined;
+        return fromEnv && fromEnv.trim().length > 0 ? fromEnv.trim() : "dev";
+      })(),
+      startedAt,
+      endedAt,
+      durationMs: Math.max(0, endedAt - startedAt),
+      reason,
+      entryCount: diagnosticsEntries.length,
+      entries: diagnosticsEntries,
+    };
+
+    const text = JSON.stringify(payload, null, 2);
+    const blob = new Blob([text], { type: "application/json" });
+    const nextUrl = URL.createObjectURL(blob);
+    const priorArtifact = diagnosticsRecorder().artifact;
+    if (priorArtifact?.url) {
+      URL.revokeObjectURL(priorArtifact.url);
+    }
+
+    setDiagnosticsRecorder({
+      status: "ready",
+      startedAt,
+      endsAt: endedAt,
+      remainingMs: 0,
+      entryCount: diagnosticsEntries.length,
+      artifact: {
+        url: nextUrl,
+        filename: createRecordingFilename(startedAt),
+        sizeBytes: blob.size,
+        generatedAt: endedAt,
+      },
+    });
+  };
+
+  const startDiagnosticsRecording = () => {
+    if (diagnosticsRecorder().status === "recording") return;
+
+    clearDiagnosticsTimers();
+    const priorArtifact = diagnosticsRecorder().artifact;
+    if (priorArtifact?.url) {
+      URL.revokeObjectURL(priorArtifact.url);
+    }
+
+    diagnosticsEntries = [];
+    const startedAt = Date.now();
+    const endsAt = startedAt + DEVTOOLS_RECORD_DURATION_MS;
+    setDiagnosticsRecorder({
+      status: "recording",
+      startedAt,
+      endsAt,
+      remainingMs: DEVTOOLS_RECORD_DURATION_MS,
+      entryCount: 0,
+      artifact: null,
+    });
+
+    appendDiagnosticsEntry("recording-started", {
+      durationMs: DEVTOOLS_RECORD_DURATION_MS,
+      snapshotIntervalMs: DEVTOOLS_RECORD_SNAPSHOT_MS,
+    });
+
+    appendDiagnosticsEntry("snapshot", buildDiagnosticsSnapshot());
+
+    diagnosticsSnapshotInterval = setInterval(() => {
+      appendDiagnosticsEntry("snapshot", buildDiagnosticsSnapshot());
+    }, DEVTOOLS_RECORD_SNAPSHOT_MS);
+
+    diagnosticsProgressInterval = setInterval(() => {
+      setDiagnosticsRecorder((prev) => {
+        if (prev.status !== "recording") return prev;
+        return {
+          ...prev,
+          remainingMs: Math.max(0, (prev.endsAt ?? Date.now()) - Date.now()),
+          entryCount: diagnosticsEntries.length,
+        };
+      });
+    }, 250);
+
+    diagnosticsStopTimeout = setTimeout(() => {
+      finishDiagnosticsRecording("timeout");
+    }, DEVTOOLS_RECORD_DURATION_MS);
+  };
+
+  const downloadDiagnosticsRecording = () => {
+    const artifact = diagnosticsRecorder().artifact;
+    if (!artifact) return;
+    const anchor = document.createElement("a");
+    anchor.href = artifact.url;
+    anchor.download = artifact.filename;
+    anchor.click();
   };
 
   const upsertContact = (
@@ -982,6 +1178,10 @@ export const App = () => {
         refreshNetworkStatus();
         const current = chat?.getNetworkStatus();
         if (current) {
+          appendDiagnosticsEntry("peer-change", {
+            connectedPeerIds: current.peers.map((peer) => peer.peerId),
+            subscriberCount: current.subscriberCount,
+          });
           for (const peer of current.peers) {
             maybeRequestProfileSync(peer.peerId);
           }
@@ -1005,9 +1205,17 @@ export const App = () => {
 
       unsubscribeEvents = chat.onEvent((evt) => {
         setEventLog((prev) => [...prev.slice(-(MAX_EVENTS - 1)), evt]);
+        appendDiagnosticsEntry("network-event", evt);
       });
 
       unsubscribeMessage = chat.onMessage((msg) => {
+        appendDiagnosticsEntry("group-message", {
+          groupId: msg.groupId,
+          senderPeerId: msg.senderPeerId,
+          senderDisplayName: msg.senderDisplayName,
+          timestamp: msg.timestamp,
+          textPreview: msg.text.slice(0, 160),
+        });
         const liveChat = chat;
         if (liveChat) {
           void deriveDirectMessageGroupId(liveChat.peerId, msg.senderPeerId).then((dmGroupId) => {
@@ -1045,6 +1253,14 @@ export const App = () => {
       });
 
       unsubscribeJoinRequests = chat.onJoinRequest((evt) => {
+        appendDiagnosticsEntry("join-request", {
+          groupId: evt.groupId,
+          senderPeerId: evt.senderPeerId,
+          autoApproved: evt.autoApproved,
+          alreadyMember: evt.alreadyMember,
+          inviteTokenId: evt.inviteTokenId ?? null,
+          inviteValidationError: evt.inviteValidationError ?? null,
+        });
         upsertContact(evt.senderPeerId, { groupId: evt.groupId });
         if (evt.autoApproved || evt.alreadyMember) return;
         const pubKeyHex = toHex(new Uint8Array(evt.requesterPublicKey));
@@ -1059,6 +1275,14 @@ export const App = () => {
       });
 
       unsubscribeDirectMessageRequests = chat.onDirectMessageRequest((evt) => {
+        appendDiagnosticsEntry("dm-request-inbound", {
+          requestId: evt.requestId,
+          senderPeerId: evt.senderPeerId,
+          targetPeerId: evt.targetPeerId,
+          groupId: evt.groupId,
+          groupName: evt.groupName,
+          sentAt: evt.sentAt,
+        });
         if (blockedPeerIds().has(evt.senderPeerId)) return;
         upsertContact(evt.senderPeerId, { groupId: evt.groupId });
         maybeRequestProfileSync(evt.senderPeerId);
@@ -1077,6 +1301,11 @@ export const App = () => {
     unsubscribeDirectMessageRequests?.();
     if (statusInterval) clearInterval(statusInterval);
     if (pingInterval) clearInterval(pingInterval);
+    clearDiagnosticsTimers();
+    const artifact = diagnosticsRecorder().artifact;
+    if (artifact?.url) {
+      URL.revokeObjectURL(artifact.url);
+    }
     chat?.stop();
   });
 
@@ -1110,9 +1339,14 @@ export const App = () => {
     if (!currentChat || !activeGroup) return;
 
     const groupId = activeGroup.groupId;
+    appendDiagnosticsEntry("message-send-requested", {
+      groupId,
+      textPreview: text.slice(0, 160),
+    });
 
     const name = displayName() || undefined;
     currentChat.sendMessage(groupId, text, name).then(() => {
+      appendDiagnosticsEntry("message-send-succeeded", { groupId });
       upsertContact(currentChat.peerId, {
         selfName: name ?? null,
         groupId,
@@ -1129,6 +1363,7 @@ export const App = () => {
         },
       });
     }).catch(() => {
+      appendDiagnosticsEntry("message-send-failed", { groupId });
       setChatStatus("disconnected");
     });
   };
@@ -1137,12 +1372,19 @@ export const App = () => {
     const currentChat = chat;
     if (!currentChat) return "Not connected";
 
+    appendDiagnosticsEntry("join-via-invite-requested", {
+      groupId: invite.groupId,
+    });
     try {
       const { groupId } = await currentChat.joinViaInvite(invite);
       const chainState = currentChat.getActionChainState(groupId);
       const groupName = chainState?.isDirectMessage
         ? "Direct Message"
         : (chainState?.groupName || "Unnamed Group");
+      appendDiagnosticsEntry("join-via-invite-succeeded", {
+        groupId,
+        isDirectMessage: chainState?.isDirectMessage ?? false,
+      });
       dispatchGroupEvent({ type: "group-joined", groupId, groupName, hasActionChain: true });
       dispatchGroupEvent({ type: "group-selected", groupId });
       refreshActionChainState();
@@ -1150,6 +1392,10 @@ export const App = () => {
       dispatchMobileView({ type: "group-selected" });
       return null;
     } catch (error) {
+      appendDiagnosticsEntry("join-via-invite-failed", {
+        groupId: invite.groupId,
+        error: error instanceof Error ? error.message : String(error),
+      });
       return error instanceof Error ? error.message : "Join failed";
     }
   };
@@ -1163,6 +1409,7 @@ export const App = () => {
     try {
       const { groupId } = await currentChat.createGroup(trimmed);
       const groupName = currentChat.getActionChainState(groupId)?.groupName ?? trimmed;
+      appendDiagnosticsEntry("group-create-succeeded", { groupId, groupName });
       dispatchGroupEvent({ type: "group-created", groupId, groupName });
       dispatchGroupEvent({ type: "group-selected", groupId });
       refreshActionChainState();
@@ -1170,6 +1417,10 @@ export const App = () => {
       dispatchMobileView({ type: "group-info-toggled" });
       return null;
     } catch (error) {
+      appendDiagnosticsEntry("group-create-failed", {
+        groupName: trimmed,
+        error: error instanceof Error ? error.message : String(error),
+      });
       return error instanceof Error ? error.message : "Failed to create group";
     }
   };
@@ -1271,13 +1522,28 @@ export const App = () => {
           const lastRequestedAt = dmSelfJoinLastRequestAtByGroup.get(entry.groupId) ?? 0;
           if (now - lastRequestedAt >= DM_SELF_JOIN_REQUEST_COOLDOWN_MS) {
             dmSelfJoinLastRequestAtByGroup.set(entry.groupId, now);
+            appendDiagnosticsEntry("dm-self-join-requested", {
+              groupId: entry.groupId,
+            });
             void currentChat.requestJoin(entry.groupId).catch(() => {});
           }
         }
         if (targetPeerHasJoinedGroup(entry.groupId, entry.targetPeerId)) {
+          appendDiagnosticsEntry("dm-request-resolved", {
+            requestKey: entry.requestKey,
+            groupId: entry.groupId,
+            targetPeerId: entry.targetPeerId,
+            reason: "target-joined",
+          });
           continue;
         }
         if (blockedPeerIds().has(entry.targetPeerId)) {
+          appendDiagnosticsEntry("dm-request-resolved", {
+            requestKey: entry.requestKey,
+            groupId: entry.groupId,
+            targetPeerId: entry.targetPeerId,
+            reason: "blocked",
+          });
           continue;
         }
         if (entry.nextAttemptAt > now) {
@@ -1285,6 +1551,12 @@ export const App = () => {
           continue;
         }
 
+        appendDiagnosticsEntry("dm-request-attempt", {
+          requestKey: entry.requestKey,
+          groupId: entry.groupId,
+          targetPeerId: entry.targetPeerId,
+          attemptCount: entry.attemptCount + 1,
+        });
         try {
           void currentChat.connectToPeerId(entry.targetPeerId).catch(() => {});
           await currentChat.sendDirectMessageRequest({
@@ -1293,8 +1565,18 @@ export const App = () => {
             groupName: entry.groupName,
             inviteCode: entry.inviteCode,
           });
-        } catch {
-          // Retry on fixed cadence whether publish succeeded or failed.
+          appendDiagnosticsEntry("dm-request-published", {
+            requestKey: entry.requestKey,
+            groupId: entry.groupId,
+            targetPeerId: entry.targetPeerId,
+          });
+        } catch (error) {
+          appendDiagnosticsEntry("dm-request-publish-failed", {
+            requestKey: entry.requestKey,
+            groupId: entry.groupId,
+            targetPeerId: entry.targetPeerId,
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
 
         const nextAttemptCount = entry.attemptCount + 1;
@@ -1337,7 +1619,16 @@ export const App = () => {
 
     profileSyncLastRequestAtByPeer.set(target, now);
     setProfileSyncDebugTick((value) => value + 1);
-    void currentChat.requestProfile(target).catch(() => {});
+    appendDiagnosticsEntry("profile-request", {
+      peerId: target,
+      cooldownMs: PROFILE_SYNC_REQUEST_COOLDOWN_MS,
+    });
+    void currentChat.requestProfile(target).catch((error) => {
+      appendDiagnosticsEntry("profile-request-failed", {
+        peerId: target,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   };
 
   const handleStartDirectMessage = async (targetPeerId: string): Promise<string | null> => {
@@ -1346,6 +1637,7 @@ export const App = () => {
     const trimmedTarget = targetPeerId.trim();
     if (!isValidPeerId(trimmedTarget)) return "Invalid peer ID";
     if (trimmedTarget === currentChat.peerId) return "Cannot DM yourself";
+    appendDiagnosticsEntry("dm-start-requested", { targetPeerId: trimmedTarget });
     maybeRequestProfileSync(trimmedTarget);
 
     try {
@@ -1426,12 +1718,21 @@ export const App = () => {
           groupName: currentChat.getActionChainState(dmGroupId)?.groupName ?? "Direct Message",
           inviteCode: invite.code,
         });
+        appendDiagnosticsEntry("dm-request-queued", {
+          groupId: dmGroupId,
+          targetPeerId: trimmedTarget,
+          inviteLength: invite.code.length,
+        });
         void runOutgoingDirectMessageRequestSweep();
       }
 
       void currentChat.connectToPeerId(trimmedTarget).catch(() => {});
       return null;
     } catch (error) {
+      appendDiagnosticsEntry("dm-start-failed", {
+        targetPeerId: trimmedTarget,
+        error: error instanceof Error ? error.message : String(error),
+      });
       return error instanceof Error ? error.message : "Failed to start direct chat";
     }
   };
@@ -1454,7 +1755,14 @@ export const App = () => {
 
   const upsertPendingDirectMessageRequest = (event: DirectMessageRequestEvent) => {
     setPendingDirectMessageRequests((prev) => {
-      if (prev.some((request) => request.requestId === event.requestId)) return prev;
+      if (prev.some((request) => request.requestId === event.requestId)) {
+        appendDiagnosticsEntry("dm-request-inbound-duplicate", {
+          requestId: event.requestId,
+          senderPeerId: event.senderPeerId,
+          groupId: event.groupId,
+        });
+        return prev;
+      }
       const collapsed = prev.filter((request) =>
         !(request.senderPeerId === event.senderPeerId && request.groupId === event.groupId));
       const next = [
@@ -1468,6 +1776,12 @@ export const App = () => {
         },
         ...collapsed,
       ].slice(0, 100);
+      appendDiagnosticsEntry("dm-request-inbound-queued", {
+        requestId: event.requestId,
+        senderPeerId: event.senderPeerId,
+        groupId: event.groupId,
+        queueSize: next.length,
+      });
       persistPendingDirectMessageRequests(next);
       return next;
     });
@@ -1485,6 +1799,11 @@ export const App = () => {
   const handleAcceptDirectMessageRequest = async (requestId: string): Promise<string | null> => {
     const request = pendingDirectMessageRequests().find((entry) => entry.requestId === requestId);
     if (!request) return "DM request not found";
+    appendDiagnosticsEntry("dm-request-accept-requested", {
+      requestId,
+      senderPeerId: request.senderPeerId,
+      groupId: request.groupId,
+    });
 
     const decoded = decodeGroupInvite(request.inviteCode);
     if (!decoded.success) return "Invalid DM invite";
@@ -1495,6 +1814,18 @@ export const App = () => {
       removeOutgoingDirectMessageRequests((entry) =>
         entry.groupId === request.groupId && entry.targetPeerId === request.senderPeerId);
       removePendingDirectMessageRequest(requestId);
+      appendDiagnosticsEntry("dm-request-accepted", {
+        requestId,
+        senderPeerId: request.senderPeerId,
+        groupId: request.groupId,
+      });
+    } else {
+      appendDiagnosticsEntry("dm-request-accept-failed", {
+        requestId,
+        senderPeerId: request.senderPeerId,
+        groupId: request.groupId,
+        error,
+      });
     }
     return error;
   };
@@ -1502,6 +1833,11 @@ export const App = () => {
   const handleDeclineDirectMessageRequest = (requestId: string) => {
     const request = pendingDirectMessageRequests().find((entry) => entry.requestId === requestId);
     if (!request) return;
+    appendDiagnosticsEntry("dm-request-declined", {
+      requestId,
+      senderPeerId: request.senderPeerId,
+      groupId: request.groupId,
+    });
     setPeerBlocked(request.senderPeerId, true);
     removePendingDirectMessageRequest(requestId);
   };
@@ -2037,6 +2373,15 @@ export const App = () => {
                   dmOutgoingDebug={dmOutgoingDebugRows()}
                   pendingDmDebug={pendingDmDebugRows()}
                   profileSyncDebug={profileSyncDebugRows()}
+                  diagnosticsRecorder={{
+                    status: diagnosticsRecorder().status,
+                    remainingMs: diagnosticsRecorder().remainingMs,
+                    entryCount: diagnosticsRecorder().entryCount,
+                    artifactFilename: diagnosticsRecorder().artifact?.filename ?? null,
+                    artifactSizeBytes: diagnosticsRecorder().artifact?.sizeBytes ?? null,
+                  }}
+                  onStartDiagnosticsRecording={startDiagnosticsRecording}
+                  onDownloadDiagnosticsRecording={downloadDiagnosticsRecording}
                   onAddRelay={handleAddRelay}
                 />
                 <EventLog
