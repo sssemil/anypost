@@ -407,6 +407,7 @@ export const App = () => {
   let outgoingDmRetrySweepInFlight = false;
   const profileSyncLastRequestAtByPeer = new Map<string, number>();
   const dmSelfJoinLastRequestAtByGroup = new Map<string, number>();
+  const dmAckByGroupPeer = new Set<string>();
   let diagnosticsSnapshotInterval: ReturnType<typeof setInterval> | undefined;
   let diagnosticsProgressInterval: ReturnType<typeof setInterval> | undefined;
   let diagnosticsStopTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -1518,12 +1519,16 @@ export const App = () => {
           void deriveDirectMessageGroupId(liveChat.peerId, msg.senderPeerId).then((dmGroupId) => {
             if (dmGroupId === msg.groupId) {
               setDirectMessagePeerForGroup(msg.groupId, msg.senderPeerId);
+              markDirectMessagePeerAcknowledged(msg.groupId, msg.senderPeerId);
             }
           }).catch(() => {});
         }
         const dmPeerId = directMessagePeersByGroup().get(msg.groupId);
         if (dmPeerId && blockedPeerIds().has(msg.senderPeerId)) {
           return;
+        }
+        if (dmPeerId && dmPeerId === msg.senderPeerId) {
+          markDirectMessagePeerAcknowledged(msg.groupId, msg.senderPeerId);
         }
         maybeRequestProfileSync(msg.senderPeerId);
         removeOutgoingDirectMessageRequests((entry) =>
@@ -1559,6 +1564,7 @@ export const App = () => {
           inviteValidationError: evt.inviteValidationError ?? null,
         });
         upsertContact(evt.senderPeerId, { groupId: evt.groupId });
+        markDirectMessagePeerAcknowledged(evt.groupId, evt.senderPeerId);
         if (evt.autoApproved || evt.alreadyMember) return;
         const pubKeyHex = toHex(new Uint8Array(evt.requesterPublicKey));
         setPendingJoinsMap((prev) => {
@@ -1584,6 +1590,7 @@ export const App = () => {
         upsertContact(evt.senderPeerId, { groupId: evt.groupId });
         maybeRequestProfileSync(evt.senderPeerId);
         setDirectMessagePeerForGroup(evt.groupId, evt.senderPeerId);
+        markDirectMessagePeerAcknowledged(evt.groupId, evt.senderPeerId);
         upsertPendingDirectMessageRequest(evt);
       });
     } catch {
@@ -1733,13 +1740,24 @@ export const App = () => {
     });
   };
 
+  const directMessageAckKey = (groupId: string, peerId: string): string =>
+    `${groupId}:${peerId}`;
+
+  const markDirectMessagePeerAcknowledged = (groupId: string, peerId: string) => {
+    if (!groupId || !peerId) return;
+    dmAckByGroupPeer.add(directMessageAckKey(groupId, peerId));
+  };
+
+  const hasDirectMessagePeerAcknowledged = (groupId: string, peerId: string): boolean =>
+    dmAckByGroupPeer.has(directMessageAckKey(groupId, peerId));
+
   const targetPeerHasJoinedGroup = (groupId: string, targetPeerId: string): boolean => {
     const chainState = chat?.getActionChainState(groupId);
     if (!chainState) return false;
     if (chainState.isDirectMessage) {
-      // DM genesis starts with one local owner; consider remote joined only when
-      // chain membership actually grows beyond that.
-      return chainState.members.size >= 2;
+      // For DMs, local approval writes can exist before the remote peer has even
+      // discovered/accepted the DM. Treat "joined" as an explicit remote ack.
+      return hasDirectMessagePeerAcknowledged(groupId, targetPeerId);
     }
     const map = publicKeyToPeerIdMap();
     for (const member of chainState.members.values()) {
@@ -1879,6 +1897,7 @@ export const App = () => {
         });
         try {
           void currentChat.connectToPeerId(entry.targetPeerId).catch(() => {});
+          void currentChat.requestProfile(entry.targetPeerId).catch(() => {});
           await currentChat.sendDirectMessageRequest({
             targetPeerId: entry.targetPeerId,
             groupId: entry.groupId,
@@ -2151,6 +2170,7 @@ export const App = () => {
     const error = await handleJoinViaInvite(decoded.data);
     if (!error) {
       setDirectMessagePeerForGroup(request.groupId, request.senderPeerId);
+      markDirectMessagePeerAcknowledged(request.groupId, request.senderPeerId);
       removeOutgoingDirectMessageRequests((entry) =>
         entry.groupId === request.groupId && entry.targetPeerId === request.senderPeerId);
       removePendingDirectMessageRequest(requestId);

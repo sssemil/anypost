@@ -267,7 +267,10 @@ const DEFAULT_SYNC_RECONCILE_INTERVAL_MS = 20_000;
 const DEFAULT_SYNC_RECONCILE_STALE_MS = 45_000;
 const FULL_SYNC_FALLBACK_COOLDOWN_MS = 30_000;
 const DIRECT_MESSAGE_REQUEST_TOPIC = "anypost/system/dm-requests/v1";
+const DIRECT_JOIN_REQUEST_TOPIC = "anypost/system/join-requests/v1";
 const PROFILE_SYNC_TOPIC = "anypost/system/profile/v1";
+const DIRECT_DM_REQUEST_PROTOCOL = "/anypost/direct-dm-request/1.0.0";
+const DIRECT_JOIN_REQUEST_PROTOCOL = "/anypost/direct-join-request/1.0.0";
 
 export const createMultiGroupChat = async (
   options: CreateMultiGroupChatOptions,
@@ -352,6 +355,7 @@ export const createMultiGroupChat = async (
           pubsub: gossipsub({
             allowPublishToZeroTopicPeers: true,
             runOnLimitedConnection: true,
+            floodPublish: true,
           }),
           dcutr: dcutr(),
           ping: ping(),
@@ -370,6 +374,7 @@ export const createMultiGroupChat = async (
           pubsub: gossipsub({
             allowPublishToZeroTopicPeers: true,
             runOnLimitedConnection: true,
+            floodPublish: true,
           }),
         },
       });
@@ -905,6 +910,33 @@ export const createMultiGroupChat = async (
     return role === "admin" || role === "owner";
   };
 
+  const resolveGroupOwnerPeerId = (groupId: string): string | null => {
+    const state = actionChainStates.get(groupId);
+    if (!state) return null;
+    const owner = [...state.members.values()]
+      .filter((member) => member.role === "owner")
+      .sort((a, b) => a.joinedAt - b.joinedAt || a.publicKeyHex.localeCompare(b.publicKeyHex))[0];
+    if (!owner) return null;
+    return publicKeyToPeerId.get(owner.publicKeyHex) ?? null;
+  };
+
+  const collectSharedGroupTopicsForPeer = (targetPeerId: string): readonly string[] => {
+    const topics: string[] = [];
+    for (const [groupId, state] of actionChainStates.entries()) {
+      const ownIsMember = state.members.has(ownPublicKeyHex);
+      if (!ownIsMember) {
+        const retry = joinRetryState.get(groupId);
+        if (retry?.status !== "active") continue;
+      }
+      const targetIsMember = [...state.members.values()].some((member) =>
+        publicKeyToPeerId.get(member.publicKeyHex) === targetPeerId);
+      if (!targetIsMember) continue;
+      topics.push(groupTopic(groupId));
+      if (topics.length >= 6) break;
+    }
+    return topics;
+  };
+
   const isPeerMemberOfGroup = (groupId: string, peerIdValue: string): boolean => {
     const state = actionChainStates.get(groupId);
     if (!state) return true;
@@ -1097,6 +1129,56 @@ export const createMultiGroupChat = async (
     ed25519.verify(
       payload.signature,
       encodeJoinRequestSigningPayload(payload),
+      payload.requesterPublicKey,
+    );
+
+  const encodeDirectJoinRequestSigningPayload = (
+    payload: {
+      readonly groupId: string;
+      readonly senderPeerId: string;
+      readonly requesterPublicKey: Uint8Array;
+      readonly targetPeerId: string;
+      readonly inviteGrant?: InviteGrantProof;
+    },
+  ): Uint8Array =>
+    new Uint8Array(
+      encode({
+        type: "join_request_direct",
+        groupId: payload.groupId,
+        senderPeerId: payload.senderPeerId,
+        requesterPublicKey: payload.requesterPublicKey,
+        targetPeerId: payload.targetPeerId,
+        inviteGrant: payload.inviteGrant,
+      }),
+    );
+
+  const signDirectJoinRequest = (
+    payload: {
+      readonly groupId: string;
+      readonly senderPeerId: string;
+      readonly requesterPublicKey: Uint8Array;
+      readonly targetPeerId: string;
+      readonly inviteGrant?: InviteGrantProof;
+    },
+  ): Uint8Array =>
+    new Uint8Array([...ed25519.sign(
+      encodeDirectJoinRequestSigningPayload(payload),
+      accountKey.privateKey,
+    )]);
+
+  const verifyDirectJoinRequest = (
+    payload: {
+      readonly groupId: string;
+      readonly senderPeerId: string;
+      readonly requesterPublicKey: Uint8Array;
+      readonly targetPeerId: string;
+      readonly signature: Uint8Array;
+      readonly inviteGrant?: InviteGrantProof;
+    },
+  ): boolean =>
+    ed25519.verify(
+      payload.signature,
+      encodeDirectJoinRequestSigningPayload(payload),
       payload.requesterPublicKey,
     );
 
@@ -1443,14 +1525,74 @@ export const createMultiGroupChat = async (
   ) => {
     if (targetPeerId === ownPeerId) return;
     if (isMembershipEnforcedGroup(groupId)) {
-      if (!isOwnMemberOfGroup(groupId)) return;
+      const retry = joinRetryState.get(groupId);
+      const joinRetryActive = retry?.status === "active";
+      if (!isOwnMemberOfGroup(groupId) && !joinRetryActive) return;
     }
     void publishSyncRequest(groupId, targetPeerId, knownHashOverride).catch(() => {});
   };
 
+  const collectSyncTargets = (groupId: string): readonly string[] => {
+    const connected = new Set(node.getPeers().map((peer) => peer.toString()));
+    const targets = new Set<string>();
+
+    const state = actionChainStates.get(groupId);
+    if (!state) {
+      return [];
+    }
+
+    if (isMembershipEnforcedGroup(groupId)) {
+      for (const member of state.members.values()) {
+        const peerId = publicKeyToPeerId.get(member.publicKeyHex);
+        if (!peerId) continue;
+        if (!connected.has(peerId)) continue;
+        if (peerId === ownPeerId) continue;
+        targets.add(peerId);
+      }
+
+      if (!isOwnMemberOfGroup(groupId)) {
+        const retry = joinRetryState.get(groupId);
+        if (retry?.status === "active") {
+          const ownerPeerId = resolveGroupOwnerPeerId(groupId);
+          if (ownerPeerId && connected.has(ownerPeerId) && ownerPeerId !== ownPeerId) {
+            targets.add(ownerPeerId);
+          }
+        }
+      }
+
+      return [...targets];
+    }
+
+    for (const peerId of connected) {
+      if (peerId === ownPeerId) continue;
+      targets.add(peerId);
+    }
+    return [...targets];
+  };
+
   const requestSyncFromConnectedPeers = (groupId: string) => {
-    for (const remote of node.getPeers().map((p) => p.toString())) {
+    for (const remote of collectSyncTargets(groupId)) {
       requestSyncFromPeer(groupId, remote);
+    }
+  };
+
+  const sendWireMessageDirect = async (
+    targetPeerId: string,
+    protocol: string,
+    wireMessage: WireMessage,
+  ): Promise<boolean> => {
+    try {
+      const stream = await node.dialProtocol(peerIdFromString(targetPeerId), protocol);
+      const payload = encodeWireMessage(wireMessage);
+      await stream.sink((async function* () {
+        yield payload;
+      })());
+      try {
+        await stream.close();
+      } catch {}
+      return true;
+    } catch {
+      return false;
     }
   };
 
@@ -1485,6 +1627,39 @@ export const createMultiGroupChat = async (
       inviteGrant,
     };
     await pubsub.publish(topic, encodeWireMessage(wireMessage));
+
+    const ownerPeerId = resolveGroupOwnerPeerId(groupId);
+    if (ownerPeerId && ownerPeerId !== ownPeerId) {
+      const directSignature = signDirectJoinRequest({
+        groupId,
+        senderPeerId: ownPeerId,
+        requesterPublicKey,
+        targetPeerId: ownerPeerId,
+        inviteGrant,
+      });
+      const directWireMessage: WireMessage = {
+        type: "join_request_direct",
+        payload: {
+          groupId,
+          senderPeerId: ownPeerId,
+          requesterPublicKey,
+          targetPeerId: ownerPeerId,
+          signature: new Uint8Array(directSignature),
+          inviteGrant,
+        },
+      };
+      try {
+        await pubsub.publish(DIRECT_JOIN_REQUEST_TOPIC, encodeWireMessage(directWireMessage));
+      } catch {
+        emit("info", `Failed direct join request publish for ${groupId.slice(0, 8)}...`);
+      }
+      void sendWireMessageDirect(
+        ownerPeerId,
+        DIRECT_JOIN_REQUEST_PROTOCOL,
+        directWireMessage,
+      ).catch(() => {});
+    }
+
     emit("info", `Sent join request to group ${groupId.slice(0, 8)}...`);
   };
 
@@ -2109,6 +2284,96 @@ export const createMultiGroupChat = async (
     return trimmedPeerId;
   };
 
+  const processIncomingJoinRequest = (
+    payload: {
+      readonly groupId: string;
+      readonly senderPeerId: string;
+      readonly requesterPublicKey: Uint8Array;
+      readonly inviteGrant?: InviteGrantProof;
+    },
+    contextLabel: string,
+  ) => {
+    if (!actionChainStates.has(payload.groupId)) return;
+
+    const senderPeerId = resolveSignedSenderPeerId(
+      payload.senderPeerId,
+      payload.requesterPublicKey,
+      contextLabel,
+    );
+    if (!senderPeerId) return;
+
+    if (isRateLimited(
+      incomingJoinRequestRate,
+      `${payload.groupId}:${senderPeerId}`,
+      INCOMING_JOIN_REQUEST_MAX,
+      INCOMING_JOIN_REQUEST_WINDOW_MS,
+    )) {
+      emit(
+        "info",
+        `Rate-limited join request from ${senderPeerId.slice(0, 12)}...`,
+      );
+      return;
+    }
+
+    const requesterHex = toHex(payload.requesterPublicKey);
+    const requesterAlreadyMember = actionChainStates.get(payload.groupId)?.members.has(requesterHex) ?? false;
+    let inviteTokenId: string | undefined;
+    let inviteValidationError: string | undefined;
+    let autoApproved = false;
+
+    if (payload.inviteGrant) {
+      const approvedCount = payload.inviteGrant.claims.kind === "open" &&
+          payload.inviteGrant.claims.maxJoiners !== undefined
+        ? getInviteGrantApprovalCount(payload.groupId, payload.inviteGrant.claims.tokenId)
+        : undefined;
+      const grantValidation = validateInviteGrantForJoin(payload.inviteGrant, {
+        groupId: payload.groupId,
+        requesterPeerId: senderPeerId,
+        approvedCount,
+        now: Date.now(),
+      });
+      if (grantValidation.success) {
+        inviteTokenId = grantValidation.data.tokenId;
+        const pendingForGroup = pendingJoinInviteGrantsByGroup.get(payload.groupId) ?? new Map();
+        pendingForGroup.set(requesterHex, payload.inviteGrant);
+        pendingJoinInviteGrantsByGroup.set(payload.groupId, pendingForGroup);
+      } else {
+        inviteValidationError = grantValidation.error.message;
+      }
+    }
+
+    const currentJoinPolicy = actionChainStates.get(payload.groupId)?.joinPolicy ?? "manual";
+    if (
+      isOwnAdminOfGroup(payload.groupId) &&
+      currentJoinPolicy === "auto_with_invite" &&
+      inviteTokenId !== undefined &&
+      !actionChainStates.get(payload.groupId)?.members.has(requesterHex)
+    ) {
+      autoApproved = true;
+      performApproveJoin(payload.groupId, payload.requesterPublicKey, { inviteTokenId }).catch(() => {
+        autoApproved = false;
+      });
+    }
+
+    if (isOwnAdminOfGroup(payload.groupId) && requesterAlreadyMember) {
+      publishSyncResponse(payload.groupId, senderPeerId).catch(() => {});
+      emit("sync", `Triggered targeted sync for already-approved member ${requesterHex.slice(0, 12)}...`);
+    }
+
+    emit("pubsub-message", `Join request for group ${payload.groupId.slice(0, 8)}...`);
+    joinRequestListeners.forEach((listener) =>
+      listener({
+        groupId: payload.groupId,
+        requesterPublicKey: payload.requesterPublicKey,
+        senderPeerId,
+        inviteTokenId,
+        inviteValidationError,
+        autoApproved,
+        alreadyMember: requesterAlreadyMember,
+      }),
+    );
+  };
+
   const handlePubsubMessage = (event: CustomEvent) => {
     const detail = event.detail as { topic: string; data: Uint8Array; from?: { toString(): string } };
     const transportSenderPeerId = detail.from?.toString() ?? "unknown";
@@ -2119,9 +2384,20 @@ export const createMultiGroupChat = async (
     const wireMessage = result.data;
     if (wireMessage.type === "dm_request") {
       const payload = wireMessage.payload;
-      if (detail.topic !== DIRECT_MESSAGE_REQUEST_TOPIC) return;
+      const matchedGroupId = topicToGroupId.get(detail.topic);
+      if (
+        detail.topic !== DIRECT_MESSAGE_REQUEST_TOPIC &&
+        detail.topic !== DIRECT_JOIN_REQUEST_TOPIC &&
+        matchedGroupId === undefined
+      ) return;
       if (payload.targetPeerId !== ownPeerId) return;
-      if (!verifyDirectMessageRequest(payload)) return;
+      if (!verifyDirectMessageRequest(payload)) {
+        emit(
+          "info",
+          `Rejected DM request with invalid signature from ${transportSenderPeerId.slice(0, 12)}...`,
+        );
+        return;
+      }
 
       const senderPeerId = resolveSignedSenderPeerId(
         payload.senderPeerId,
@@ -2179,6 +2455,26 @@ export const createMultiGroupChat = async (
       return;
     }
 
+    if (wireMessage.type === "join_request_direct") {
+      const payload = wireMessage.payload;
+      if (detail.topic !== DIRECT_JOIN_REQUEST_TOPIC) return;
+      if (payload.targetPeerId !== ownPeerId) return;
+      if (!verifyDirectJoinRequest(payload)) {
+        emit(
+          "info",
+          `Rejected direct join request with invalid signature from ${transportSenderPeerId.slice(0, 12)}...`,
+        );
+        return;
+      }
+      processIncomingJoinRequest({
+        groupId: payload.groupId,
+        senderPeerId: payload.senderPeerId,
+        requesterPublicKey: payload.requesterPublicKey,
+        inviteGrant: payload.inviteGrant,
+      }, "direct join request");
+      return;
+    }
+
     const matchedGroupId = topicToGroupId.get(detail.topic);
     if (matchedGroupId === undefined) return;
 
@@ -2217,6 +2513,13 @@ export const createMultiGroupChat = async (
       if (isMembershipEnforcedGroup(matchedGroupId)) {
         if (!isOwnMemberOfGroup(matchedGroupId)) return;
         if (!actionChainStates.get(matchedGroupId)?.members.has(senderPublicKeyHex)) {
+          if (isOwnAdminOfGroup(matchedGroupId)) {
+            processIncomingJoinRequest({
+              groupId: matchedGroupId,
+              senderPeerId,
+              requesterPublicKey: payload.senderPublicKey,
+            }, "sync request fallback");
+          }
           emit(
             "sync",
             `Rejected sync request from unknown member key ${senderPublicKeyHex.slice(0, 12)}... for group ${matchedGroupId.slice(0, 8)}...`,
@@ -2282,6 +2585,13 @@ export const createMultiGroupChat = async (
 
       const senderPublicKeyHex = toHex(payload.senderPublicKey);
       if (isMembershipEnforcedGroup(matchedGroupId) && !actionChainStates.get(matchedGroupId)?.members.has(senderPublicKeyHex)) {
+        if (isOwnAdminOfGroup(matchedGroupId)) {
+          processIncomingJoinRequest({
+            groupId: matchedGroupId,
+            senderPeerId,
+            requesterPublicKey: payload.senderPublicKey,
+          }, "sync response fallback");
+        }
         connectionMetrics.syncResponsesRejected += 1;
         emitConnectionMetrics();
         emit(
@@ -2375,85 +2685,12 @@ export const createMultiGroupChat = async (
         );
         return;
       }
-
-      const senderPeerId = resolveSignedSenderPeerId(
-        wireMessage.senderPeerId,
-        wireMessage.requesterPublicKey,
-        "join request",
-      );
-      if (!senderPeerId) return;
-
-      if (isRateLimited(
-        incomingJoinRequestRate,
-        `${matchedGroupId}:${senderPeerId}`,
-        INCOMING_JOIN_REQUEST_MAX,
-        INCOMING_JOIN_REQUEST_WINDOW_MS,
-      )) {
-        emit(
-          "info",
-          `Rate-limited join request from ${senderPeerId.slice(0, 12)}...`,
-        );
-        return;
-      }
-
-      const requesterHex = toHex(wireMessage.requesterPublicKey);
-
-      const requesterAlreadyMember = actionChainStates.get(matchedGroupId)?.members.has(requesterHex) ?? false;
-      let inviteTokenId: string | undefined;
-      let inviteValidationError: string | undefined;
-      let autoApproved = false;
-
-      if (wireMessage.inviteGrant) {
-        const approvedCount = wireMessage.inviteGrant.claims.kind === "open" &&
-            wireMessage.inviteGrant.claims.maxJoiners !== undefined
-          ? getInviteGrantApprovalCount(matchedGroupId, wireMessage.inviteGrant.claims.tokenId)
-          : undefined;
-        const grantValidation = validateInviteGrantForJoin(wireMessage.inviteGrant, {
-          groupId: matchedGroupId,
-          requesterPeerId: senderPeerId,
-          approvedCount,
-          now: Date.now(),
-        });
-        if (grantValidation.success) {
-          inviteTokenId = grantValidation.data.tokenId;
-          const pendingForGroup = pendingJoinInviteGrantsByGroup.get(matchedGroupId) ?? new Map();
-          pendingForGroup.set(requesterHex, wireMessage.inviteGrant);
-          pendingJoinInviteGrantsByGroup.set(matchedGroupId, pendingForGroup);
-        } else {
-          inviteValidationError = grantValidation.error.message;
-        }
-      }
-
-      const currentJoinPolicy = actionChainStates.get(matchedGroupId)?.joinPolicy ?? "manual";
-      if (
-        isOwnAdminOfGroup(matchedGroupId) &&
-        currentJoinPolicy === "auto_with_invite" &&
-        inviteTokenId !== undefined &&
-        !actionChainStates.get(matchedGroupId)?.members.has(requesterHex)
-      ) {
-        autoApproved = true;
-        performApproveJoin(matchedGroupId, wireMessage.requesterPublicKey, { inviteTokenId }).catch(() => {
-          autoApproved = false;
-        });
-      }
-
-      if (isOwnAdminOfGroup(matchedGroupId) && requesterAlreadyMember) {
-        publishSyncResponse(matchedGroupId, senderPeerId).catch(() => {});
-        emit("sync", `Triggered targeted sync for already-approved member ${requesterHex.slice(0, 12)}...`);
-      }
-
-      emit("pubsub-message", `Join request for group ${matchedGroupId.slice(0, 8)}...`);
-      joinRequestListeners.forEach((listener) =>
-        listener({
-          groupId: matchedGroupId,
-          requesterPublicKey: wireMessage.requesterPublicKey,
-          senderPeerId,
-          inviteTokenId,
-          inviteValidationError,
-          autoApproved,
-          alreadyMember: requesterAlreadyMember,
-        }),
-      );
+      processIncomingJoinRequest({
+        groupId: matchedGroupId,
+        senderPeerId: wireMessage.senderPeerId,
+        requesterPublicKey: wireMessage.requesterPublicKey,
+        inviteGrant: wireMessage.inviteGrant,
+      }, "join request");
       return;
     }
 
@@ -2480,9 +2717,66 @@ export const createMultiGroupChat = async (
     messageListeners.forEach((listener) => listener(chatMessage));
   };
 
+  const readDirectSignalPayload = async (stream: { source: AsyncIterable<unknown> }): Promise<Uint8Array> => {
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for await (const chunk of stream.source) {
+      const bytes = chunk instanceof Uint8Array
+        ? chunk
+        : typeof chunk === "object" && chunk !== null && "subarray" in chunk
+          ? (chunk as { subarray(start?: number, end?: number): Uint8Array }).subarray()
+          : new Uint8Array(0);
+      if (bytes.length === 0) continue;
+      chunks.push(bytes);
+      total += bytes.length;
+    }
+    if (chunks.length === 0) return new Uint8Array(0);
+    const merged = new Uint8Array(total);
+    let offset = 0;
+    for (const bytes of chunks) {
+      merged.set(bytes, offset);
+      offset += bytes.length;
+    }
+    return merged;
+  };
+
+  const dispatchDirectSignal = (topic: string, data: Uint8Array, remotePeerId: string) => {
+    handlePubsubMessage({
+      detail: {
+        topic,
+        data,
+        from: { toString: () => remotePeerId },
+      },
+    } as CustomEvent);
+  };
+
   pubsub.addEventListener("message", handlePubsubMessage);
   pubsub.subscribe(DIRECT_MESSAGE_REQUEST_TOPIC);
+  pubsub.subscribe(DIRECT_JOIN_REQUEST_TOPIC);
   pubsub.subscribe(PROFILE_SYNC_TOPIC);
+
+  node.handle(DIRECT_DM_REQUEST_PROTOCOL, ({ stream, connection }) => {
+    void readDirectSignalPayload(stream as { source: AsyncIterable<unknown> }).then((data) => {
+      if (data.length === 0) return;
+      dispatchDirectSignal(
+        DIRECT_MESSAGE_REQUEST_TOPIC,
+        data,
+        connection.remotePeer.toString(),
+      );
+    }).catch(() => {});
+  });
+
+  node.handle(DIRECT_JOIN_REQUEST_PROTOCOL, ({ stream, connection }) => {
+    void readDirectSignalPayload(stream as { source: AsyncIterable<unknown> }).then((data) => {
+      if (data.length === 0) return;
+      dispatchDirectSignal(
+        DIRECT_JOIN_REQUEST_TOPIC,
+        data,
+        connection.remotePeer.toString(),
+      );
+    }).catch(() => {});
+  });
+
   void publishProfileAnnounce().catch(() => {});
 
   if (isBrowser) {
@@ -2699,6 +2993,12 @@ export const createMultiGroupChat = async (
 
     processSignedAction(groupId, envelope);
     await publishEnvelope(groupId, envelope);
+    const approvedPeerId = publicKeyToPeerId.get(memberPublicKeyHex);
+    if (approvedPeerId) {
+      // Push fresh state directly to the newly approved peer so they do not
+      // depend on waiting for another join-retry round-trip.
+      void publishSyncResponse(groupId, approvedPeerId).catch(() => {});
+    }
     pendingJoinInviteGrantsByGroup.get(groupId)?.delete(memberPublicKeyHex);
 
     emit("info", `Approved member ${toHex(memberPublicKey).slice(0, 16)}... in group ${groupId.slice(0, 8)}...`);
@@ -3017,7 +3317,23 @@ export const createMultiGroupChat = async (
           signature: new Uint8Array(Array.from(signature)),
         },
       };
-      await pubsub.publish(DIRECT_MESSAGE_REQUEST_TOPIC, encodeWireMessage(wireMessage));
+      const encoded = encodeWireMessage(wireMessage);
+      const topics = new Set<string>([
+        DIRECT_MESSAGE_REQUEST_TOPIC,
+        DIRECT_JOIN_REQUEST_TOPIC,
+        ...collectSharedGroupTopicsForPeer(targetPeerId),
+      ]);
+      const results = await Promise.allSettled(
+        [...topics].map((topic) => pubsub.publish(topic, new Uint8Array(encoded))),
+      );
+      if (results.every((result) => result.status === "rejected")) {
+        throw new Error("Failed to publish DM request on signaling topics");
+      }
+      void sendWireMessageDirect(
+        targetPeerId,
+        DIRECT_DM_REQUEST_PROTOCOL,
+        wireMessage,
+      ).catch(() => {});
       emit("info", `Sent DM request to ${targetPeerId.slice(0, 12)}...`);
     },
     renameGroup: async (groupId: string, newName: string): Promise<void> => {
@@ -3258,6 +3574,9 @@ export const createMultiGroupChat = async (
       }
       try {
         pubsub.unsubscribe(DIRECT_MESSAGE_REQUEST_TOPIC);
+      } catch {}
+      try {
+        pubsub.unsubscribe(DIRECT_JOIN_REQUEST_TOPIC);
       } catch {}
       try {
         pubsub.unsubscribe(PROFILE_SYNC_TOPIC);

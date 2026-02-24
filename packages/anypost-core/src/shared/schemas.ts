@@ -139,6 +139,15 @@ const InviteGrantProofSchema = z.object({
   signature: Uint8ArraySchema,
 });
 
+const DirectJoinRequestPayloadSchema = z.object({
+  groupId: GroupIdSchema,
+  senderPeerId: PeerIdSchema,
+  requesterPublicKey: Uint8ArraySchema,
+  targetPeerId: PeerIdSchema,
+  signature: Uint8ArraySchema,
+  inviteGrant: InviteGrantProofSchema.optional(),
+});
+
 export type InviteGrantClaimsWire = z.infer<typeof InviteGrantClaimsSchema>;
 export type InviteGrantProofWire = z.infer<typeof InviteGrantProofSchema>;
 
@@ -162,6 +171,10 @@ export const WireMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("dm_request"),
     payload: DirectMessageRequestPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("join_request_direct"),
+    payload: DirectJoinRequestPayloadSchema,
   }),
   z.object({
     type: z.literal("profile_request"),

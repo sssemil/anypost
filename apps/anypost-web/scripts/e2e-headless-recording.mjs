@@ -198,6 +198,33 @@ const connectPeer = async (page, targetPeerId, label) => {
   log(`${label}: Find & Connect -> ${targetPeerId.slice(0, 12)}...`);
 };
 
+const ensurePeerConnection = async (page, targetPeerId, label, timeoutMs = 60_000) => {
+  await openDevTools(page);
+  const peerPanel = page.locator("div.rounded-xl:has(strong:has-text(\"Peer Sharing\"))").first();
+  await peerPanel.waitFor({ state: "visible", timeout: 10_000 });
+
+  const connectInput = peerPanel.getByPlaceholder("12D3KooW...").first();
+  const checkInput = peerPanel.getByPlaceholder("12D3KooW...").nth(1);
+  const checkButton = peerPanel.getByRole("button", { name: "Check" }).first();
+  const findAndConnectButton = peerPanel.getByRole("button", { name: "Find & Connect" }).first();
+  const connectedText = peerPanel.getByText("Connected to", { exact: false }).first();
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await checkInput.fill(targetPeerId);
+    await checkButton.click();
+    if (await isVisible(connectedText, 1200)) {
+      log(`${label}: confirmed connected -> ${targetPeerId.slice(0, 12)}...`);
+      return;
+    }
+
+    await connectInput.fill(targetPeerId);
+    await findAndConnectButton.click();
+    await sleep(2_000);
+  }
+  throw new Error(`${label}: timed out waiting for connection to ${targetPeerId}`);
+};
+
 const startDm = async (page, targetPeerId) => {
   const input = page.getByPlaceholder("Peer ID...").first();
   await input.fill(targetPeerId);
@@ -235,6 +262,82 @@ const joinViaInvite = async (page, inviteCode) => {
   await joinInput.press("Enter");
 };
 
+const openGroupInfo = async (page) => {
+  const groupInfoTitle = page.getByText("Group Info", { exact: true });
+  if (await isVisible(groupInfoTitle, 1000)) return;
+  const headerGroupButton = page.locator("div.bg-tg-header button.flex.flex-col").first();
+  await headerGroupButton.click();
+  await groupInfoTitle.waitFor({ state: "visible", timeout: 10_000 });
+};
+
+const triggerJoinRetryNowIfVisible = async (page, label) => {
+  await openGroupInfo(page);
+  const retryNowBtn = page.getByRole("button", { name: "Retry now" }).first();
+  if (await isVisible(retryNowBtn, 400)) {
+    await retryNowBtn.click();
+    log(`${label}: triggered join retry now`);
+    return true;
+  }
+  return false;
+};
+
+const approveFirstPendingJoin = async (adminPage, joinerPage, adminLabel, joinerLabel) => {
+  const deadline = Date.now() + 90_000;
+  while (Date.now() < deadline) {
+    await openGroupInfo(adminPage);
+    const approveButton = adminPage.getByRole("button", { name: "Approve" }).first();
+    if (await isVisible(approveButton, 1_200)) {
+      await approveButton.click();
+      log(`${adminLabel}: approved pending join request`);
+      return true;
+    }
+    await triggerJoinRetryNowIfVisible(joinerPage, joinerLabel);
+    await sleep(2_500);
+  }
+  log(`${adminLabel}: pending join approval did not appear within timeout`);
+  return false;
+};
+
+const waitForMembersCount = async (page, expectedCount, label) => {
+  await openGroupInfo(page);
+  try {
+    await page
+      .getByText(new RegExp(`MEMBERS \\(${expectedCount}\\)`, "i"))
+      .waitFor({ state: "visible", timeout: 45_000 });
+    log(`${label}: members count reached ${expectedCount}`);
+    return true;
+  } catch {
+    log(`${label}: members count did not reach ${expectedCount} within timeout`);
+    return false;
+  }
+};
+
+const acceptFirstDmRequest = async (page, label) => {
+  const acceptBtn = page.getByRole("button", { name: "Accept" }).first();
+  try {
+    await acceptBtn.waitFor({ state: "visible", timeout: 45_000 });
+    await acceptBtn.click();
+    log(`${label}: accepted DM request`);
+    return true;
+  } catch {
+    log(`${label}: DM accept button did not appear within timeout`);
+    return false;
+  }
+};
+
+const declineFirstDmRequest = async (page, label) => {
+  const declineBtn = page.getByRole("button", { name: "Decline" }).first();
+  try {
+    await declineBtn.waitFor({ state: "visible", timeout: 45_000 });
+    await declineBtn.click();
+    log(`${label}: declined DM request`);
+    return true;
+  } catch {
+    log(`${label}: DM decline button did not appear within timeout`);
+    return false;
+  }
+};
+
 const downloadRecorderFile = async (page, label, outDir, timeoutMs) => {
   await openDevTools(page);
   const downloadBtn = page.getByRole("button", { name: "Download Recording" });
@@ -265,7 +368,7 @@ const countEntriesByType = (entries, type) =>
 
 const existsEntry = (entries, predicate) => entries.some((entry) => predicate(entry));
 
-const validateRecordings = async (alicePath, bobPath, alicePeerId, bobPeerId) => {
+const validateRecordings = async (alicePath, bobPath, alicePeerId, bobPeerId, charliePeerId) => {
   const [aliceEntries, bobEntries] = await Promise.all([
     loadRecordingEntries(alicePath),
     loadRecordingEntries(bobPath),
@@ -301,6 +404,46 @@ const validateRecordings = async (alicePath, bobPath, alicePeerId, bobPeerId) =>
   );
   if (!bobHasPeerProfileRequest) {
     throw new Error("Validation failed: Bob did not trigger profile sync for Alice");
+  }
+
+  const aliceHasJoinRequest = existsEntry(
+    aliceEntries,
+    (entry) => entry?.type === "join-request",
+  );
+  if (!aliceHasJoinRequest) {
+    throw new Error("Validation failed: Alice never saw an inbound join request");
+  }
+
+  const aliceApprovedMember = existsEntry(
+    aliceEntries,
+    (entry) => entry?.type === "member-approved",
+  );
+  if (!aliceApprovedMember) {
+    throw new Error("Validation failed: Alice never approved a pending join");
+  }
+
+  const bobJoinedViaInvite = existsEntry(
+    bobEntries,
+    (entry) => entry?.type === "join-via-invite-succeeded",
+  );
+  if (!bobJoinedViaInvite) {
+    throw new Error("Validation failed: Bob never joined via invite");
+  }
+
+  const aliceAcceptedBobDm = existsEntry(
+    aliceEntries,
+    (entry) => entry?.type === "dm-request-accepted" && entry?.payload?.senderPeerId === bobPeerId,
+  );
+  if (!aliceAcceptedBobDm) {
+    throw new Error("Validation failed: Alice did not accept Bob DM request");
+  }
+
+  const aliceDeclinedCharlieDm = existsEntry(
+    aliceEntries,
+    (entry) => entry?.type === "dm-request-declined" && entry?.payload?.senderPeerId === charliePeerId,
+  );
+  if (!aliceDeclinedCharlieDm) {
+    throw new Error("Validation failed: Alice did not decline Charlie DM request");
   }
 };
 
@@ -341,22 +484,30 @@ const main = async () => {
       acceptDownloads: true,
       viewport: { width: 1440, height: 900 },
     });
+    const charlieContext = await browser.newContext({
+      acceptDownloads: false,
+      viewport: { width: 1440, height: 900 },
+    });
     await aliceContext.grantPermissions(["clipboard-read", "clipboard-write"], { origin: options.baseUrl });
     await bobContext.grantPermissions(["clipboard-read", "clipboard-write"], { origin: options.baseUrl });
+    await charlieContext.grantPermissions(["clipboard-read", "clipboard-write"], { origin: options.baseUrl });
 
     const alice = await aliceContext.newPage();
     const bob = await bobContext.newPage();
+    const charlie = await charlieContext.newPage();
 
-    log("Opening Alice/Bob pages...");
+    log("Opening Alice/Bob/Charlie pages...");
     await Promise.all([
       alice.goto(options.baseUrl, { waitUntil: "domcontentloaded" }),
       bob.goto(options.baseUrl, { waitUntil: "domcontentloaded" }),
+      charlie.goto(options.baseUrl, { waitUntil: "domcontentloaded" }),
     ]);
 
     log("Bootstrapping accounts...");
     await Promise.all([
       ensureAccountReady(alice, "Alice"),
       ensureAccountReady(bob, "Bob"),
+      ensureAccountReady(charlie, "Charlie"),
     ]);
 
     log("Opening Dev Tools and starting diagnostics recording on both peers...");
@@ -365,26 +516,50 @@ const main = async () => {
       startRecorder(bob, "Bob"),
     ]);
 
-    const [alicePeerId, bobPeerId] = await Promise.all([
+    const [alicePeerId, bobPeerId, charliePeerId] = await Promise.all([
       getOwnPeerId(alice, "Alice"),
       getOwnPeerId(bob, "Bob"),
+      getOwnPeerId(charlie, "Charlie"),
     ]);
     log(`Alice peer ID: ${alicePeerId}`);
     log(`Bob peer ID:   ${bobPeerId}`);
+    log(`Charlie peer ID: ${charliePeerId}`);
 
     await Promise.all([
       connectPeer(alice, bobPeerId, "Alice"),
       connectPeer(bob, alicePeerId, "Bob"),
+      connectPeer(alice, charliePeerId, "Alice"),
+      connectPeer(charlie, alicePeerId, "Charlie"),
+    ]);
+    await Promise.all([
+      ensurePeerConnection(alice, bobPeerId, "Alice"),
+      ensurePeerConnection(bob, alicePeerId, "Bob"),
+      ensurePeerConnection(alice, charliePeerId, "Alice"),
+      ensurePeerConnection(charlie, alicePeerId, "Charlie"),
     ]);
 
-    log("Running scenario: Bob starts DM with Alice...");
-    await startDm(bob, alicePeerId);
-    await sleep(2_000);
+    let scenarioError = null;
+    try {
+      const groupName = `E2E ${Date.now().toString().slice(-6)}`;
+      log(`Running scenario: Alice creates group "${groupName}", Bob requests join, Alice approves...`);
+      const inviteCode = await createGroupAndCopyInvite(alice, groupName);
+      await joinViaInvite(bob, inviteCode);
+      const approved = await approveFirstPendingJoin(alice, bob, "Alice", "Bob");
+      if (approved) {
+        await waitForMembersCount(bob, 2, "Bob");
+      }
 
-    const groupName = `E2E ${Date.now().toString().slice(-6)}`;
-    log(`Running scenario: Alice creates group "${groupName}" and Bob joins via invite...`);
-    const inviteCode = await createGroupAndCopyInvite(alice, groupName);
-    await joinViaInvite(bob, inviteCode);
+      log("Running scenario: Bob starts DM with Alice, Alice accepts...");
+      await startDm(bob, alicePeerId);
+      await acceptFirstDmRequest(alice, "Alice");
+
+      log("Running scenario: Charlie starts DM with Alice, Alice declines...");
+      await startDm(charlie, alicePeerId);
+      await declineFirstDmRequest(alice, "Alice");
+    } catch (error) {
+      scenarioError = error instanceof Error ? error : new Error(String(error));
+      log(`Scenario execution error: ${scenarioError.message}`);
+    }
 
     log(`Settling for ${Math.round(options.settleMs / 1000)}s...`);
     await sleep(options.settleMs);
@@ -400,11 +575,16 @@ const main = async () => {
     log(`Bob log:   ${bobFile}`);
 
     log("Validating recordings...");
-    await validateRecordings(aliceFile, bobFile, alicePeerId, bobPeerId);
+    await validateRecordings(aliceFile, bobFile, alicePeerId, bobPeerId, charliePeerId);
     log("Validation passed.");
+
+    if (scenarioError) {
+      throw scenarioError;
+    }
 
     await aliceContext.close();
     await bobContext.close();
+    await charlieContext.close();
   } finally {
     await browser.close();
     closeServer();
