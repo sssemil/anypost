@@ -631,12 +631,12 @@ export const App = () => {
         : null,
       groupDiscovery: discovery
         ? {
-            searchRounds: discovery.searchRounds,
+            searchRounds: [...discovery.groups.values()].reduce((sum, entry) => sum + entry.searchCount, 0),
             groups: [...discovery.groups.values()].map((entry) => ({
               groupId: entry.groupId,
-              providerCount: entry.providers.length,
+              providerCount: entry.peers.length,
               peerCount: entry.peers.length,
-              peers: entry.peers.map((peer) => ({
+              peers: (entry.peers ?? []).map((peer) => ({
                 peerId: peer.peerId,
                 addrs: peer.addrs,
                 connected: connectedPeerIds.has(peer.peerId),
@@ -1726,6 +1726,11 @@ export const App = () => {
   const buildOutgoingDmRequestKey = (groupId: string, targetPeerId: string): string =>
     `${groupId}:${targetPeerId}`;
 
+  const normalizeDirectMessageGroupName = (name: string | null | undefined): string => {
+    const trimmed = name?.trim() ?? "";
+    return trimmed.length > 0 ? trimmed : "Direct Message";
+  };
+
   const upsertOutgoingDirectMessageRequest = (
     request: {
       readonly targetPeerId: string;
@@ -1746,7 +1751,7 @@ export const App = () => {
       const nextEntry: OutgoingDirectMessageRequest = existing
         ? {
             ...existing,
-            groupName: request.groupName,
+            groupName: normalizeDirectMessageGroupName(request.groupName),
             inviteCode: request.inviteCode,
             nextAttemptAt: immediateRetry ? now : existing.nextAttemptAt,
           }
@@ -1754,7 +1759,7 @@ export const App = () => {
             requestKey,
             targetPeerId: request.targetPeerId,
             groupId: request.groupId,
-            groupName: request.groupName,
+            groupName: normalizeDirectMessageGroupName(request.groupName),
             inviteCode: request.inviteCode,
             createdAt: now,
             lastAttemptAt: null,
@@ -1831,17 +1836,19 @@ export const App = () => {
           attemptCount: entry.attemptCount + 1,
         });
         try {
+          const normalizedGroupName = normalizeDirectMessageGroupName(entry.groupName);
           void currentChat.connectToPeerId(entry.targetPeerId).catch(() => {});
           await currentChat.sendDirectMessageRequest({
             targetPeerId: entry.targetPeerId,
             groupId: entry.groupId,
-            groupName: entry.groupName,
+            groupName: normalizedGroupName,
             inviteCode: entry.inviteCode,
           });
           appendDiagnosticsEntry("dm-request-published", {
             requestKey: entry.requestKey,
             groupId: entry.groupId,
             targetPeerId: entry.targetPeerId,
+            groupName: normalizedGroupName,
           });
         } catch (error) {
           appendDiagnosticsEntry("dm-request-publish-failed", {
@@ -1988,7 +1995,7 @@ export const App = () => {
         upsertOutgoingDirectMessageRequest({
           targetPeerId: trimmedTarget,
           groupId: dmGroupId,
-          groupName: currentChat.getActionChainState(dmGroupId)?.groupName ?? "Direct Message",
+          groupName: normalizeDirectMessageGroupName(currentChat.getActionChainState(dmGroupId)?.groupName),
           inviteCode: invite.code,
         });
         appendDiagnosticsEntry("dm-request-queued", {
