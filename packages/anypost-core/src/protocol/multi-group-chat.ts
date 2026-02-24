@@ -2640,9 +2640,9 @@ export const createMultiGroupChat = async (
     getActionChainState: (groupId: string): ActionChainGroupState | null =>
       actionChainStates.get(groupId) ?? null,
     getActionChainEnvelopes: (groupId: string): readonly SignedActionEnvelope[] =>
-      actionEnvelopes.get(groupId) ?? [],
+      getOrderedEnvelopes(groupId),
     getAllActionChainEnvelopes: (): ReadonlyMap<string, readonly SignedActionEnvelope[]> =>
-      new Map(actionEnvelopes),
+      new Map([...actionEnvelopes.keys()].map((groupId) => [groupId, getOrderedEnvelopes(groupId)])),
     loadActionChain: (groupId: string, envelopes: readonly SignedActionEnvelope[]) => {
       for (const envelope of envelopes) {
         processSignedAction(groupId, envelope);

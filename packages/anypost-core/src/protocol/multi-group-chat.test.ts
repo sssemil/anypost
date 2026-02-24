@@ -635,6 +635,27 @@ describe("MultiGroupChat", () => {
     expect(state!.groupName).toBe("Persisted Group");
   });
 
+  it("should return deterministic envelope order regardless of load order", async () => {
+    const node1 = await createTestNode();
+    const { groupId } = await node1.chat.createGroup("Deterministic Order");
+    await node1.chat.sendMessage(groupId, "m1");
+    await node1.chat.sendMessage(groupId, "m2");
+    await node1.chat.sendMessage(groupId, "m3");
+
+    const canonical = node1.chat.getActionChainEnvelopes(groupId);
+    const canonicalHashes = canonical.map((envelope) => toHex(envelope.hash));
+    expect(canonicalHashes.length).toBeGreaterThanOrEqual(4);
+
+    const node2 = await createTestNode(node1.accountKey);
+    node2.chat.joinGroup(groupId);
+    node2.chat.loadActionChain(groupId, [...canonical].reverse());
+
+    const loadedHashes = node2.chat
+      .getActionChainEnvelopes(groupId)
+      .map((envelope) => toHex(envelope.hash));
+    expect(loadedHashes).toEqual(canonicalHashes);
+  });
+
   it("should complete full invite → join → approve flow between two nodes", async () => {
     const admin = await createTestNode();
     const joiner = await createTestNode();
