@@ -11,6 +11,7 @@ Usage: ./run <command>
 Commands:
   relay          Build and start the relay node
   web            Start the web app dev server
+  electron       Start the Electron desktop app in dev mode
   dev            Start both relay and web app (Ctrl+C stops both)
   e2e-record     Run headless Chromium Alice/Bob scenario + download diagnostics logs
   e2e-dm-refresh Run headless Chromium DM refresh continuity integration test
@@ -42,6 +43,10 @@ cmd_web() {
   pnpm --filter anypost-web exec vite &
 
   wait
+}
+
+cmd_electron() {
+  pnpm --filter anypost-electron run dev
 }
 
 cmd_dev() {
@@ -105,6 +110,7 @@ fi
 case "$1" in
   relay)     cmd_relay ;;
   web)       cmd_web ;;
+  electron)  cmd_electron ;;
   dev)       cmd_dev ;;
   e2e-record) cmd_e2e_record "$@" ;;
   e2e-dm-refresh) cmd_e2e_dm_refresh "$@" ;;

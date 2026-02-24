@@ -1,0 +1,25 @@
+{
+  "name": "anypost-electron",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "dev": "pnpm --filter anypost-relay build && pnpm --filter anypost-core build && pnpm run build:main && concurrently -k \"pnpm --filter anypost-core build --watch\" \"pnpm --filter anypost-web exec vite --host 127.0.0.1 --port 5173\" \"wait-on tcp:5173 && ANYPOST_WEB_DEV_URL=http://127.0.0.1:5173 electron ./dist/main/main.js\"",
+    "build:main": "tsc --project tsconfig.json",
+    "build": "pnpm --filter anypost-web build && pnpm --filter anypost-relay build && pnpm --filter anypost-core build && pnpm run build:main && node ./scripts/copy-web-dist.mjs",
+    "start": "electron ./dist/main/main.js",
+    "test": "node -e \"console.log('No electron tests yet')\"",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "anypost-core": "workspace:*",
+    "anypost-relay": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "concurrently": "^9.0.1",
+    "electron": "^32.2.0",
+    "wait-on": "^8.0.1"
+  }
+}

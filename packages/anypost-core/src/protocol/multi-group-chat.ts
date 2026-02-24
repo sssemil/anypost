@@ -31,7 +31,7 @@ import { createGroupDiscoveryManager } from "./group-discovery.js";
 import type { GroupDiscoveryManager } from "./group-discovery.js";
 import type { GroupDiscoveryState } from "./group-discovery-state.js";
 import type { WireMessage } from "../shared/schemas.js";
-import { IPFS_BOOTSTRAP_WSS_PEERS } from "../libp2p/bootstrap-peers.js";
+import { IPFS_BOOTSTRAP_TCP_PEERS, IPFS_BOOTSTRAP_WSS_PEERS } from "../libp2p/bootstrap-peers.js";
 import type { ChatMessageEvent, PeerInfo, NetworkStatus, NetworkEvent } from "./plaintext-chat.js";
 import type { AccountKey } from "../crypto/identity.js";
 import { GENESIS_HASH, toHex } from "./action-chain.js";
@@ -218,7 +218,7 @@ type CreateMultiGroupChatOptions = {
   readonly initialSyncProgressState?: SyncProgressState;
   readonly listenAddresses?: readonly string[];
   readonly bootstrapPeers?: readonly string[];
-  readonly useTransports?: "tcp" | "websocket";
+  readonly useTransports?: "tcp" | "websocket" | "desktop";
   readonly onRelayPoolStateChange?: (state: RelayPoolState) => void;
   readonly onGroupDiscoveryStateChange?: (state: GroupDiscoveryState) => void;
   readonly onRelayCandidateStateChange?: (state: RelayCandidateState) => void;
@@ -310,13 +310,17 @@ export const createMultiGroupChat = async (
 
   const relayPeers = [...initialBootstrapPeers];
 
-  const isBrowser = useTransports === "websocket";
+  const isWebRuntime = useTransports === "websocket";
+  const isDesktopRuntime = useTransports === "desktop";
+  const isRelayCapableRuntime = isWebRuntime || isDesktopRuntime;
 
-  const allBootstrapPeers = isBrowser
+  const allBootstrapPeers = isWebRuntime
     ? [...relayPeers, ...IPFS_BOOTSTRAP_WSS_PEERS]
-    : [...relayPeers];
+    : isDesktopRuntime
+      ? [...relayPeers, ...IPFS_BOOTSTRAP_WSS_PEERS, ...IPFS_BOOTSTRAP_TCP_PEERS]
+      : [...relayPeers, ...IPFS_BOOTSTRAP_TCP_PEERS];
 
-  const pubsubDiscovery = isBrowser
+  const pubsubDiscovery = isRelayCapableRuntime
     ? [
         pubsubPeerDiscovery({
           interval: 10_000,
@@ -331,7 +335,7 @@ export const createMultiGroupChat = async (
       ? [bootstrap({ list: allBootstrapPeers }), ...pubsubDiscovery]
       : [...pubsubDiscovery];
 
-  const node = isBrowser
+  const node = isWebRuntime
     ? await createLibp2p({
         privateKey,
         addresses: { listen: [...listenAddresses, "/p2p-circuit", "/webrtc"] },
@@ -362,6 +366,46 @@ export const createMultiGroupChat = async (
           dht: kadDHT({ clientMode: true }),
         },
       })
+    : isDesktopRuntime
+      ? await createLibp2p({
+          privateKey,
+          addresses: {
+            listen: [
+              ...listenAddresses,
+              "/ip4/0.0.0.0/tcp/0",
+              "/ip4/0.0.0.0/tcp/0/ws",
+              "/p2p-circuit",
+              "/webrtc",
+            ],
+          },
+          transports: [
+            tcp(),
+            webSockets({ filter: wsFilters.all }),
+            webRTC({
+              rtcConfiguration: {
+                iceServers: [
+                  { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+                ],
+              },
+            }),
+            circuitRelayTransport(),
+          ],
+          connectionEncrypters: [noise()],
+          streamMuxers: [yamux()],
+          connectionGater: { denyDialMultiaddr: async () => false },
+          peerDiscovery,
+          services: {
+            identify: identify(),
+            pubsub: gossipsub({
+              allowPublishToZeroTopicPeers: true,
+              runOnLimitedConnection: true,
+              floodPublish: true,
+            }),
+            dcutr: dcutr(),
+            ping: ping(),
+            dht: kadDHT({ clientMode: true }),
+          },
+        })
     : await createLibp2p({
         privateKey,
         addresses: { listen: [...listenAddresses] },
@@ -1759,7 +1803,7 @@ export const createMultiGroupChat = async (
     return base.slice(idx + peerPrefix.length);
   };
 
-  if (isBrowser) {
+  if (isRelayCapableRuntime) {
     node.addEventListener("peer:identify", (evt: CustomEvent) => {
       const detail = evt.detail as {
         peerId: { toString(): string };
@@ -2791,13 +2835,13 @@ export const createMultiGroupChat = async (
 
   void publishProfileAnnounce().catch(() => {});
 
-  if (isBrowser) {
+  if (isRelayCapableRuntime) {
     createProviderCid(ANYPOST_CHAT_NAMESPACE).then((chatCid) => {
       node.contentRouting.provide(chatCid).catch(() => {});
     }).catch(() => {});
   }
 
-  const relayPoolManager = isBrowser && onRelayPoolStateChange
+  const relayPoolManager = isRelayCapableRuntime && onRelayPoolStateChange
     ? startRelayPoolManager({
         node: {
           contentRouting: node.contentRouting,
@@ -2815,7 +2859,7 @@ export const createMultiGroupChat = async (
       })
     : null;
 
-  const groupDiscoveryManager: GroupDiscoveryManager | null = isBrowser
+  const groupDiscoveryManager: GroupDiscoveryManager | null = isRelayCapableRuntime
     ? createGroupDiscoveryManager({
         contentRouting: node.contentRouting,
         getConnectedPeerIds: () => node.getPeers().map((p) => p.toString()),
@@ -2875,12 +2919,12 @@ export const createMultiGroupChat = async (
     }
   };
 
-  const relayReservationInterval = isBrowser
+  const relayReservationInterval = isRelayCapableRuntime
     ? setInterval(() => {
         void runRelayReservationTick();
       }, RESERVATION_TICK_INTERVAL_MS)
     : null;
-  if (isBrowser) {
+  if (isRelayCapableRuntime) {
     void runRelayReservationTick();
   }
 
@@ -3068,7 +3112,7 @@ export const createMultiGroupChat = async (
     }
   };
 
-  const memberReconnectInterval = isBrowser
+  const memberReconnectInterval = isRelayCapableRuntime
     ? setInterval(reconnectDisconnectedMembers, MEMBER_RECONNECT_INTERVAL)
     : null;
 

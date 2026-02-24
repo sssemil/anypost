@@ -93,6 +93,11 @@ import {
 } from "./direct-messages.js";
 
 const ENV_RELAY_MULTIADDR = import.meta.env.VITE_RELAY_MULTIADDR as string | undefined;
+const ENV_TRANSPORT_PROFILE = import.meta.env.VITE_ANYPOST_TRANSPORTS as
+  | "websocket"
+  | "tcp"
+  | "desktop"
+  | undefined;
 const GROUPS_STORAGE_KEY = "anypost:groups";
 const ACTION_CHAINS_STORAGE_KEY = "anypost:action-chains";
 const PUBKEY_PEERID_STORAGE_KEY = "anypost:pubkey-peerid";
@@ -113,6 +118,32 @@ const DEVTOOLS_RECORD_SNAPSHOT_MS = 1_000;
 const DEVTOOLS_RECORD_MAX_ENTRIES = 25_000;
 const PROJECT_GITHUB_URL = "https://github.com/sssemil/anypost";
 const DEFAULT_DIRECT_MESSAGE_GROUP_NAME = "Direct Message";
+
+type DesktopRelayState = {
+  readonly running: boolean;
+  readonly peerId?: string;
+  readonly listenAddrs: readonly string[];
+  readonly lastError?: string;
+};
+
+type DesktopBridge = {
+  readonly getRelayState: () => Promise<DesktopRelayState>;
+  readonly onRelayState: (listener: (state: DesktopRelayState) => void) => () => void;
+  readonly onDeepLink: (listener: (url: string) => void) => () => void;
+  readonly getPendingDeepLinks: () => Promise<readonly string[]>;
+  readonly notifyMessage: (payload: {
+    readonly title: string;
+    readonly body: string;
+    readonly groupId: string;
+    readonly senderPeerId: string;
+  }) => void;
+};
+
+declare global {
+  interface Window {
+    anypostDesktop?: DesktopBridge;
+  }
+}
 
 const hexToBytes = (hex: string): Uint8Array<ArrayBuffer> => {
   const buf = new ArrayBuffer(hex.length / 2);
@@ -363,6 +394,7 @@ export const App = () => {
 
   const [groupState, setGroupState] = createSignal<MultiGroupState>(createMultiGroupState());
   const [chatStatus, setChatStatus] = createSignal<"connecting" | "connected" | "disconnected">("connecting");
+  const [desktopRelayState, setDesktopRelayState] = createSignal<DesktopRelayState | null>(null);
   const [displayName, setDisplayNameState] = createSignal("");
   const [relayPoolState, setRelayPoolState] = createSignal<RelayPoolState | null>(null);
   const [groupDiscoveryState, setGroupDiscoveryState] = createSignal<GroupDiscoveryState | null>(null);
@@ -387,6 +419,7 @@ export const App = () => {
   const [outgoingDirectMessageRequests, setOutgoingDirectMessageRequests] = createSignal<readonly OutgoingDirectMessageRequest[]>(
     loadOutgoingDirectMessageRequests(),
   );
+  const [pendingDesktopInviteCodes, setPendingDesktopInviteCodes] = createSignal<readonly string[]>([]);
   const [profileSyncDebugTick, setProfileSyncDebugTick] = createSignal(0);
   const [diagnosticsRecorder, setDiagnosticsRecorder] = createSignal<DiagnosticsRecorderState>({
     status: "idle",
@@ -415,6 +448,9 @@ export const App = () => {
   let diagnosticsConsoleRestore: (() => void) | undefined;
   let diagnosticsErrorRestore: (() => void) | undefined;
   let diagnosticsRejectionRestore: (() => void) | undefined;
+
+  const desktopBridge = (): DesktopBridge | null =>
+    typeof window !== "undefined" ? window.anypostDesktop ?? null : null;
 
   const dispatchMobileView = (event: Parameters<typeof transitionMobileView>[1]) => {
     setMobileView((s) => {
@@ -662,6 +698,14 @@ export const App = () => {
               rttMs: candidate.rttMs,
               hasReservation: candidate.hasReservation,
             })),
+          }
+        : null,
+      desktopRelay: desktopRelayState()
+        ? {
+            running: desktopRelayState()!.running,
+            peerId: desktopRelayState()!.peerId ?? null,
+            listenAddrs: [...desktopRelayState()!.listenAddrs],
+            lastError: desktopRelayState()!.lastError ?? null,
           }
         : null,
       groupDiscovery: discovery
@@ -1317,7 +1361,17 @@ export const App = () => {
 
   const startChat = async (accountKey: AccountKey) => {
     try {
+      const desktop = desktopBridge();
       const bootstrapPeers = ENV_RELAY_MULTIADDR ? [ENV_RELAY_MULTIADDR] : [];
+      if (desktop) {
+        const relayState = await desktop.getRelayState().catch(() => null);
+        if (relayState?.running) {
+          setDesktopRelayState(relayState);
+          for (const addr of relayState.listenAddrs) {
+            if (!bootstrapPeers.includes(addr)) bootstrapPeers.push(addr);
+          }
+        }
+      }
       const initialRelayHints = loadRelayHints();
       type PeerPathCacheStoreCompat = {
         readonly getPeerPathCache?: () => Promise<ReadonlyMap<string, readonly string[]>>;
@@ -1417,6 +1471,7 @@ export const App = () => {
         initialSyncProgressState,
         initialRelayHints,
         bootstrapPeers,
+        useTransports: ENV_TRANSPORT_PROFILE ?? (desktop ? "desktop" : "websocket"),
         discoveryProfile: "aggressive",
         onRelayPoolStateChange: setRelayPoolState,
         onGroupDiscoveryStateChange: setGroupDiscoveryState,
@@ -1552,6 +1607,20 @@ export const App = () => {
           groupId: msg.groupId,
           message: msg,
         });
+
+        const bridge = desktopBridge();
+        if (bridge && msg.senderPeerId !== liveChat?.peerId) {
+          const focused = typeof document !== "undefined" && !document.hidden && document.hasFocus();
+          if (!focused && msg.groupId !== groupState().activeGroupId) {
+            const groupName = groupState().groups.get(msg.groupId)?.groupName ?? "Anypost";
+            bridge.notifyMessage({
+              title: msg.senderDisplayName || "New message",
+              body: `${groupName}: ${msg.text}`,
+              groupId: msg.groupId,
+              senderPeerId: msg.senderPeerId,
+            });
+          }
+        }
       });
 
       unsubscribeJoinRequests = chat.onJoinRequest((evt) => {
@@ -1704,6 +1773,82 @@ export const App = () => {
       return error instanceof Error ? error.message : "Join failed";
     }
   };
+
+  const handleDesktopDeepLink = async (url: string) => {
+    appendDiagnosticsEntry("desktop-deep-link-received", { url });
+    try {
+      const parsed = new URL(url);
+      const inviteCode = parsed.searchParams.get("code")?.trim() ?? "";
+      if (inviteCode.length === 0) return;
+      if (!chat || chatStatus() !== "connected") {
+        setPendingDesktopInviteCodes((prev) => [...prev, inviteCode]);
+        appendDiagnosticsEntry("desktop-deep-link-queued", {
+          inviteCodeLength: inviteCode.length,
+          reason: "chat-not-connected",
+        });
+        return;
+      }
+      const decoded = decodeGroupInvite(inviteCode);
+      if (!decoded.success) {
+        appendDiagnosticsEntry("desktop-deep-link-invalid-invite", {
+          url,
+          error: decoded.error.message,
+        });
+        return;
+      }
+      const error = await handleJoinViaInvite(decoded.data);
+      appendDiagnosticsEntry("desktop-deep-link-join-result", {
+        url,
+        success: error === null,
+        error,
+      });
+    } catch (error) {
+      appendDiagnosticsEntry("desktop-deep-link-parse-failed", {
+        url,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  createEffect(() => {
+    if (chatStatus() !== "connected" || !chat) return;
+    const pending = pendingDesktopInviteCodes();
+    if (pending.length === 0) return;
+
+    const inviteCode = pending[0];
+    const decoded = decodeGroupInvite(inviteCode);
+    if (!decoded.success) {
+      appendDiagnosticsEntry("desktop-deep-link-queued-invalid", {
+        inviteCodeLength: inviteCode.length,
+        error: decoded.error.message,
+      });
+      setPendingDesktopInviteCodes((prev) => prev.slice(1));
+      return;
+    }
+
+    void handleJoinViaInvite(decoded.data).finally(() => {
+      setPendingDesktopInviteCodes((prev) => prev.slice(1));
+    });
+  });
+
+  onMount(() => {
+    const bridge = desktopBridge();
+    if (!bridge) return;
+    const offRelayState = bridge.onRelayState((state) => setDesktopRelayState(state));
+    const offDeepLink = bridge.onDeepLink((url) => {
+      void handleDesktopDeepLink(url);
+    });
+    void bridge.getRelayState().then(setDesktopRelayState).catch(() => {});
+    void bridge.getPendingDeepLinks().then((urls) => {
+      for (const url of urls) {
+        void handleDesktopDeepLink(url);
+      }
+    }).catch(() => {});
+    onCleanup(() => {
+      offRelayState();
+      offDeepLink();
+    });
+  });
 
   const handleCreateGroup = async (name: string): Promise<string | null> => {
     const currentChat = chat;
@@ -2269,6 +2414,11 @@ export const App = () => {
     }
 
     if (ENV_RELAY_MULTIADDR) return ENV_RELAY_MULTIADDR;
+
+    const desktopRelay = desktopRelayState();
+    if (desktopRelay?.running && desktopRelay.listenAddrs.length > 0) {
+      return desktopRelay.listenAddrs[0];
+    }
 
     return null;
   };

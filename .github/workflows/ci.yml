@@ -30,6 +30,8 @@ jobs:
       - run: pnpm --filter anypost-core build
       - run: pnpm --filter anypost-core test
       - run: pnpm --filter anypost-web test
+      - run: pnpm --filter anypost-relay build
+      - run: pnpm --filter anypost-electron build:main
 
   validation:
     runs-on: ubuntu-latest

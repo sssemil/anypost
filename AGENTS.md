@@ -11,10 +11,12 @@ Guidance for coding agents working in this repository.
 ## Core Commands
 - Install: `pnpm install --frozen-lockfile`
 - Dev web: `./run web`
+- Dev electron: `./run electron`
 - Build all: `./run build`
 - Test all: `./run test`
 - Typecheck all: `./run typecheck`
 - Headless diagnostics flow: `./run e2e-record`
+- Build electron desktop bundle: `pnpm --filter anypost-electron build`
 
 ## Integration Tests (Browser / IPFS)
 - DM no-relay integration:

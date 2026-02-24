@@ -1,3 +1,4 @@
+import "./polyfills.js";
 import { createLibp2p } from "libp2p";
 import type { Libp2p } from "libp2p";
 import type { PubSub } from "@libp2p/interface";

@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./create-relay-node": "./dist/create-relay-node.js"
+  },
   "scripts": {
     "build": "tsc --build",
     "start": "node dist/index.js",

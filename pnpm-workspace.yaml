@@ -2,3 +2,4 @@ packages:
   - "packages/anypost-core"
   - "apps/anypost-web"
   - "apps/anypost-relay"
+  - "apps/anypost-electron"
