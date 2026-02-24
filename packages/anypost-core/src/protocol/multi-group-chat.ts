@@ -378,6 +378,7 @@ export const createMultiGroupChat = async (
   const directMessageRequestListeners: DirectMessageRequestListener[] = [];
   const peerChangeListeners: Array<(count: number) => void> = [];
   const eventListeners: EventListener[] = [];
+  let stopped = false;
 
   const actionDags = new Map<string, ActionDagState>();
   const actionChainStates = new Map<string, ActionChainGroupState>();
@@ -3126,6 +3127,8 @@ export const createMultiGroupChat = async (
       relayReservationManager.ingestRelayAddress(addr);
     },
     stop: async () => {
+      if (stopped) return;
+      stopped = true;
       if (memberReconnectInterval) clearInterval(memberReconnectInterval);
       if (relayReservationInterval) clearInterval(relayReservationInterval);
       if (joinRetryInterval) clearInterval(joinRetryInterval);
@@ -3137,12 +3140,20 @@ export const createMultiGroupChat = async (
       pendingJoinInviteGrantsByGroup.clear();
       relayPoolManager?.stop();
       groupDiscoveryManager?.stop();
-      pubsub.removeEventListener("message", handlePubsubMessage);
+      try {
+        pubsub.removeEventListener("message", handlePubsubMessage);
+      } catch {}
       for (const topic of topicToGroupId.keys()) {
-        pubsub.unsubscribe(topic);
+        try {
+          pubsub.unsubscribe(topic);
+        } catch {}
       }
-      pubsub.unsubscribe(DIRECT_MESSAGE_REQUEST_TOPIC);
-      pubsub.unsubscribe(PROFILE_SYNC_TOPIC);
+      try {
+        pubsub.unsubscribe(DIRECT_MESSAGE_REQUEST_TOPIC);
+      } catch {}
+      try {
+        pubsub.unsubscribe(PROFILE_SYNC_TOPIC);
+      } catch {}
       topicToGroupId.clear();
       joinedGroups.length = 0;
       messageListeners.length = 0;
@@ -3163,7 +3174,9 @@ export const createMultiGroupChat = async (
       pendingSyncRequests.clear();
       seenSyncResponses.clear();
       fullSyncFallbackByGroupPeer.clear();
-      await node.stop();
+      try {
+        await node.stop();
+      } catch {}
     },
   };
 };
