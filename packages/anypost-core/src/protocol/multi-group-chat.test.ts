@@ -4,11 +4,13 @@ import type {
   MultiGroupChat,
   MultiGroupChatMessageEvent,
   JoinRequestEvent,
+  DirectMessageRequestEvent,
   SyncProgressState,
 } from "./multi-group-chat.js";
 import type { NetworkEvent } from "./plaintext-chat.js";
 import type { RelayPoolState } from "./relay-pool.js";
 import type { GroupInvite } from "./group-invite.js";
+import { encodeGroupInvite } from "./group-invite.js";
 import { createInviteGrant } from "./invite-grant.js";
 import { generateAccountKey } from "../crypto/identity.js";
 import type { AccountKey } from "../crypto/identity.js";
@@ -32,6 +34,7 @@ type TestNode = {
   readonly events: NetworkEvent[];
   readonly messages: MultiGroupChatMessageEvent[];
   readonly joinRequests: JoinRequestEvent[];
+  readonly directMessageRequests: DirectMessageRequestEvent[];
   readonly approvedGroupIds: string[];
   publicKeyToPeerId: ReadonlyMap<string, string>;
 };
@@ -54,6 +57,7 @@ describe("MultiGroupChat", () => {
     const events: NetworkEvent[] = [];
     const messages: MultiGroupChatMessageEvent[] = [];
     const joinRequests: JoinRequestEvent[] = [];
+    const directMessageRequests: DirectMessageRequestEvent[] = [];
     const approvedGroupIds: string[] = [];
     let publicKeyToPeerId: ReadonlyMap<string, string> = new Map();
 
@@ -74,6 +78,7 @@ describe("MultiGroupChat", () => {
     chat.onEvent((evt) => events.push(evt));
     chat.onMessage((msg) => messages.push(msg));
     chat.onJoinRequest((evt) => joinRequests.push(evt));
+    chat.onDirectMessageRequest((evt) => directMessageRequests.push(evt));
 
     instances.push(chat);
 
@@ -84,6 +89,7 @@ describe("MultiGroupChat", () => {
       events,
       messages,
       joinRequests,
+      directMessageRequests,
       approvedGroupIds,
       get publicKeyToPeerId() {
         return publicKeyToPeerId;
@@ -700,6 +706,72 @@ describe("MultiGroupChat", () => {
 
     const adminKeyHex = toHex(new Uint8Array(admin.accountKey.publicKey));
     expect(joiner.publicKeyToPeerId.get(adminKeyHex)).toBe(admin.peerId);
+  });
+
+  it("should deliver direct-message requests to the target peer", async () => {
+    const alice = await createTestNode();
+    const bob = await createTestNode();
+
+    await alice.chat.connectTo(bob.chat.multiaddrs[0]);
+    await waitFor(400);
+
+    const { groupId, genesisEnvelope } = await alice.chat.createGroup("DM Boot");
+    const inviteCode = encodeGroupInvite({
+      genesisEnvelope,
+      adminPeerId: alice.peerId,
+      relayAddr: alice.chat.multiaddrs[0].toString(),
+    });
+
+    await alice.chat.sendDirectMessageRequest({
+      targetPeerId: bob.peerId,
+      groupId,
+      groupName: "DM with Bob",
+      inviteCode,
+    });
+
+    await waitUntil(() => bob.directMessageRequests.length >= 1);
+    const request = bob.directMessageRequests[0];
+    expect(request.targetPeerId).toBe(bob.peerId);
+    expect(request.senderPeerId).toBe(alice.peerId);
+    expect(request.groupId).toBe(groupId);
+    expect(request.inviteCode).toBe(inviteCode);
+  });
+
+  it("should converge membership after concurrent same-group creation", { timeout: 15_000 }, async () => {
+    const alice = await createTestNode();
+    const bob = await createTestNode();
+    const groupId = crypto.randomUUID();
+
+    await alice.chat.createGroupWithId(groupId, "Concurrent DM");
+    await bob.chat.createGroupWithId(groupId, "Concurrent DM");
+
+    await alice.chat.connectTo(bob.chat.multiaddrs[0]);
+    await waitFor(400);
+
+    await alice.chat.requestJoin(groupId);
+    await bob.chat.requestJoin(groupId);
+
+    let aliceApprovedIdx = 0;
+    let bobApprovedIdx = 0;
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 12_000) {
+      while (aliceApprovedIdx < alice.joinRequests.length) {
+        const req = alice.joinRequests[aliceApprovedIdx++];
+        await alice.chat.approveJoin(groupId, req.requesterPublicKey).catch(() => {});
+      }
+      while (bobApprovedIdx < bob.joinRequests.length) {
+        const req = bob.joinRequests[bobApprovedIdx++];
+        await bob.chat.approveJoin(groupId, req.requesterPublicKey).catch(() => {});
+      }
+
+      const aliceState = alice.chat.getActionChainState(groupId);
+      const bobState = bob.chat.getActionChainState(groupId);
+      if (aliceState?.members.size === 2 && bobState?.members.size === 2) break;
+      await waitFor(200);
+    }
+
+    expect(alice.chat.getActionChainState(groupId)?.members.size).toBe(2);
+    expect(bob.chat.getActionChainState(groupId)?.members.size).toBe(2);
   });
 
   it("should reject joinViaInvite when invite targets a different peer ID", async () => {

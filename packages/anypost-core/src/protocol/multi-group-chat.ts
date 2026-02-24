@@ -2079,9 +2079,35 @@ export const createMultiGroupChat = async (
     messageListeners.forEach((listener) => listener(chatMessage));
   };
 
+  const resolveSignedSenderPeerId = (
+    claimedPeerId: string,
+    senderPublicKey: Uint8Array,
+    contextLabel: string,
+  ): string | null => {
+    const trimmedPeerId = claimedPeerId.trim();
+    if (trimmedPeerId.length === 0) {
+      emit("info", `Rejected ${contextLabel}: empty sender peer ID claim`);
+      return null;
+    }
+
+    const senderPublicKeyHex = toHex(senderPublicKey);
+    const knownPeerId = publicKeyToPeerId.get(senderPublicKeyHex);
+    if (knownPeerId && knownPeerId !== trimmedPeerId) {
+      emit(
+        "info",
+        `Rejected ${contextLabel}: sender key already mapped to ${knownPeerId.slice(0, 12)}...`,
+      );
+      return null;
+    }
+
+    publicKeyToPeerId.set(senderPublicKeyHex, trimmedPeerId);
+    notifyPublicKeyToPeerIdChange();
+    return trimmedPeerId;
+  };
+
   const handlePubsubMessage = (event: CustomEvent) => {
     const detail = event.detail as { topic: string; data: Uint8Array; from?: { toString(): string } };
-    const senderPeerId = detail.from?.toString() ?? "unknown";
+    const transportSenderPeerId = detail.from?.toString() ?? "unknown";
 
     const result = decodeWireMessage(detail.data);
     if (!result.success) return;
@@ -2091,17 +2117,18 @@ export const createMultiGroupChat = async (
       const payload = wireMessage.payload;
       if (detail.topic !== DIRECT_MESSAGE_REQUEST_TOPIC) return;
       if (payload.targetPeerId !== ownPeerId) return;
-      if (senderPeerId === "unknown") return;
-      if (payload.senderPeerId !== senderPeerId) return;
       if (!verifyDirectMessageRequest(payload)) return;
 
-      const senderPublicKeyHex = toHex(payload.senderPublicKey);
-      publicKeyToPeerId.set(senderPublicKeyHex, payload.senderPeerId);
-      notifyPublicKeyToPeerIdChange();
+      const senderPeerId = resolveSignedSenderPeerId(
+        payload.senderPeerId,
+        payload.senderPublicKey,
+        "DM request",
+      );
+      if (!senderPeerId) return;
 
       const eventPayload: DirectMessageRequestEvent = {
         requestId: payload.requestId,
-        senderPeerId: payload.senderPeerId,
+        senderPeerId,
         senderPublicKey: new Uint8Array(payload.senderPublicKey),
         targetPeerId: payload.targetPeerId,
         groupId: payload.groupId,
@@ -2110,7 +2137,7 @@ export const createMultiGroupChat = async (
         sentAt: payload.sentAt,
       };
       directMessageRequestListeners.forEach((listener) => listener(eventPayload));
-      emit("info", `DM request from ${payload.senderPeerId.slice(0, 12)}...`);
+      emit("info", `DM request from ${senderPeerId.slice(0, 12)}...`);
       return;
     }
 
@@ -2118,15 +2145,16 @@ export const createMultiGroupChat = async (
       const payload = wireMessage.payload;
       if (detail.topic !== PROFILE_SYNC_TOPIC) return;
       if (payload.targetPeerId !== ownPeerId) return;
-      if (senderPeerId === "unknown") return;
-      if (payload.senderPeerId !== senderPeerId) return;
       if (!verifyProfileRequest(payload)) return;
 
-      const senderPublicKeyHex = toHex(payload.senderPublicKey);
-      publicKeyToPeerId.set(senderPublicKeyHex, payload.senderPeerId);
-      notifyPublicKeyToPeerIdChange();
+      const senderPeerId = resolveSignedSenderPeerId(
+        payload.senderPeerId,
+        payload.senderPublicKey,
+        "profile request",
+      );
+      if (!senderPeerId) return;
 
-      void publishProfileAnnounce(payload.senderPeerId).catch(() => {});
+      void publishProfileAnnounce(senderPeerId).catch(() => {});
       return;
     }
 
@@ -2134,14 +2162,16 @@ export const createMultiGroupChat = async (
       const payload = wireMessage.payload;
       if (detail.topic !== PROFILE_SYNC_TOPIC) return;
       if (payload.targetPeerId && payload.targetPeerId !== ownPeerId) return;
-      if (senderPeerId === "unknown") return;
-      if (payload.senderPeerId !== senderPeerId) return;
       if (!verifyProfileAnnounce(payload)) return;
 
-      const senderPublicKeyHex = toHex(payload.senderPublicKey);
-      publicKeyToPeerId.set(senderPublicKeyHex, payload.senderPeerId);
-      notifyPublicKeyToPeerIdChange();
-      onProfileAnnounce?.(payload.senderPeerId, payload.displayName);
+      const senderPeerId = resolveSignedSenderPeerId(
+        payload.senderPeerId,
+        payload.senderPublicKey,
+        "profile announce",
+      );
+      if (!senderPeerId) return;
+
+      onProfileAnnounce?.(senderPeerId, payload.displayName);
       return;
     }
 
@@ -2150,9 +2180,21 @@ export const createMultiGroupChat = async (
 
     if (wireMessage.type === "sync_request") {
       const payload = wireMessage.payload;
-      if (senderPeerId === "unknown") return;
-      if (payload.senderPeerId !== senderPeerId) return;
       if (payload.targetPeerId && payload.targetPeerId !== ownPeerId) return;
+      if (!verifySyncRequest(payload)) {
+        emit(
+          "sync",
+          `Rejected sync request with invalid signature from ${transportSenderPeerId.slice(0, 12)}...`,
+        );
+        return;
+      }
+
+      const senderPeerId = resolveSignedSenderPeerId(
+        payload.senderPeerId,
+        payload.senderPublicKey,
+        "sync request",
+      );
+      if (!senderPeerId) return;
       if (isRateLimited(
         incomingSyncRequestRate,
         `${matchedGroupId}:${senderPeerId}`,
@@ -2165,17 +2207,8 @@ export const createMultiGroupChat = async (
         );
         return;
       }
-      if (!verifySyncRequest(payload)) {
-        emit(
-          "sync",
-          `Rejected sync request with invalid signature from ${senderPeerId.slice(0, 12)}...`,
-        );
-        return;
-      }
 
       const senderPublicKeyHex = toHex(payload.senderPublicKey);
-      publicKeyToPeerId.set(senderPublicKeyHex, senderPeerId);
-      notifyPublicKeyToPeerIdChange();
 
       if (isMembershipEnforcedGroup(matchedGroupId)) {
         if (!isOwnMemberOfGroup(matchedGroupId)) return;
@@ -2200,15 +2233,24 @@ export const createMultiGroupChat = async (
     if (wireMessage.type === "sync_response") {
       const payload = wireMessage.payload;
       if (payload.targetPeerId !== ownPeerId) return;
-      if (senderPeerId === "unknown") return;
-      if (payload.senderPeerId !== senderPeerId) return;
       if (!verifySyncResponse(payload)) {
         connectionMetrics.syncResponsesRejected += 1;
         emitConnectionMetrics();
         emit(
           "sync",
-          `Rejected sync response with invalid signature from ${senderPeerId.slice(0, 12)}...`,
+          `Rejected sync response with invalid signature from ${transportSenderPeerId.slice(0, 12)}...`,
         );
+        return;
+      }
+
+      const senderPeerId = resolveSignedSenderPeerId(
+        payload.senderPeerId,
+        payload.senderPublicKey,
+        "sync response",
+      );
+      if (!senderPeerId) {
+        connectionMetrics.syncResponsesRejected += 1;
+        emitConnectionMetrics();
         return;
       }
 
@@ -2235,8 +2277,6 @@ export const createMultiGroupChat = async (
       }
 
       const senderPublicKeyHex = toHex(payload.senderPublicKey);
-      publicKeyToPeerId.set(senderPublicKeyHex, senderPeerId);
-      notifyPublicKeyToPeerIdChange();
       if (isMembershipEnforcedGroup(matchedGroupId) && !actionChainStates.get(matchedGroupId)?.members.has(senderPublicKeyHex)) {
         connectionMetrics.syncResponsesRejected += 1;
         emitConnectionMetrics();
@@ -2314,25 +2354,30 @@ export const createMultiGroupChat = async (
       const action = processSignedAction(
         matchedGroupId,
         { signedBytes: wireMessage.signedBytes, signature: wireMessage.signature, hash: wireMessage.hash },
-        senderPeerId !== "unknown" ? senderPeerId : undefined,
+        transportSenderPeerId !== "unknown" ? transportSenderPeerId : undefined,
       );
       if (action) {
         emit("pubsub-message", `Signed action accepted in group ${matchedGroupId.slice(0, 8)}...`);
-        emitActionMessage(matchedGroupId, action, senderPeerId);
+        emitActionMessage(matchedGroupId, action, transportSenderPeerId);
       }
       return;
     }
 
     if (wireMessage.type === "join_request") {
-      if (senderPeerId === "unknown") return;
-      if (wireMessage.senderPeerId !== senderPeerId) return;
       if (!verifyJoinRequest(wireMessage)) {
         emit(
           "info",
-          `Rejected join request with invalid signature from ${senderPeerId.slice(0, 12)}...`,
+          `Rejected join request with invalid signature from ${transportSenderPeerId.slice(0, 12)}...`,
         );
         return;
       }
+
+      const senderPeerId = resolveSignedSenderPeerId(
+        wireMessage.senderPeerId,
+        wireMessage.requesterPublicKey,
+        "join request",
+      );
+      if (!senderPeerId) return;
 
       if (isRateLimited(
         incomingJoinRequestRate,
@@ -2348,8 +2393,6 @@ export const createMultiGroupChat = async (
       }
 
       const requesterHex = toHex(wireMessage.requesterPublicKey);
-      publicKeyToPeerId.set(requesterHex, senderPeerId);
-      notifyPublicKeyToPeerIdChange();
 
       const requesterAlreadyMember = actionChainStates.get(matchedGroupId)?.members.has(requesterHex) ?? false;
       let inviteTokenId: string | undefined;
@@ -2413,7 +2456,7 @@ export const createMultiGroupChat = async (
     if (wireMessage.type !== "encrypted_message") return;
 
     if (!canLocalPeerConsumeGroupUpdates(matchedGroupId)) return;
-    if (isMembershipEnforcedGroup(matchedGroupId) && senderPeerId !== "unknown" && !isPeerMemberOfGroup(matchedGroupId, senderPeerId)) {
+    if (isMembershipEnforcedGroup(matchedGroupId) && transportSenderPeerId !== "unknown" && !isPeerMemberOfGroup(matchedGroupId, transportSenderPeerId)) {
       return;
     }
 

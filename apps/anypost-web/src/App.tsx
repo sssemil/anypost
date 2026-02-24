@@ -105,6 +105,7 @@ const SYSTEM_SENDER_ID = "__system__";
 const CONTACTS_LAST_SEEN_UPDATE_MS = 60_000;
 const CONTACTS_SELF_NAME_HISTORY_LIMIT = 12;
 const PROFILE_SYNC_REQUEST_COOLDOWN_MS = 15_000;
+const DM_SELF_JOIN_REQUEST_COOLDOWN_MS = 15_000;
 const OUTGOING_DM_RETRY_BASE_MS = 12_000;
 const OUTGOING_DM_RETRY_MAX_MS = 120_000;
 const OUTGOING_DM_RETRY_SWEEP_MS = 4_000;
@@ -339,6 +340,7 @@ export const App = () => {
   let pingInterval: ReturnType<typeof setInterval> | undefined;
   let outgoingDmRetrySweepInFlight = false;
   const profileSyncLastRequestAtByPeer = new Map<string, number>();
+  const dmSelfJoinLastRequestAtByGroup = new Map<string, number>();
 
   const dispatchMobileView = (event: Parameters<typeof transitionMobileView>[1]) => {
     setMobileView((s) => transitionMobileView(s, event));
@@ -1246,6 +1248,16 @@ export const App = () => {
         if (now - entry.createdAt >= OUTGOING_DM_RETRY_MAX_AGE_MS) {
           continue;
         }
+        const state = currentChat.getActionChainState(entry.groupId);
+        const ownKeyHex = ownPublicKeyHex();
+        const ownMembershipMissing = !!state && !!ownKeyHex && !state.members.has(ownKeyHex);
+        if (ownMembershipMissing) {
+          const lastRequestedAt = dmSelfJoinLastRequestAtByGroup.get(entry.groupId) ?? 0;
+          if (now - lastRequestedAt >= DM_SELF_JOIN_REQUEST_COOLDOWN_MS) {
+            dmSelfJoinLastRequestAtByGroup.set(entry.groupId, now);
+            void currentChat.requestJoin(entry.groupId).catch(() => {});
+          }
+        }
         if (targetPeerHasJoinedGroup(entry.groupId, entry.targetPeerId)) {
           continue;
         }
@@ -1354,6 +1366,22 @@ export const App = () => {
 
       dispatchGroupEvent({ type: "group-selected", groupId: dmGroupId });
       dispatchMobileView({ type: "group-selected" });
+
+      const dmState = currentChat.getActionChainState(dmGroupId);
+      const ownRoleInDm = ownPublicKeyHex()
+        ? dmState?.members.get(ownPublicKeyHex())?.role
+        : undefined;
+      if (
+        dmState &&
+        dmState.joinPolicy !== "auto_with_invite" &&
+        (ownRoleInDm === "owner" || ownRoleInDm === "admin")
+      ) {
+        try {
+          await currentChat.setJoinPolicy(dmGroupId, "auto_with_invite");
+        } catch {
+          // Best-effort for legacy groups created before DM auto-invite policy.
+        }
+      }
 
       const targetPublicKeyHex = [...publicKeyToPeerIdMap().entries()]
         .find(([, peerId]) => peerId === trimmedTarget)?.[0];
