@@ -2797,7 +2797,7 @@ export const createMultiGroupChat = async (
 
   const normalizeDirectMessagePeerIds = (
     peerIds: readonly [string, string],
-  ): readonly [string, string] => {
+  ): [string, string] => {
     const a = peerIds[0].trim();
     const b = peerIds[1].trim();
     if (a.length === 0 || b.length === 0) {
