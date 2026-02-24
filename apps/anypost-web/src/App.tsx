@@ -167,6 +167,7 @@ type DiagnosticsRecorderState = {
   readonly entryCount: number;
   readonly artifact: DiagnosticsRecordingArtifact | null;
 };
+type DiagnosticsConsoleMethod = "debug" | "info" | "log" | "warn" | "error";
 
 const loadPublicKeyToPeerId = (): ReadonlyMap<string, string> => {
   try {
@@ -376,9 +377,20 @@ export const App = () => {
   let diagnosticsProgressInterval: ReturnType<typeof setInterval> | undefined;
   let diagnosticsStopTimeout: ReturnType<typeof setTimeout> | undefined;
   let diagnosticsEntries: DiagnosticsEntry[] = [];
+  let diagnosticsConsoleRestore: (() => void) | undefined;
+  let diagnosticsErrorRestore: (() => void) | undefined;
+  let diagnosticsRejectionRestore: (() => void) | undefined;
 
   const dispatchMobileView = (event: Parameters<typeof transitionMobileView>[1]) => {
-    setMobileView((s) => transitionMobileView(s, event));
+    setMobileView((s) => {
+      const next = transitionMobileView(s, event);
+      appendDiagnosticsEntry("mobile-view-event", {
+        event,
+        from: s,
+        to: next,
+      });
+      return next;
+    });
   };
 
   const persistContactsBook = (contacts: ContactsBook) => {
@@ -425,6 +437,119 @@ export const App = () => {
     return `anypost-devtools-recording-${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}.json`;
   };
 
+  const formatDiagnosticsCountdown = (ms: number): string => {
+    const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  };
+
+  const formatDiagnosticsBytes = (sizeBytes: number | null): string => {
+    if (sizeBytes === null) return "--";
+    if (sizeBytes < 1024) return `${sizeBytes} B`;
+    if (sizeBytes < 1024 * 1024) return `${(sizeBytes / 1024).toFixed(1)} KB`;
+    return `${(sizeBytes / (1024 * 1024)).toFixed(2)} MB`;
+  };
+
+  const diagnosticsValue = (value: unknown, depth = 0): unknown => {
+    if (value === null || value === undefined) return value;
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+    if (typeof value === "bigint") return value.toString();
+    if (depth >= 3) return "[max-depth]";
+    if (value instanceof Error) {
+      return {
+        name: value.name,
+        message: value.message,
+        stack: value.stack ?? null,
+      };
+    }
+    if (value instanceof Uint8Array) {
+      return `Uint8Array(${value.length})`;
+    }
+    if (Array.isArray(value)) {
+      return value.slice(0, 40).map((entry) => diagnosticsValue(entry, depth + 1));
+    }
+    if (value instanceof Map) {
+      return {
+        type: "Map",
+        size: value.size,
+        entries: [...value.entries()].slice(0, 40).map(([k, v]) => [diagnosticsValue(k, depth + 1), diagnosticsValue(v, depth + 1)]),
+      };
+    }
+    if (value instanceof Set) {
+      return {
+        type: "Set",
+        size: value.size,
+        values: [...value.values()].slice(0, 40).map((entry) => diagnosticsValue(entry, depth + 1)),
+      };
+    }
+    if (typeof value === "object") {
+      const entries = Object.entries(value as Record<string, unknown>).slice(0, 60);
+      const out: Record<string, unknown> = {};
+      for (const [key, nested] of entries) {
+        out[key] = diagnosticsValue(nested, depth + 1);
+      }
+      return out;
+    }
+    return String(value);
+  };
+
+  const uninstallDiagnosticsRuntimeCapture = () => {
+    diagnosticsConsoleRestore?.();
+    diagnosticsErrorRestore?.();
+    diagnosticsRejectionRestore?.();
+    diagnosticsConsoleRestore = undefined;
+    diagnosticsErrorRestore = undefined;
+    diagnosticsRejectionRestore = undefined;
+  };
+
+  const installDiagnosticsRuntimeCapture = () => {
+    uninstallDiagnosticsRuntimeCapture();
+    if (typeof window === "undefined") return;
+
+    const methods: readonly DiagnosticsConsoleMethod[] = ["debug", "info", "log", "warn", "error"];
+    const originalConsole = new Map<DiagnosticsConsoleMethod, (...args: unknown[]) => void>();
+    for (const method of methods) {
+      const fn = console[method].bind(console);
+      originalConsole.set(method, fn);
+      console[method] = (...args: unknown[]) => {
+        appendDiagnosticsEntry("console", {
+          level: method,
+          args: args.map((arg) => diagnosticsValue(arg)),
+        });
+        fn(...args);
+      };
+    }
+    diagnosticsConsoleRestore = () => {
+      for (const method of methods) {
+        const original = originalConsole.get(method);
+        if (original) {
+          console[method] = original;
+        }
+      }
+    };
+
+    const onError = (event: ErrorEvent) => {
+      appendDiagnosticsEntry("window-error", {
+        message: event.message,
+        filename: event.filename,
+        lineno: event.lineno,
+        colno: event.colno,
+        error: diagnosticsValue(event.error),
+      });
+    };
+    window.addEventListener("error", onError);
+    diagnosticsErrorRestore = () => window.removeEventListener("error", onError);
+
+    const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+      appendDiagnosticsEntry("window-unhandled-rejection", {
+        reason: diagnosticsValue(event.reason),
+      });
+    };
+    window.addEventListener("unhandledrejection", onUnhandledRejection);
+    diagnosticsRejectionRestore = () => window.removeEventListener("unhandledrejection", onUnhandledRejection);
+  };
+
   const clearDiagnosticsTimers = () => {
     if (diagnosticsSnapshotInterval) clearInterval(diagnosticsSnapshotInterval);
     if (diagnosticsProgressInterval) clearInterval(diagnosticsProgressInterval);
@@ -448,10 +573,103 @@ export const App = () => {
 
   const buildDiagnosticsSnapshot = () => {
     const status = chat?.getNetworkStatus();
+    const groups = [...groupState().groups.values()];
+    const activeGroupId = groupState().activeGroupId;
+    const activeChain = activeGroupId ? chat?.getActionChainState(activeGroupId) : null;
+    const relayPool = relayPoolState();
+    const relayCandidates = relayCandidateState();
+    const discovery = groupDiscoveryState();
+    const connectedPeerIds = new Set((status?.peers ?? []).map((peer) => peer.peerId));
     return {
+      capturedAt: Date.now(),
+      onboardingStatus: onboardingState().status,
       chatStatus: chatStatus(),
-      activeGroupId: groupState().activeGroupId,
-      connectedPeerIds: status?.peers.map((peer) => peer.peerId) ?? [],
+      mobileView: mobileView(),
+      activeGroupId,
+      activeGroupName: activeGroupName() ?? null,
+      groups: groups.map((group) => ({
+        groupId: group.groupId,
+        groupName: group.groupName,
+        hasActionChain: group.hasActionChain,
+        messageCount: group.messages.length,
+        latestMessageTimestamp: group.messages.length > 0
+          ? group.messages[group.messages.length - 1]?.timestamp ?? null
+          : null,
+      })),
+      network: {
+        subscriberCount: status?.subscriberCount ?? 0,
+        peers: (status?.peers ?? []).map((peer) => ({
+          peerId: peer.peerId,
+          direction: peer.direction,
+          protocol: peer.protocol,
+          addrs: peer.addrs,
+          latencyMs: latencyMap().get(peer.peerId) ?? null,
+        })),
+      },
+      relayPool: relayPool
+        ? {
+            discoveryInProgress: relayPool.discoveryInProgress,
+            relays: relayPool.relays.map((relay) => ({
+              peerId: relay.peerId,
+              status: relay.status,
+              address: relay.address,
+              latencyMs: relay.latencyMs,
+              hasReservation: relay.hasReservation,
+            })),
+          }
+        : null,
+      relayCandidates: relayCandidates
+        ? {
+            reservedCount: getCandidatesByRtt(relayCandidates).filter((candidate) => candidate.hasReservation).length,
+            candidates: getCandidatesByRtt(relayCandidates).map((candidate) => ({
+              peerId: candidate.peerId,
+              addresses: candidate.addresses,
+              rttMs: candidate.rttMs,
+              hasReservation: candidate.hasReservation,
+            })),
+          }
+        : null,
+      groupDiscovery: discovery
+        ? {
+            searchRounds: discovery.searchRounds,
+            groups: [...discovery.groups.values()].map((entry) => ({
+              groupId: entry.groupId,
+              providerCount: entry.providers.length,
+              peerCount: entry.peers.length,
+              peers: entry.peers.map((peer) => ({
+                peerId: peer.peerId,
+                addrs: peer.addrs,
+                connected: connectedPeerIds.has(peer.peerId),
+              })),
+            })),
+          }
+        : null,
+      actionChain: activeChain
+        ? {
+            groupId: activeChain.groupId,
+            groupName: activeChain.groupName,
+            isDirectMessage: activeChain.isDirectMessage,
+            joinPolicy: activeChain.joinPolicy,
+            createdAt: activeChain.createdAt,
+            members: [...activeChain.members.values()].map((member) => ({
+              publicKeyHex: member.publicKeyHex,
+              role: member.role,
+              joinedAt: member.joinedAt,
+            })),
+          }
+        : null,
+      pendingJoins: [...pendingJoinsMap().entries()].map(([groupId, pending]) => ({
+        groupId,
+        count: pending.length,
+        publicKeyHexes: pending.map((entry) => entry.publicKeyHex),
+      })),
+      pendingDmRequests: pendingDirectMessageRequests().map((entry) => ({
+        requestId: entry.requestId,
+        senderPeerId: entry.senderPeerId,
+        groupId: entry.groupId,
+        groupName: entry.groupName,
+        sentAt: entry.sentAt,
+      })),
       pendingDmRequestCount: pendingDirectMessageRequests().length,
       outgoingDmRequests: outgoingDirectMessageRequests().map((entry) => ({
         requestKey: entry.requestKey,
@@ -463,8 +681,29 @@ export const App = () => {
         blocked: blockedPeerIds().has(entry.targetPeerId),
         targetJoined: targetPeerHasJoinedGroup(entry.groupId, entry.targetPeerId),
       })),
+      contacts: [...contactsBook().values()].map((contact) => ({
+        peerId: contact.peerId,
+        nickname: contact.nickname,
+        selfName: contact.selfName,
+        seenSelfNames: contact.seenSelfNames,
+        lastSeenAt: contact.lastSeenAt,
+        groupIds: contact.groupIds,
+        connected: connectedPeerIds.has(contact.peerId),
+      })),
+      blockedPeerIds: [...blockedPeerIds()],
+      directMessagePeersByGroup: [...directMessagePeersByGroup().entries()],
+      publicKeyToPeerId: [...publicKeyToPeerIdMap().entries()],
+      pendingJoinRetryGroups: [...joinRetryState().entries()].map(([groupId, entry]) => ({
+        groupId,
+        status: entry.status,
+        attemptCount: entry.attemptCount,
+        createdAt: entry.createdAt,
+        lastAttemptAt: entry.lastAttemptAt,
+        nextAttemptAt: entry.nextAttemptAt,
+      })),
       profileSyncLastRequestAtByPeer: [...profileSyncLastRequestAtByPeer.entries()],
       connectionMetrics: connectionMetrics(),
+      recentNetworkEvents: eventLog().slice(-60).map((event) => diagnosticsValue(event)),
       relayReservationSummary: relayReservationState()
         ? [...relayReservationState()!.entries.values()].map((entry) => ({
             peerId: entry.peerId,
@@ -482,6 +721,7 @@ export const App = () => {
     if (diagnosticsRecorder().status !== "recording") return;
     clearDiagnosticsTimers();
     appendDiagnosticsEntry("recording-finished", { reason });
+    uninstallDiagnosticsRuntimeCapture();
 
     const startedAt = diagnosticsRecorder().startedAt ?? Date.now();
     const endedAt = Date.now();
@@ -526,6 +766,7 @@ export const App = () => {
     if (diagnosticsRecorder().status === "recording") return;
 
     clearDiagnosticsTimers();
+    uninstallDiagnosticsRuntimeCapture();
     const priorArtifact = diagnosticsRecorder().artifact;
     if (priorArtifact?.url) {
       URL.revokeObjectURL(priorArtifact.url);
@@ -542,6 +783,7 @@ export const App = () => {
       entryCount: 0,
       artifact: null,
     });
+    installDiagnosticsRuntimeCapture();
 
     appendDiagnosticsEntry("recording-started", {
       durationMs: DEVTOOLS_RECORD_DURATION_MS,
@@ -808,6 +1050,13 @@ export const App = () => {
   const dispatchGroupEvent = (event: Parameters<typeof transitionMultiGroup>[1]) => {
     setGroupState((s) => {
       const next = transitionMultiGroup(s, event);
+      appendDiagnosticsEntry("group-state-event", {
+        event,
+        prevActiveGroupId: s.activeGroupId,
+        nextActiveGroupId: next.activeGroupId,
+        prevGroupCount: s.groups.size,
+        nextGroupCount: next.groups.size,
+      });
       savePersistedGroups(next, chat);
       return next;
     });
@@ -869,7 +1118,11 @@ export const App = () => {
           accountKey,
         }),
       );
+      appendDiagnosticsEntry("account-created", {
+        publicKeyHex: toHex(new Uint8Array(accountKey.publicKey)),
+      });
     } catch {
+      appendDiagnosticsEntry("account-create-failed", {});
       // noop
     }
   };
@@ -892,7 +1145,11 @@ export const App = () => {
           accountKey,
         }),
       );
+      appendDiagnosticsEntry("account-imported", {
+        publicKeyHex: toHex(new Uint8Array(accountKey.publicKey)),
+      });
     } catch {
+      appendDiagnosticsEntry("account-import-failed", {});
       // noop
     }
   };
@@ -919,7 +1176,13 @@ export const App = () => {
           displayName: name,
         }),
       );
+      appendDiagnosticsEntry("onboarding-display-name-set", {
+        displayName: name,
+      });
     } catch {
+      appendDiagnosticsEntry("onboarding-display-name-set-failed", {
+        displayName: name,
+      });
       // noop
     }
   };
@@ -941,8 +1204,15 @@ export const App = () => {
       } finally {
         await persistedSettings.destroy();
       }
+      appendDiagnosticsEntry("profile-name-updated", {
+        displayName: trimmed,
+      });
       return null;
     } catch (error) {
+      appendDiagnosticsEntry("profile-name-update-failed", {
+        displayName: trimmed,
+        error: error instanceof Error ? error.message : String(error),
+      });
       return error instanceof Error ? error.message : "Failed to save profile";
     }
   };
@@ -959,7 +1229,9 @@ export const App = () => {
       setOnboardingState(
         transition(onboardingState(), { type: "backup-completed" }),
       );
+      appendDiagnosticsEntry("backup-confirmed", {});
     } catch {
+      appendDiagnosticsEntry("backup-confirm-failed", {});
       // noop
     }
   };
@@ -1302,6 +1574,7 @@ export const App = () => {
     if (statusInterval) clearInterval(statusInterval);
     if (pingInterval) clearInterval(pingInterval);
     clearDiagnosticsTimers();
+    uninstallDiagnosticsRuntimeCapture();
     const artifact = diagnosticsRecorder().artifact;
     if (artifact?.url) {
       URL.revokeObjectURL(artifact.url);
@@ -1727,6 +2000,10 @@ export const App = () => {
       }
 
       void currentChat.connectToPeerId(trimmedTarget).catch(() => {});
+      appendDiagnosticsEntry("dm-start-succeeded", {
+        groupId: dmGroupId,
+        targetPeerId: trimmedTarget,
+      });
       return null;
     } catch (error) {
       appendDiagnosticsEntry("dm-start-failed", {
@@ -1806,7 +2083,13 @@ export const App = () => {
     });
 
     const decoded = decodeGroupInvite(request.inviteCode);
-    if (!decoded.success) return "Invalid DM invite";
+    if (!decoded.success) {
+      appendDiagnosticsEntry("dm-request-accept-invalid-invite", {
+        requestId,
+        senderPeerId: request.senderPeerId,
+      });
+      return "Invalid DM invite";
+    }
 
     const error = await handleJoinViaInvite(decoded.data);
     if (!error) {
@@ -1843,12 +2126,15 @@ export const App = () => {
   };
 
   const handleLeaveGroup = (groupId: string) => {
+    appendDiagnosticsEntry("group-leave-requested", { groupId });
     chat?.leaveGroup(groupId).catch(() => {}).finally(() => {
+      appendDiagnosticsEntry("group-leave-finished", { groupId });
       dispatchGroupEvent({ type: "group-left", groupId });
     });
   };
 
   const handleSelectGroup = (groupId: string) => {
+    appendDiagnosticsEntry("group-select-requested", { groupId });
     dispatchGroupEvent({ type: "group-selected", groupId });
     dispatchMobileView({ type: "group-selected" });
   };
@@ -1867,6 +2153,7 @@ export const App = () => {
   };
 
   const handleAddRelay = (addr: string) => {
+    appendDiagnosticsEntry("relay-add-requested", { addr });
     chat?.addRelay(addr);
   };
 
@@ -1957,6 +2244,13 @@ export const App = () => {
     const activeId = groupState().activeGroupId;
     if (!activeId) return { error: "No active group", code: null };
     const result = buildInviteCodeForGroup(activeId, options);
+    appendDiagnosticsEntry("invite-create-attempt", {
+      groupId: activeId,
+      options,
+      success: !!result.code,
+      error: result.error,
+      inviteLength: result.code?.length ?? 0,
+    });
     if (result.code) {
       navigator.clipboard.writeText(result.code).catch(() => {});
     }
@@ -1967,6 +2261,7 @@ export const App = () => {
     const currentChat = chat;
     const activeId = groupState().activeGroupId;
     if (!currentChat || !activeId) return;
+    appendDiagnosticsEntry("join-retry-now-requested", { groupId: activeId });
     currentChat.retryJoinNow(activeId).catch(() => {});
   };
 
@@ -1974,6 +2269,7 @@ export const App = () => {
     const currentChat = chat;
     const activeId = groupState().activeGroupId;
     if (!currentChat || !activeId) return;
+    appendDiagnosticsEntry("join-retry-cancel-requested", { groupId: activeId });
     currentChat.cancelJoinRetry(activeId);
   };
 
@@ -1981,8 +2277,16 @@ export const App = () => {
     const currentChat = chat;
     const activeId = groupState().activeGroupId;
     if (!currentChat || !activeId) return;
+    appendDiagnosticsEntry("member-approve-requested", {
+      groupId: activeId,
+      memberPublicKeyHex: toHex(new Uint8Array(memberPublicKey)),
+    });
 
     currentChat.approveJoin(activeId, memberPublicKey).then(() => {
+      appendDiagnosticsEntry("member-approved", {
+        groupId: activeId,
+        memberPublicKeyHex: toHex(new Uint8Array(memberPublicKey)),
+      });
       const approvedHex = toHex(new Uint8Array(memberPublicKey));
       setPendingJoinsMap((prev) => {
         const existing = prev.get(activeId) ?? [];
@@ -1994,17 +2298,37 @@ export const App = () => {
       });
       refreshActionChainState();
       syncMessagesFromActionChain(activeId);
-    }).catch(() => {});
+    }).catch((error) => {
+      appendDiagnosticsEntry("member-approve-failed", {
+        groupId: activeId,
+        memberPublicKeyHex: toHex(new Uint8Array(memberPublicKey)),
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   };
 
   const handleRemoveMember = (memberPublicKey: Uint8Array) => {
     const currentChat = chat;
     const activeId = groupState().activeGroupId;
     if (!currentChat || !activeId) return;
+    appendDiagnosticsEntry("member-remove-requested", {
+      groupId: activeId,
+      memberPublicKeyHex: toHex(new Uint8Array(memberPublicKey)),
+    });
 
     currentChat.removeMember(activeId, memberPublicKey).then(() => {
+      appendDiagnosticsEntry("member-removed", {
+        groupId: activeId,
+        memberPublicKeyHex: toHex(new Uint8Array(memberPublicKey)),
+      });
       refreshActionChainState();
-    }).catch(() => {});
+    }).catch((error) => {
+      appendDiagnosticsEntry("member-remove-failed", {
+        groupId: activeId,
+        memberPublicKeyHex: toHex(new Uint8Array(memberPublicKey)),
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   };
 
   const handleChangeMemberRole = async (
@@ -2016,9 +2340,20 @@ export const App = () => {
     if (!currentChat || !activeId) return "No active group";
     try {
       await currentChat.changeMemberRole(activeId, memberPublicKey, newRole);
+      appendDiagnosticsEntry("member-role-changed", {
+        groupId: activeId,
+        memberPublicKeyHex: toHex(new Uint8Array(memberPublicKey)),
+        role: newRole,
+      });
       refreshActionChainState();
       return null;
     } catch (error) {
+      appendDiagnosticsEntry("member-role-change-failed", {
+        groupId: activeId,
+        memberPublicKeyHex: toHex(new Uint8Array(memberPublicKey)),
+        role: newRole,
+        error: error instanceof Error ? error.message : String(error),
+      });
       return error instanceof Error ? error.message : "Failed to change role";
     }
   };
@@ -2029,9 +2364,18 @@ export const App = () => {
     if (!currentChat || !activeId) return "No active group";
     try {
       await currentChat.setJoinPolicy(activeId, joinPolicy);
+      appendDiagnosticsEntry("join-policy-updated", {
+        groupId: activeId,
+        joinPolicy,
+      });
       refreshActionChainState();
       return null;
     } catch (error) {
+      appendDiagnosticsEntry("join-policy-update-failed", {
+        groupId: activeId,
+        joinPolicy,
+        error: error instanceof Error ? error.message : String(error),
+      });
       return error instanceof Error ? error.message : "Failed to update join policy";
     }
   };
@@ -2042,9 +2386,18 @@ export const App = () => {
     if (!currentChat || !activeId) return "No active group";
     try {
       await currentChat.renameGroup(activeId, newName);
+      appendDiagnosticsEntry("group-renamed", {
+        groupId: activeId,
+        newName,
+      });
       refreshActionChainState();
       return null;
     } catch (error) {
+      appendDiagnosticsEntry("group-rename-failed", {
+        groupId: activeId,
+        newName,
+        error: error instanceof Error ? error.message : String(error),
+      });
       return error instanceof Error ? error.message : "Failed to rename group";
     }
   };
@@ -2053,6 +2406,10 @@ export const App = () => {
     const currentChat = chat;
     const activeId = groupState().activeGroupId;
     if (!currentChat || !activeId) return "No active group";
+    appendDiagnosticsEntry("member-add-by-peer-requested", {
+      groupId: activeId,
+      targetPeerId,
+    });
 
     const pubKeyMap = publicKeyToPeerIdMap();
     let matchedPublicKeyHex: string | null = null;
@@ -2063,13 +2420,31 @@ export const App = () => {
       }
     }
 
-    if (!matchedPublicKeyHex) return "Peer not found. They must join the network first so their identity can be discovered.";
+    if (!matchedPublicKeyHex) {
+      appendDiagnosticsEntry("member-add-by-peer-missing-public-key", {
+        groupId: activeId,
+        targetPeerId,
+      });
+      return "Peer not found. They must join the network first so their identity can be discovered.";
+    }
 
     const pubKeyBytes = hexToBytes(matchedPublicKeyHex);
     currentChat.approveJoin(activeId, pubKeyBytes).then(() => {
+      appendDiagnosticsEntry("member-add-by-peer-approved", {
+        groupId: activeId,
+        targetPeerId,
+        memberPublicKeyHex: matchedPublicKeyHex,
+      });
       refreshActionChainState();
       syncMessagesFromActionChain(activeId);
-    }).catch(() => {});
+    }).catch((error) => {
+      appendDiagnosticsEntry("member-add-by-peer-failed", {
+        groupId: activeId,
+        targetPeerId,
+        memberPublicKeyHex: matchedPublicKeyHex,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
 
     return null;
   };
@@ -2112,6 +2487,10 @@ export const App = () => {
   };
 
   const setPeerBlocked = (peerId: string, blocked: boolean) => {
+    appendDiagnosticsEntry("peer-block-updated", {
+      peerId,
+      blocked,
+    });
     setBlockedPeerIds((prev) => {
       const next = new Set(prev);
       if (blocked) next.add(peerId);
@@ -2359,6 +2738,45 @@ export const App = () => {
                   networkStatus={networkStatus()}
                   onConnect={(targetPeerId) => chat!.connectToPeerId(targetPeerId)}
                 />
+                <div class="rounded-xl border border-tg-border bg-tg-chat p-4 mb-4">
+                  <div class="flex items-center justify-between gap-2 mb-1.5">
+                    <strong class="text-sm text-tg-text">Diagnostics Recorder</strong>
+                    <button
+                      onClick={startDiagnosticsRecording}
+                      disabled={diagnosticsRecorder().status === "recording"}
+                      class="border border-tg-border rounded px-2 py-0.5 text-tg-text text-xs cursor-pointer disabled:opacity-40"
+                    >
+                      {diagnosticsRecorder().status === "recording" ? "Recording..." : "Record 3m"}
+                    </button>
+                  </div>
+                  <p class="text-[10px] text-tg-text-dim mb-2">
+                    Captures app-wide activity: network, group/DM flows, UI transitions, profile sync, errors, and console output.
+                  </p>
+                  <div class="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] text-tg-text font-mono">
+                    <span class="text-tg-text-dim">Status</span>
+                    <span class="capitalize">{diagnosticsRecorder().status}</span>
+                    <span class="text-tg-text-dim">Remaining</span>
+                    <span>
+                      {diagnosticsRecorder().status === "recording"
+                        ? formatDiagnosticsCountdown(diagnosticsRecorder().remainingMs)
+                        : "--"}
+                    </span>
+                    <span class="text-tg-text-dim">Entries</span>
+                    <span>{diagnosticsRecorder().entryCount}</span>
+                    <span class="text-tg-text-dim">Last file</span>
+                    <span>{diagnosticsRecorder().artifact?.filename ?? "--"}</span>
+                    <span class="text-tg-text-dim">File size</span>
+                    <span>{formatDiagnosticsBytes(diagnosticsRecorder().artifact?.sizeBytes ?? null)}</span>
+                  </div>
+                  <Show when={diagnosticsRecorder().status === "ready" && diagnosticsRecorder().artifact}>
+                    <button
+                      onClick={downloadDiagnosticsRecording}
+                      class="mt-2 w-full border border-tg-border rounded px-2 py-1 text-tg-text text-xs cursor-pointer"
+                    >
+                      Download Recording
+                    </button>
+                  </Show>
+                </div>
                 <NetworkPanel
                   networkStatus={networkStatus()}
                   relayPoolState={relayPoolState()}
@@ -2373,15 +2791,6 @@ export const App = () => {
                   dmOutgoingDebug={dmOutgoingDebugRows()}
                   pendingDmDebug={pendingDmDebugRows()}
                   profileSyncDebug={profileSyncDebugRows()}
-                  diagnosticsRecorder={{
-                    status: diagnosticsRecorder().status,
-                    remainingMs: diagnosticsRecorder().remainingMs,
-                    entryCount: diagnosticsRecorder().entryCount,
-                    artifactFilename: diagnosticsRecorder().artifact?.filename ?? null,
-                    artifactSizeBytes: diagnosticsRecorder().artifact?.sizeBytes ?? null,
-                  }}
-                  onStartDiagnosticsRecording={startDiagnosticsRecording}
-                  onDownloadDiagnosticsRecording={downloadDiagnosticsRecording}
                   onAddRelay={handleAddRelay}
                 />
                 <EventLog

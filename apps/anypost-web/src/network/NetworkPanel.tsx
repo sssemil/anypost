@@ -45,15 +45,6 @@ type NetworkPanelProps = {
     readonly connected: boolean;
     readonly lastRequestedAt: number | null;
   }[];
-  readonly diagnosticsRecorder: {
-    readonly status: "idle" | "recording" | "ready";
-    readonly remainingMs: number;
-    readonly entryCount: number;
-    readonly artifactFilename: string | null;
-    readonly artifactSizeBytes: number | null;
-  };
-  readonly onStartDiagnosticsRecording?: () => void;
-  readonly onDownloadDiagnosticsRecording?: () => void;
   readonly onAddRelay?: (addr: string) => void;
 };
 
@@ -115,20 +106,6 @@ const formatLastSeen = (timestamp: number, now = Date.now()): string => {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
-};
-
-const formatCountdown = (ms: number): string => {
-  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-};
-
-const formatBytes = (value: number | null): string => {
-  if (value === null) return "--";
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / (1024 * 1024)).toFixed(2)} MB`;
 };
 
 export const NetworkPanel = (props: NetworkPanelProps) => {
@@ -377,43 +354,6 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                 </div>
               )}
             </Show>
-
-            <div class="mb-3 pb-3 border-b border-tg-border">
-              <div class="flex items-center justify-between gap-2 mb-1.5">
-                <span class="text-tg-text-dim">Diagnostics Recorder</span>
-                <button
-                  onClick={() => props.onStartDiagnosticsRecording?.()}
-                  disabled={props.diagnosticsRecorder.status === "recording" || !props.onStartDiagnosticsRecording}
-                  class="border border-tg-border rounded px-2 py-0.5 text-tg-text text-xs cursor-pointer disabled:opacity-40"
-                >
-                  {props.diagnosticsRecorder.status === "recording" ? "Recording..." : "Record 3m"}
-                </button>
-              </div>
-              <div class="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] text-tg-text">
-                <span class="text-tg-text-dim">Status</span>
-                <span class="capitalize">{props.diagnosticsRecorder.status}</span>
-                <span class="text-tg-text-dim">Remaining</span>
-                <span>
-                  {props.diagnosticsRecorder.status === "recording"
-                    ? formatCountdown(props.diagnosticsRecorder.remainingMs)
-                    : "--"}
-                </span>
-                <span class="text-tg-text-dim">Entries</span>
-                <span>{props.diagnosticsRecorder.entryCount}</span>
-                <span class="text-tg-text-dim">Last file</span>
-                <span>{props.diagnosticsRecorder.artifactFilename ?? "--"}</span>
-                <span class="text-tg-text-dim">File size</span>
-                <span>{formatBytes(props.diagnosticsRecorder.artifactSizeBytes)}</span>
-              </div>
-              <Show when={props.diagnosticsRecorder.status === "ready" && props.onDownloadDiagnosticsRecording}>
-                <button
-                  onClick={() => props.onDownloadDiagnosticsRecording?.()}
-                  class="mt-2 w-full border border-tg-border rounded px-2 py-1 text-tg-text text-xs cursor-pointer"
-                >
-                  Download Recording
-                </button>
-              </Show>
-            </div>
 
             <div class="mb-3 pb-3 border-b border-tg-border">
               <div class="flex items-center gap-2 mb-1.5">
