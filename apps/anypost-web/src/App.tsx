@@ -979,10 +979,22 @@ export const App = () => {
 
       chat.onPeerChange(() => {
         refreshNetworkStatus();
+        const current = chat?.getNetworkStatus();
+        if (current) {
+          for (const peer of current.peers) {
+            maybeRequestProfileSync(peer.peerId);
+          }
+        }
       });
 
       statusInterval = setInterval(() => {
         refreshNetworkStatus();
+        const current = chat?.getNetworkStatus();
+        if (current) {
+          for (const peer of current.peers) {
+            maybeRequestProfileSync(peer.peerId);
+          }
+        }
         const activeId = groupState().activeGroupId;
         if (activeId) syncMessagesFromActionChain(activeId);
       }, 3000);
@@ -1048,6 +1060,7 @@ export const App = () => {
       unsubscribeDirectMessageRequests = chat.onDirectMessageRequest((evt) => {
         if (blockedPeerIds().has(evt.senderPeerId)) return;
         upsertContact(evt.senderPeerId, { groupId: evt.groupId });
+        maybeRequestProfileSync(evt.senderPeerId);
         setDirectMessagePeerForGroup(evt.groupId, evt.senderPeerId);
         upsertPendingDirectMessageRequest(evt);
       });
@@ -1173,6 +1186,11 @@ export const App = () => {
   const targetPeerHasJoinedGroup = (groupId: string, targetPeerId: string): boolean => {
     const chainState = chat?.getActionChainState(groupId);
     if (!chainState) return false;
+    if (chainState.isDirectMessage) {
+      // DM genesis starts with one local owner; consider remote joined only when
+      // chain membership actually grows beyond that.
+      return chainState.members.size >= 2;
+    }
     const map = publicKeyToPeerIdMap();
     for (const member of chainState.members.values()) {
       if (map.get(member.publicKeyHex) === targetPeerId) return true;
