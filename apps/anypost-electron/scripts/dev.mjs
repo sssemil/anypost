@@ -17,6 +17,7 @@ const parseArgs = () => {
   let requestedPort = process.env.ANYPOST_WEB_DEV_PORT
     ? Number(process.env.ANYPOST_WEB_DEV_PORT)
     : undefined;
+  let noSandbox = process.env.ANYPOST_ELECTRON_NO_SANDBOX === "1";
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -39,6 +40,10 @@ const parseArgs = () => {
       requestedPort = Number(arg.slice("--port=".length));
       continue;
     }
+    if (arg === "--no-sandbox") {
+      noSandbox = true;
+      continue;
+    }
     if (arg === "--") continue;
   }
 
@@ -46,6 +51,7 @@ const parseArgs = () => {
   return {
     profile: trimmedProfile.length > 0 ? trimmedProfile : null,
     requestedPort,
+    noSandbox,
   };
 };
 
@@ -134,11 +140,13 @@ const forwardSignals = (children) => {
 };
 
 const main = async () => {
-  const { profile, requestedPort } = parseArgs();
+  const { profile, requestedPort, noSandbox } = parseArgs();
   const port = await pickPort(requestedPort);
   const webUrl = `http://127.0.0.1:${port}`;
 
-  console.log(`[electron-dev] profile=${profile ?? "default"} web=${webUrl}`);
+  console.log(
+    `[electron-dev] profile=${profile ?? "default"} web=${webUrl} noSandbox=${noSandbox ? "yes" : "no"}`,
+  );
 
   await runCommand("pnpm", ["--filter", "anypost-relay", "build"], repoRoot);
   await runCommand("pnpm", ["--filter", "anypost-core", "build"], repoRoot);
@@ -183,6 +191,9 @@ const main = async () => {
   const electronArgs = ["./dist/main/main.js"];
   if (profile) {
     electronArgs.push("--profile", profile);
+  }
+  if (noSandbox) {
+    electronArgs.push("--no-sandbox", "--disable-setuid-sandbox");
   }
 
   const electron = spawn("electron", electronArgs, {

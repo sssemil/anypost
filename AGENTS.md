@@ -13,6 +13,7 @@ Guidance for coding agents working in this repository.
 - Dev web: `./run web`
 - Dev electron: `./run electron`
   - Profiled instance: `./run electron alice`
+  - If Linux sandbox blocks launch locally: `./run electron alice --no-sandbox`
 - Build all: `./run build`
 - Test all: `./run test`
 - Typecheck all: `./run typecheck`

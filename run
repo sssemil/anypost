@@ -49,9 +49,10 @@ cmd_electron() {
   shift || true
   local profile="${1:-}"
   if [[ -n "$profile" ]]; then
-    ANYPOST_PROFILE="$profile" pnpm --filter anypost-electron run dev -- --profile "$profile"
+    shift || true
+    ANYPOST_PROFILE="$profile" pnpm --filter anypost-electron run dev -- --profile "$profile" "$@"
   else
-    pnpm --filter anypost-electron run dev
+    pnpm --filter anypost-electron run dev -- "$@"
   fi
 }
 
@@ -116,7 +117,7 @@ fi
 case "$1" in
   relay)     cmd_relay ;;
   web)       cmd_web ;;
-  electron)  cmd_electron ;;
+  electron)  cmd_electron "$@" ;;
   dev)       cmd_dev ;;
   e2e-record) cmd_e2e_record "$@" ;;
   e2e-dm-refresh) cmd_e2e_dm_refresh "$@" ;;
