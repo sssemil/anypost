@@ -390,6 +390,7 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                   const query = peerSearch().toLowerCase();
                   const filtered = query
                     ? status().peers.filter((p) =>
+                        (props.contactsBook.get(p.peerId)?.nickname?.toLowerCase().includes(query) ?? false) ||
                         (props.contactsBook.get(p.peerId)?.selfName?.toLowerCase().includes(query) ?? false) ||
                         p.peerId.toLowerCase().includes(query) ||
                         p.addrs.some((a) => a.toLowerCase().includes(query))
@@ -406,7 +407,8 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                             <div class="flex justify-between items-center">
                               <div class="flex items-center gap-1.5">
                                 {(() => {
-                                  const contactName = props.contactsBook.get(peer.peerId)?.selfName;
+                                  const contact = props.contactsBook.get(peer.peerId);
+                                  const contactName = contact?.nickname ?? contact?.selfName;
                                   if (!contactName) {
                                     return <code class="font-bold text-tg-text">{peer.peerId.slice(0, 20)}...</code>;
                                   }
@@ -505,7 +507,9 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                     .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
                     .filter((contact) =>
                       query.length === 0 ||
+                      (contact.nickname?.toLowerCase().includes(query) ?? false) ||
                       (contact.selfName?.toLowerCase().includes(query) ?? false) ||
+                      contact.seenSelfNames.some((name) => name.toLowerCase().includes(query)) ||
                       contact.peerId.toLowerCase().includes(query) ||
                       contact.groupIds.some((groupId) => groupId.toLowerCase().includes(query))
                     );
@@ -527,7 +531,7 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                                   }}
                                 />
                                 <span class="text-tg-text font-semibold truncate">
-                                  {contact.selfName ?? "(unknown name)"}
+                                  {contact.nickname ?? contact.selfName ?? "(unknown name)"}
                                 </span>
                               </div>
                               <span class="text-[10px] text-tg-text-dim shrink-0">

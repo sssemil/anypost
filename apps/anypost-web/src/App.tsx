@@ -63,6 +63,7 @@ import { MessageInput } from "./chat/MessageInput.js";
 import { NetworkPanel } from "./network/NetworkPanel.js";
 import { EventLog } from "./network/EventLog.js";
 import { GroupInfoPanel } from "./chat/GroupInfoPanel.js";
+import { ContactsBookPage } from "./contacts/ContactsBookPage.js";
 import type { PendingJoinRequest, InviteCreateOptions } from "./chat/GroupInfoPanel.js";
 import {
   createMobileViewState,
@@ -86,6 +87,7 @@ const RELAY_HINTS_STORAGE_KEY = "anypost:relay-hints";
 const MAX_EVENTS = 200;
 const SYSTEM_SENDER_ID = "__system__";
 const CONTACTS_LAST_SEEN_UPDATE_MS = 60_000;
+const CONTACTS_SELF_NAME_HISTORY_LIMIT = 12;
 
 const hexToBytes = (hex: string): Uint8Array<ArrayBuffer> => {
   const buf = new ArrayBuffer(hex.length / 2);
@@ -261,6 +263,11 @@ export const App = () => {
     setContactsBook((prev) => {
       const existing = prev.get(peerId);
       const nextName = incomingName ?? existing?.selfName ?? null;
+      const existingSeenSelfNames = existing?.seenSelfNames ?? (existing?.selfName ? [existing.selfName] : []);
+      const nextSeenSelfNames = incomingName
+        ? [incomingName, ...existingSeenSelfNames.filter((name) => name !== incomingName)]
+            .slice(0, CONTACTS_SELF_NAME_HISTORY_LIMIT)
+        : existingSeenSelfNames;
 
       const baseGroupIds = existing?.groupIds ?? [];
       const nextGroupIds = incomingGroupId && !baseGroupIds.includes(incomingGroupId)
@@ -279,6 +286,8 @@ export const App = () => {
       if (
         existing &&
         existing.selfName === nextName &&
+        existing.seenSelfNames.length === nextSeenSelfNames.length &&
+        existing.seenSelfNames.every((name, idx) => name === nextSeenSelfNames[idx]) &&
         existing.lastSeenAt === nextLastSeenAt &&
         existing.groupIds.length === nextGroupIds.length &&
         existing.groupIds.every((groupId, idx) => groupId === nextGroupIds[idx])
@@ -289,10 +298,27 @@ export const App = () => {
       const next = new Map(prev);
       next.set(peerId, {
         peerId,
+        nickname: existing?.nickname ?? null,
         selfName: nextName,
+        seenSelfNames: nextSeenSelfNames,
         lastSeenAt: nextLastSeenAt,
         groupIds: nextGroupIds,
       });
+      persistContactsBook(next);
+      return next;
+    });
+  };
+
+  const handleSetContactNickname = (peerId: string, nickname: string | null) => {
+    if (!peerId || peerId === SYSTEM_SENDER_ID) return;
+    const trimmed = nickname?.trim() ?? "";
+    const normalizedNickname = trimmed.length > 0 ? trimmed : null;
+
+    setContactsBook((prev) => {
+      const existing = prev.get(peerId);
+      if (!existing || existing.nickname === normalizedNickname) return prev;
+      const next = new Map(prev);
+      next.set(peerId, { ...existing, nickname: normalizedNickname });
       persistContactsBook(next);
       return next;
     });
@@ -353,11 +379,12 @@ export const App = () => {
       (groupState().groups.get(groupId)?.messages ?? []).map((m) => m.id),
     );
     const pubKeyMap = publicKeyToPeerIdMap();
-    const memberLabelFromPublicKey = (publicKey: Uint8Array): string => {
+      const memberLabelFromPublicKey = (publicKey: Uint8Array): string => {
       const memberHex = toHex(publicKey);
       const memberPeerId = pubKeyMap.get(memberHex);
       if (memberPeerId) {
-        const knownName = contactsBook().get(memberPeerId)?.selfName;
+        const contact = contactsBook().get(memberPeerId);
+        const knownName = contact?.nickname ?? contact?.selfName;
         if (knownName) return knownName;
         return `${memberPeerId.slice(0, 12)}...${memberPeerId.slice(-6)}`;
       }
@@ -1235,6 +1262,7 @@ export const App = () => {
                 showBackButton={mobileView().currentView === "chat"}
                 onBackPress={() => dispatchMobileView({ type: "back-pressed" })}
                 onDevDrawerToggle={() => dispatchMobileView({ type: "dev-drawer-toggled" })}
+                onContactsToggle={() => dispatchMobileView({ type: "contacts-toggled" })}
                 onGroupInfoToggle={() => dispatchMobileView({ type: "group-info-toggled" })}
               />
             }
@@ -1334,6 +1362,14 @@ export const App = () => {
                 onRenameGroup={isCurrentUserAdmin() ? handleRenameGroup : null}
               />
             }
+            contactsContent={
+              <ContactsBookPage
+                contactsBook={contactsBook()}
+                connectedPeerIds={connectedPeerIds()}
+                latencyMap={latencyMap()}
+                onSetNickname={handleSetContactNickname}
+              />
+            }
             mobileView={mobileView().currentView}
             rightPanel={mobileView().rightPanel}
             onRightPanelClose={() => {
@@ -1342,6 +1378,8 @@ export const App = () => {
                 dispatchMobileView({ type: "dev-drawer-closed" });
               } else if (panel === "group-info") {
                 dispatchMobileView({ type: "group-info-closed" });
+              } else if (panel === "contacts") {
+                dispatchMobileView({ type: "contacts-closed" });
               }
             }}
           />

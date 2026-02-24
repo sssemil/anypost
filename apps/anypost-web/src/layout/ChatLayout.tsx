@@ -9,6 +9,7 @@ type ChatLayoutProps = {
   readonly messageInput: JSX.Element;
   readonly devDrawerContent: JSX.Element;
   readonly groupInfoContent: JSX.Element;
+  readonly contactsContent: JSX.Element;
   readonly mobileView: "group-list" | "chat";
   readonly rightPanel: RightPanel;
   readonly onRightPanelClose: () => void;
@@ -17,6 +18,7 @@ type ChatLayoutProps = {
 const PANEL_TITLES: Record<Exclude<RightPanel, "none">, string> = {
   "dev-tools": "Developer Tools",
   "group-info": "Group Info",
+  "contacts": "Contacts",
 };
 
 export const ChatLayout = (props: ChatLayoutProps) => {
@@ -71,6 +73,9 @@ export const ChatLayout = (props: ChatLayoutProps) => {
                 </Match>
                 <Match when={props.rightPanel === "group-info"}>
                   {props.groupInfoContent}
+                </Match>
+                <Match when={props.rightPanel === "contacts"}>
+                  {props.contactsContent}
                 </Match>
               </Switch>
             </div>

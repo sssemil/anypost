@@ -20,7 +20,9 @@ const CONTACTS_BOOK_KEY = "contactsBook";
 
 export type ContactBookEntry = {
   readonly peerId: string;
+  readonly nickname: string | null;
   readonly selfName: string | null;
+  readonly seenSelfNames: readonly string[];
   readonly lastSeenAt: number;
   readonly groupIds: readonly string[];
 };
@@ -210,12 +212,16 @@ const decodeContactsBook = (value: string): ContactsBook => {
       if (typeof peerId !== "string" || typeof rawValue !== "object" || rawValue === null) continue;
 
       const valueObj = rawValue as Record<string, unknown>;
+      const nicknameRaw = valueObj.nickname;
       const selfNameRaw = valueObj.selfName;
+      const seenSelfNamesRaw = valueObj.seenSelfNames;
       const lastSeenAt = valueObj.lastSeenAt;
       const groupIdsRaw = valueObj.groupIds;
 
       if (
+        !(nicknameRaw === undefined || nicknameRaw === null || typeof nicknameRaw === "string") ||
         !(selfNameRaw === null || typeof selfNameRaw === "string") ||
+        !(seenSelfNamesRaw === undefined || Array.isArray(seenSelfNamesRaw)) ||
         typeof lastSeenAt !== "number" ||
         !Number.isFinite(lastSeenAt) ||
         !Array.isArray(groupIdsRaw)
@@ -223,14 +229,30 @@ const decodeContactsBook = (value: string): ContactsBook => {
         continue;
       }
 
+      const nickname = typeof nicknameRaw === "string" && nicknameRaw.trim().length > 0
+        ? nicknameRaw.trim()
+        : null;
       const selfName = typeof selfNameRaw === "string" && selfNameRaw.trim().length > 0
         ? selfNameRaw.trim()
         : null;
+      const seenSelfNames = [
+        ...new Set(
+          (seenSelfNamesRaw ?? [])
+            .filter((name): name is string => typeof name === "string")
+            .map((name) => name.trim())
+            .filter((name) => name.length > 0),
+        ),
+      ];
+      if (seenSelfNames.length === 0 && selfName) {
+        seenSelfNames.push(selfName);
+      }
       const groupIds = [...new Set(groupIdsRaw.filter((g): g is string => typeof g === "string" && g.length > 0))];
 
       contacts.set(peerId, {
         peerId,
+        nickname,
         selfName,
+        seenSelfNames,
         lastSeenAt,
         groupIds,
       });
@@ -245,7 +267,9 @@ const encodeContactsBook = (contacts: ContactsBook): string =>
   JSON.stringify([...contacts.entries()].map(([peerId, entry]) => [
     peerId,
     {
+      nickname: entry.nickname,
       selfName: entry.selfName,
+      seenSelfNames: [...entry.seenSelfNames],
       lastSeenAt: entry.lastSeenAt,
       groupIds: [...entry.groupIds],
     },

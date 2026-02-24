@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import "fake-indexeddb/auto";
+import { openDB } from "idb";
 import { openAccountStore } from "./account-store.js";
 import { generateAccountKey } from "../crypto/identity.js";
 import type { JoinRetryState } from "../protocol/join-retry-queue.js";
@@ -356,13 +357,17 @@ describe("Account Store", () => {
         const original: ContactsBook = new Map([
           ["12D3KooWPeerA", {
             peerId: "12D3KooWPeerA",
+            nickname: "ali",
             selfName: "Alice",
+            seenSelfNames: ["Alice", "Alice Cooper"],
             lastSeenAt: 1_000,
             groupIds: ["group-a", "group-b"],
           }],
           ["12D3KooWPeerB", {
             peerId: "12D3KooWPeerB",
+            nickname: null,
             selfName: null,
+            seenSelfNames: [],
             lastSeenAt: 2_000,
             groupIds: ["group-a"],
           }],
@@ -382,7 +387,9 @@ describe("Account Store", () => {
       const original: ContactsBook = new Map([
         ["12D3KooWPeerA", {
           peerId: "12D3KooWPeerA",
+          nickname: null,
           selfName: "Alice",
+          seenSelfNames: ["Alice"],
           lastSeenAt: 4_000,
           groupIds: ["group-z"],
         }],
@@ -394,6 +401,39 @@ describe("Account Store", () => {
       try {
         const retrieved = await store2.getContactsBook();
         expect(retrieved).toEqual(original);
+      } finally {
+        await store2.destroy();
+      }
+    });
+
+    it("should decode legacy contacts entries without nickname/name history", async () => {
+      const store = await openAccountStore();
+      store.close();
+
+      const rawDb = await openDB("anypost:account", 1);
+      try {
+        await rawDb.put("account", JSON.stringify([
+          ["12D3KooWPeerLegacy", {
+            selfName: "Legacy Name",
+            lastSeenAt: 9_000,
+            groupIds: ["group-a"],
+          }],
+        ]), "contactsBook");
+      } finally {
+        rawDb.close();
+      }
+
+      const store2 = await openAccountStore();
+      try {
+        const contacts = await store2.getContactsBook();
+        expect(contacts.get("12D3KooWPeerLegacy")).toEqual({
+          peerId: "12D3KooWPeerLegacy",
+          nickname: null,
+          selfName: "Legacy Name",
+          seenSelfNames: ["Legacy Name"],
+          lastSeenAt: 9_000,
+          groupIds: ["group-a"],
+        });
       } finally {
         await store2.destroy();
       }

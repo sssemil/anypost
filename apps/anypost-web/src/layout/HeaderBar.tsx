@@ -9,6 +9,7 @@ type HeaderBarProps = {
   readonly showBackButton: boolean;
   readonly onBackPress: () => void;
   readonly onDevDrawerToggle: () => void;
+  readonly onContactsToggle: () => void;
   readonly onGroupInfoToggle: () => void;
 };
 
@@ -80,6 +81,19 @@ export const HeaderBar = (props: HeaderBarProps) => {
           <span class="text-tg-accent text-[10px]">{copied() ? "Copied!" : "Copy"}</span>
         </button>
       </Show>
+
+      <button
+        class="text-tg-text-dim hover:text-tg-text p-1 shrink-0"
+        onClick={() => props.onContactsToggle()}
+        title="Contacts"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5">
+          <path d="M17 21v-2a4 4 0 00-4-4H7a4 4 0 00-4 4v2" />
+          <circle cx="10" cy="7" r="3" />
+          <path d="M21 8v6" />
+          <path d="M18 11h6" />
+        </svg>
+      </button>
 
       <button
         class="text-tg-text-dim hover:text-tg-text p-1 shrink-0"
