@@ -19,6 +19,8 @@ Guidance for coding agents working in this repository.
 ## Integration Tests (Browser / IPFS)
 - DM no-relay integration:
   - `pnpm --filter anypost-web run e2e:dm-no-relay-ipfs`
+- DM refresh continuity integration:
+  - `pnpm --filter anypost-web run e2e:dm-refresh-ipfs`
 - Reliability soak runner:
   - `pnpm --filter anypost-web run e2e:soak -- --iterations 10`
 
@@ -36,4 +38,3 @@ When changing protocol, sync, invite, membership, DM, or discovery behavior:
 ## CI Expectations
 - `ci.yml` runs unit/integration tests and headless validation.
 - `soak.yml` runs scheduled/manual soak iterations with artifacts upload.
-

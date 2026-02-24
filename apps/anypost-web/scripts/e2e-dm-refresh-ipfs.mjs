@@ -1,0 +1,445 @@
+#!/usr/bin/env node
+
+import { chromium } from "playwright";
+import { spawn } from "node:child_process";
+import path from "node:path";
+import process from "node:process";
+import { fileURLToPath } from "node:url";
+
+const DEFAULT_BASE_URL = "http://127.0.0.1:5173";
+
+const scriptPath = fileURLToPath(import.meta.url);
+const scriptDir = path.dirname(scriptPath);
+const webDir = path.resolve(scriptDir, "..");
+const repoRoot = path.resolve(webDir, "../..");
+
+const parseArgs = () => {
+  const args = process.argv.slice(2);
+  const out = {
+    baseUrl: DEFAULT_BASE_URL,
+    noServer: false,
+    headed: false,
+  };
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    const next = args[i + 1];
+    if (arg === "--url" && next) {
+      out.baseUrl = next;
+      i += 1;
+      continue;
+    }
+    if (arg === "--no-server") {
+      out.noServer = true;
+      continue;
+    }
+    if (arg === "--headed") {
+      out.headed = true;
+      continue;
+    }
+    if (arg === "--") continue;
+    throw new Error(`Unknown or incomplete arg: ${arg}`);
+  }
+
+  return out;
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const log = (message) => {
+  const stamp = new Date().toISOString().slice(11, 19);
+  console.log(`[dm-refresh ${stamp}] ${message}`);
+};
+
+const waitForHttp = async (url, timeoutMs) => {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const res = await fetch(url, { method: "GET" });
+      if (res.ok) return;
+    } catch {
+      // Keep polling.
+    }
+    await sleep(500);
+  }
+  throw new Error(`Timed out waiting for ${url}`);
+};
+
+const runCommand = (cmd, args, cwd) =>
+  new Promise((resolve, reject) => {
+    const proc = spawn(cmd, args, {
+      cwd,
+      stdio: "inherit",
+      env: process.env,
+    });
+    proc.on("error", reject);
+    proc.on("exit", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`${cmd} ${args.join(" ")} failed with exit code ${code}`));
+      }
+    });
+  });
+
+const startWebServer = async (baseUrl) => {
+  log("Building anypost-core...");
+  await runCommand("pnpm", ["--filter", "anypost-core", "build"], repoRoot);
+
+  log("Starting Vite dev server...");
+  const proc = spawn(
+    "pnpm",
+    ["--filter", "anypost-web", "exec", "vite", "--host", "127.0.0.1", "--port", "5173"],
+    {
+      cwd: repoRoot,
+      stdio: "inherit",
+      env: process.env,
+    },
+  );
+
+  await waitForHttp(baseUrl, 60_000);
+  log("Dev server is reachable.");
+  return proc;
+};
+
+const isVisible = async (locator, timeout = 1200) => {
+  try {
+    await locator.first().waitFor({ state: "visible", timeout });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const ensureAccountReady = async (page, displayName) => {
+  const createAccountButton = page.getByRole("button", { name: "Create New Account" });
+  if (await isVisible(createAccountButton, 2500)) {
+    await createAccountButton.click();
+  }
+
+  const displayInput = page.getByPlaceholder("Enter your display name...");
+  if (await isVisible(displayInput, 10_000)) {
+    await displayInput.fill(displayName);
+    await page.getByRole("button", { name: "Continue" }).click();
+  }
+
+  await page.getByRole("button", { name: "Create" }).first().waitFor({ state: "visible", timeout: 90_000 });
+};
+
+const openMenu = async (page) => {
+  await page.getByTitle("Menu").click();
+};
+
+const openDevTools = async (page) => {
+  if (await isVisible(page.getByText("Developer Tools", { exact: true }), 800)) return;
+  await openMenu(page);
+  await page.getByRole("button", { name: "Developer Tools" }).click();
+  await page.getByText("Developer Tools", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+};
+
+const getOwnPeerId = async (page, label) => {
+  await openDevTools(page);
+  const networkPanel = page.locator("div.rounded-xl:has(strong:has-text(\"Network\"))").first();
+  await networkPanel.waitFor({ state: "visible", timeout: 10_000 });
+  const text = await networkPanel.innerText();
+  const match = text.match(/PeerId\s+([1-9A-HJ-NP-Za-km-z]{32,})/);
+  if (!match) throw new Error(`${label}: failed to parse own peer ID from Network panel`);
+  return match[1];
+};
+
+const connectPeer = async (page, targetPeerId, label) => {
+  await openDevTools(page);
+  const peerPanel = page.locator("div.rounded-xl:has(strong:has-text(\"Peer Sharing\"))").first();
+  await peerPanel.waitFor({ state: "visible", timeout: 10_000 });
+  const connectInput = peerPanel.getByPlaceholder("12D3KooW...").first();
+  await connectInput.fill(targetPeerId);
+  await peerPanel.getByRole("button", { name: "Find & Connect" }).first().click();
+  log(`${label}: Find & Connect -> ${targetPeerId.slice(0, 12)}...`);
+};
+
+const ensurePeerConnection = async (page, targetPeerId, label, timeoutMs = 60_000) => {
+  await openDevTools(page);
+  const peerPanel = page.locator("div.rounded-xl:has(strong:has-text(\"Peer Sharing\"))").first();
+  await peerPanel.waitFor({ state: "visible", timeout: 10_000 });
+  const connectInput = peerPanel.getByPlaceholder("12D3KooW...").first();
+  const checkInput = peerPanel.getByPlaceholder("12D3KooW...").nth(1);
+  const checkButton = peerPanel.getByRole("button", { name: "Check" }).first();
+  const findAndConnectButton = peerPanel.getByRole("button", { name: "Find & Connect" }).first();
+  const connectedText = peerPanel.getByText("Connected to", { exact: false }).first();
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await checkInput.fill(targetPeerId);
+    await checkButton.click();
+    if (await isVisible(connectedText, 1200)) {
+      log(`${label}: confirmed connected -> ${targetPeerId.slice(0, 12)}...`);
+      return;
+    }
+    await connectInput.fill(targetPeerId);
+    await findAndConnectButton.click();
+    await sleep(2_000);
+  }
+  throw new Error(`${label}: timed out waiting for connection to ${targetPeerId}`);
+};
+
+const startDm = async (page, targetPeerId) => {
+  const input = page.getByPlaceholder("Peer ID...").first();
+  await input.fill(targetPeerId);
+  await page.getByRole("button", { name: "Chat" }).first().click();
+};
+
+const acceptDmWithRetry = async (
+  alicePage,
+  bobPage,
+  alicePeerId,
+  bobPeerId,
+  attempts = 18,
+) => {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    await startDm(bobPage, alicePeerId);
+    await startDm(alicePage, bobPeerId);
+    const acceptBtn = alicePage.getByRole("button", { name: "Accept" }).first();
+    if (await isVisible(acceptBtn, 4_000)) {
+      await acceptBtn.click();
+      log(`Alice: accepted DM request on attempt ${attempt}`);
+      return;
+    }
+    log(`Alice: DM accept not visible yet (attempt ${attempt}/${attempts})`);
+    await sleep(1_500);
+  }
+  throw new Error("Timed out waiting for DM request acceptance UI");
+};
+
+const openGroupInfo = async (page) => {
+  const groupInfoTitle = page.getByText("Group Info", { exact: true });
+  if (await isVisible(groupInfoTitle, 1000)) return;
+  const headerGroupButton = page.locator("div.bg-tg-header button.flex.flex-col").first();
+  await headerGroupButton.click();
+  await groupInfoTitle.waitFor({ state: "visible", timeout: 10_000 });
+};
+
+const waitForMembersCount = async (page, expectedCount, label, timeoutMs = 90_000) => {
+  await openGroupInfo(page);
+  const membersHeader = page.getByText(`MEMBERS (${expectedCount})`, { exact: false }).first();
+  await membersHeader.waitFor({ state: "visible", timeout: timeoutMs });
+  log(`${label}: MEMBERS (${expectedCount}) is visible`);
+};
+
+const sendMessage = async (page, text) => {
+  const input = page.getByPlaceholder("Type a message...").first();
+  await input.waitFor({ state: "visible", timeout: 10_000 });
+  await input.fill(text);
+  await input.press("Enter");
+};
+
+const waitForMessage = async (page, text, timeoutMs) => {
+  try {
+    await page.getByText(text, { exact: true }).first().waitFor({ state: "visible", timeout: timeoutMs });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const sendAndWaitWithRetry = async (
+  senderPage,
+  senderLabel,
+  senderTargetPeerId,
+  receiverPage,
+  receiverLabel,
+  receiverTargetPeerId,
+  textPrefix,
+  attempts = 6,
+) => {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const text = `${textPrefix}-${attempt}-${Date.now()}`;
+    await startDm(senderPage, senderTargetPeerId);
+    await startDm(receiverPage, receiverTargetPeerId);
+    await sendMessage(senderPage, text);
+
+    if (await waitForMessage(receiverPage, text, 12_000)) {
+      log(`${senderLabel} -> ${receiverLabel} delivered on attempt ${attempt}`);
+      return text;
+    }
+    log(`${senderLabel} -> ${receiverLabel} not delivered yet (attempt ${attempt}/${attempts})`);
+    await sleep(1_500);
+  }
+  throw new Error(`Timed out delivering ${senderLabel} -> ${receiverLabel} message`);
+};
+
+const main = async () => {
+  const options = parseArgs();
+
+  let serverProc;
+  const closeServer = () => {
+    if (serverProc && !serverProc.killed) serverProc.kill("SIGTERM");
+  };
+
+  process.on("SIGINT", () => {
+    closeServer();
+    process.exit(130);
+  });
+  process.on("SIGTERM", () => {
+    closeServer();
+    process.exit(143);
+  });
+
+  if (!options.noServer) {
+    serverProc = await startWebServer(options.baseUrl);
+  } else {
+    await waitForHttp(options.baseUrl, 10_000);
+  }
+
+  const browser = await chromium.launch({ headless: !options.headed });
+  try {
+    const aliceContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const bobContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+
+    const alice = await aliceContext.newPage();
+    const bob = await bobContext.newPage();
+
+    log("Opening Alice/Bob pages...");
+    await Promise.all([
+      alice.goto(options.baseUrl, { waitUntil: "domcontentloaded" }),
+      bob.goto(options.baseUrl, { waitUntil: "domcontentloaded" }),
+    ]);
+
+    log("Bootstrapping accounts...");
+    await Promise.all([
+      ensureAccountReady(alice, "Alice"),
+      ensureAccountReady(bob, "Bob"),
+    ]);
+
+    const [alicePeerId, bobPeerId] = await Promise.all([
+      getOwnPeerId(alice, "Alice"),
+      getOwnPeerId(bob, "Bob"),
+    ]);
+    log(`Alice peer ID: ${alicePeerId}`);
+    log(`Bob peer ID:   ${bobPeerId}`);
+
+    await Promise.all([
+      connectPeer(alice, bobPeerId, "Alice"),
+      connectPeer(bob, alicePeerId, "Bob"),
+    ]);
+    await Promise.all([
+      ensurePeerConnection(alice, bobPeerId, "Alice"),
+      ensurePeerConnection(bob, alicePeerId, "Bob"),
+    ]);
+
+    log("Starting DM flow...");
+    await acceptDmWithRetry(alice, bob, alicePeerId, bobPeerId);
+    await Promise.all([
+      waitForMembersCount(alice, 2, "Alice"),
+      waitForMembersCount(bob, 2, "Bob"),
+    ]);
+
+    log("Exchanging pre-refresh messages...");
+    await sendAndWaitWithRetry(
+      bob,
+      "Bob",
+      alicePeerId,
+      alice,
+      "Alice",
+      bobPeerId,
+      "dm-refresh-pre-bob1",
+    );
+    await sendAndWaitWithRetry(
+      alice,
+      "Alice",
+      bobPeerId,
+      bob,
+      "Bob",
+      alicePeerId,
+      "dm-refresh-pre-alice1",
+    );
+    await sendAndWaitWithRetry(
+      bob,
+      "Bob",
+      alicePeerId,
+      alice,
+      "Alice",
+      bobPeerId,
+      "dm-refresh-pre-bob2",
+    );
+
+    log("Reloading both pages...");
+    await Promise.all([
+      alice.reload({ waitUntil: "domcontentloaded" }),
+      bob.reload({ waitUntil: "domcontentloaded" }),
+    ]);
+
+    await Promise.all([
+      ensureAccountReady(alice, "Alice"),
+      ensureAccountReady(bob, "Bob"),
+    ]);
+
+    const [alicePeerIdAfterRefresh, bobPeerIdAfterRefresh] = await Promise.all([
+      getOwnPeerId(alice, "Alice"),
+      getOwnPeerId(bob, "Bob"),
+    ]);
+    if (alicePeerIdAfterRefresh !== alicePeerId) {
+      throw new Error("Alice peer ID changed after refresh");
+    }
+    if (bobPeerIdAfterRefresh !== bobPeerId) {
+      throw new Error("Bob peer ID changed after refresh");
+    }
+
+    await Promise.all([
+      connectPeer(alice, bobPeerId, "Alice"),
+      connectPeer(bob, alicePeerId, "Bob"),
+    ]);
+    await Promise.all([
+      ensurePeerConnection(alice, bobPeerId, "Alice"),
+      ensurePeerConnection(bob, alicePeerId, "Bob"),
+    ]);
+
+    log("Re-opening DM and validating history after refresh...");
+    await Promise.all([
+      startDm(alice, bobPeerId),
+      startDm(bob, alicePeerId),
+    ]);
+    await sleep(1_000);
+
+    log("Exchanging post-refresh messages...");
+    await sendAndWaitWithRetry(
+      alice,
+      "Alice",
+      bobPeerId,
+      bob,
+      "Bob",
+      alicePeerId,
+      "dm-refresh-post-alice1",
+    );
+    await sendAndWaitWithRetry(
+      bob,
+      "Bob",
+      alicePeerId,
+      alice,
+      "Alice",
+      bobPeerId,
+      "dm-refresh-post-bob1",
+    );
+    await sendAndWaitWithRetry(
+      alice,
+      "Alice",
+      bobPeerId,
+      bob,
+      "Bob",
+      alicePeerId,
+      "dm-refresh-post-alice2",
+    );
+
+    log("Validation passed: DM survives page refresh and conversation continues.");
+
+    await aliceContext.close();
+    await bobContext.close();
+  } finally {
+    await browser.close();
+    closeServer();
+  }
+};
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

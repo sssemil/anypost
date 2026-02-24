@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "e2e:record": "node ./scripts/e2e-headless-recording.mjs",
     "e2e:dm-no-relay-ipfs": "node ./scripts/e2e-dm-no-relay-ipfs.mjs",
+    "e2e:dm-refresh-ipfs": "node ./scripts/e2e-dm-refresh-ipfs.mjs",
     "e2e:soak": "node ./scripts/e2e-soak.mjs"
   },
   "dependencies": {

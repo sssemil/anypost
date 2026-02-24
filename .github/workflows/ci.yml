@@ -51,6 +51,9 @@ jobs:
       - name: Run DM No-Relay Browser Integration
         run: pnpm --filter anypost-web run e2e:dm-no-relay-ipfs
 
+      - name: Run DM Refresh Browser Integration
+        run: pnpm --filter anypost-web run e2e:dm-refresh-ipfs
+
       - name: Run Headless Validation
         run: pnpm --filter anypost-web run e2e:record -- --out-dir artifacts/headless-recordings/ci --record-wait-ms 120000 --settle-ms 5000
 
