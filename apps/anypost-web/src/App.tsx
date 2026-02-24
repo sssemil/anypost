@@ -10,6 +10,7 @@ import {
   hasGroup,
   toHex,
   encodeGroupInvite,
+  decodeGroupInvite,
   createInviteGrant,
   verifyAndDecodeAction,
   isValidPeerId,
@@ -31,6 +32,7 @@ import type {
   JoinRetryState,
   SyncProgressState,
   JoinPolicy,
+  DirectMessageRequestEvent,
 } from "anypost-core/protocol";
 import { getCandidatesByRtt } from "anypost-core/protocol";
 import {
@@ -95,6 +97,7 @@ const ACTION_CHAINS_STORAGE_KEY = "anypost:action-chains";
 const PUBKEY_PEERID_STORAGE_KEY = "anypost:pubkey-peerid";
 const PENDING_JOINS_STORAGE_KEY = "anypost:pending-joins";
 const RELAY_HINTS_STORAGE_KEY = "anypost:relay-hints";
+const PENDING_DM_REQUESTS_STORAGE_KEY = "anypost:pending-dm-requests";
 const MAX_EVENTS = 200;
 const SYSTEM_SENDER_ID = "__system__";
 const CONTACTS_LAST_SEEN_UPDATE_MS = 60_000;
@@ -111,6 +114,15 @@ const hexToBytes = (hex: string): Uint8Array<ArrayBuffer> => {
 
 type SerializedPendingJoin = {
   readonly publicKeyHex: string;
+};
+
+type PendingDirectMessageRequest = {
+  readonly requestId: string;
+  readonly senderPeerId: string;
+  readonly groupId: string;
+  readonly groupName: string;
+  readonly inviteCode: string;
+  readonly sentAt: number;
 };
 
 const loadPublicKeyToPeerId = (): ReadonlyMap<string, string> => {
@@ -155,6 +167,30 @@ const savePendingJoins = (map: ReadonlyMap<string, readonly PendingJoinRequest[]
     result[groupId] = entries.map((e) => ({ publicKeyHex: e.publicKeyHex }));
   }
   localStorage.setItem(PENDING_JOINS_STORAGE_KEY, JSON.stringify(result));
+};
+
+const loadPendingDirectMessageRequests = (): readonly PendingDirectMessageRequest[] => {
+  try {
+    const json = localStorage.getItem(PENDING_DM_REQUESTS_STORAGE_KEY);
+    if (!json) return [];
+    const parsed = JSON.parse(json) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry): entry is PendingDirectMessageRequest =>
+      typeof entry === "object" &&
+      entry !== null &&
+      typeof (entry as Record<string, unknown>).requestId === "string" &&
+      typeof (entry as Record<string, unknown>).senderPeerId === "string" &&
+      typeof (entry as Record<string, unknown>).groupId === "string" &&
+      typeof (entry as Record<string, unknown>).groupName === "string" &&
+      typeof (entry as Record<string, unknown>).inviteCode === "string" &&
+      typeof (entry as Record<string, unknown>).sentAt === "number");
+  } catch {
+    return [];
+  }
+};
+
+const savePendingDirectMessageRequests = (requests: readonly PendingDirectMessageRequest[]) => {
+  localStorage.setItem(PENDING_DM_REQUESTS_STORAGE_KEY, JSON.stringify(requests));
 };
 
 const loadRelayHints = (): readonly string[] => {
@@ -235,11 +271,15 @@ export const App = () => {
   const [contactsBook, setContactsBook] = createSignal<ContactsBook>(new Map());
   const [blockedPeerIds, setBlockedPeerIds] = createSignal<ReadonlySet<string>>(new Set());
   const [directMessagePeersByGroup, setDirectMessagePeersByGroup] = createSignal<ReadonlyMap<string, string>>(loadDirectMessagePeers());
+  const [pendingDirectMessageRequests, setPendingDirectMessageRequests] = createSignal<readonly PendingDirectMessageRequest[]>(
+    loadPendingDirectMessageRequests(),
+  );
 
   let chat: MultiGroupChat | undefined;
   let unsubscribeMessage: (() => void) | undefined;
   let unsubscribeEvents: (() => void) | undefined;
   let unsubscribeJoinRequests: (() => void) | undefined;
+  let unsubscribeDirectMessageRequests: (() => void) | undefined;
   let statusInterval: ReturnType<typeof setInterval> | undefined;
   let pingInterval: ReturnType<typeof setInterval> | undefined;
 
@@ -271,6 +311,12 @@ export const App = () => {
 
   const persistDirectMessagePeersByGroup = (dmPeers: ReadonlyMap<string, string>) => {
     saveDirectMessagePeers(dmPeers);
+  };
+
+  const persistPendingDirectMessageRequests = (
+    requests: readonly PendingDirectMessageRequest[],
+  ) => {
+    savePendingDirectMessageRequests(requests);
   };
 
   const upsertContact = (
@@ -842,6 +888,10 @@ export const App = () => {
           refreshActionChainState();
           syncMessagesFromActionChain(groupId);
         },
+        getDisplayName: () => displayName() || undefined,
+        onProfileAnnounce: (peerId, announcedName) => {
+          upsertContact(peerId, { selfName: announcedName });
+        },
       });
 
       setChatStatus("connected");
@@ -928,6 +978,13 @@ export const App = () => {
           return updated;
         });
       });
+
+      unsubscribeDirectMessageRequests = chat.onDirectMessageRequest((evt) => {
+        if (blockedPeerIds().has(evt.senderPeerId)) return;
+        upsertContact(evt.senderPeerId, { groupId: evt.groupId });
+        setDirectMessagePeerForGroup(evt.groupId, evt.senderPeerId);
+        upsertPendingDirectMessageRequest(evt);
+      });
     } catch {
       setChatStatus("disconnected");
     }
@@ -937,6 +994,7 @@ export const App = () => {
     unsubscribeMessage?.();
     unsubscribeEvents?.();
     unsubscribeJoinRequests?.();
+    unsubscribeDirectMessageRequests?.();
     if (statusInterval) clearInterval(statusInterval);
     if (pingInterval) clearInterval(pingInterval);
     chat?.stop();
@@ -1090,11 +1148,71 @@ export const App = () => {
         }
       }
 
+      const invite = buildInviteCodeForGroup(dmGroupId, {
+        kind: "targeted-peer",
+        targetPeerId: trimmedTarget,
+      });
+      if (!invite.error && invite.code) {
+        void currentChat.sendDirectMessageRequest({
+          targetPeerId: trimmedTarget,
+          groupId: dmGroupId,
+          groupName: currentChat.getActionChainState(dmGroupId)?.groupName ?? "Direct Message",
+          inviteCode: invite.code,
+        }).catch(() => {});
+      }
+
       void currentChat.connectToPeerId(trimmedTarget).catch(() => {});
       return null;
     } catch (error) {
       return error instanceof Error ? error.message : "Failed to start direct chat";
     }
+  };
+
+  const upsertPendingDirectMessageRequest = (event: DirectMessageRequestEvent) => {
+    setPendingDirectMessageRequests((prev) => {
+      if (prev.some((request) => request.requestId === event.requestId)) return prev;
+      const next = [
+        {
+          requestId: event.requestId,
+          senderPeerId: event.senderPeerId,
+          groupId: event.groupId,
+          groupName: event.groupName,
+          inviteCode: event.inviteCode,
+          sentAt: event.sentAt,
+        },
+        ...prev,
+      ].slice(0, 100);
+      persistPendingDirectMessageRequests(next);
+      return next;
+    });
+  };
+
+  const removePendingDirectMessageRequest = (requestId: string) => {
+    setPendingDirectMessageRequests((prev) => {
+      const next = prev.filter((request) => request.requestId !== requestId);
+      if (next.length === prev.length) return prev;
+      persistPendingDirectMessageRequests(next);
+      return next;
+    });
+  };
+
+  const handleAcceptDirectMessageRequest = async (requestId: string): Promise<string | null> => {
+    const request = pendingDirectMessageRequests().find((entry) => entry.requestId === requestId);
+    if (!request) return "DM request not found";
+
+    const decoded = decodeGroupInvite(request.inviteCode);
+    if (!decoded.success) return "Invalid DM invite";
+
+    const error = await handleJoinViaInvite(decoded.data);
+    if (!error) {
+      setDirectMessagePeerForGroup(request.groupId, request.senderPeerId);
+      removePendingDirectMessageRequest(requestId);
+    }
+    return error;
+  };
+
+  const handleDeclineDirectMessageRequest = (requestId: string) => {
+    removePendingDirectMessageRequest(requestId);
   };
 
   const handleLeaveGroup = (groupId: string) => {
@@ -1164,11 +1282,10 @@ export const App = () => {
     return null;
   };
 
-  const buildInviteCode = (options: InviteCreateOptions): InviteCreateResult => {
+  const buildInviteCodeForGroup = (groupId: string, options: InviteCreateOptions): InviteCreateResult => {
     const currentChat = chat;
-    const activeId = groupState().activeGroupId;
-    if (!currentChat || !activeId) return { error: "No active group", code: null };
-    const envelopes = currentChat.getActionChainEnvelopes(activeId);
+    if (!currentChat) return { error: "No active group", code: null };
+    const envelopes = currentChat.getActionChainEnvelopes(groupId);
     if (!envelopes || envelopes.length === 0) return { error: "Group has no genesis action", code: null };
 
     const relayAddr = getBestRelayAddress();
@@ -1195,7 +1312,7 @@ export const App = () => {
 
     const inviteGrant = createInviteGrant({
       accountKey,
-      groupId: activeId,
+      groupId,
       policy,
     });
 
@@ -1209,7 +1326,9 @@ export const App = () => {
   };
 
   const handleCreateInvite = (options: InviteCreateOptions): InviteCreateResult => {
-    const result = buildInviteCode(options);
+    const activeId = groupState().activeGroupId;
+    if (!activeId) return { error: "No active group", code: null };
+    const result = buildInviteCodeForGroup(activeId, options);
     if (result.code) {
       navigator.clipboard.writeText(result.code).catch(() => {});
     }
@@ -1413,6 +1532,20 @@ export const App = () => {
       };
     });
 
+  const pendingDirectMessageRequestRows = () =>
+    pendingDirectMessageRequests().map((request) => {
+      const contact = contactsBook().get(request.senderPeerId);
+      const senderLabel = contact?.nickname
+        ?? contact?.selfName
+        ?? `${request.senderPeerId.slice(0, 12)}...${request.senderPeerId.slice(-4)}`;
+      return {
+        requestId: request.requestId,
+        senderLabel,
+        groupName: request.groupName,
+        sentAt: request.sentAt,
+      };
+    });
+
   return (
     <Switch>
       <Match when={onboardingState().status === "checking"}>
@@ -1493,6 +1626,9 @@ export const App = () => {
                 onJoinViaInvite={handleJoinViaInvite}
                 onCreateGroup={handleCreateGroup}
                 onStartDirectMessage={handleStartDirectMessage}
+                pendingDirectMessageRequests={pendingDirectMessageRequestRows()}
+                onAcceptDirectMessageRequest={handleAcceptDirectMessageRequest}
+                onDeclineDirectMessageRequest={handleDeclineDirectMessageRequest}
                 onLeaveGroup={handleLeaveGroup}
               />
             }

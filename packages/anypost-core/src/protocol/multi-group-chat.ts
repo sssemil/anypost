@@ -87,6 +87,19 @@ export type JoinRequestEvent = {
 
 type JoinRequestListener = (event: JoinRequestEvent) => void;
 
+export type DirectMessageRequestEvent = {
+  readonly requestId: string;
+  readonly senderPeerId: string;
+  readonly senderPublicKey: Uint8Array;
+  readonly targetPeerId: string;
+  readonly groupId: string;
+  readonly groupName: string;
+  readonly inviteCode: string;
+  readonly sentAt: number;
+};
+
+type DirectMessageRequestListener = (event: DirectMessageRequestEvent) => void;
+
 export type DiscoveryProfile = "balanced" | "aggressive";
 
 export type PeerDiscoveryMetrics = {
@@ -149,6 +162,12 @@ export type MultiGroupChat = {
   readonly createGroup: (name: string) => Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }>;
   readonly createGroupWithId: (groupId: string, name: string) => Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }>;
   readonly joinViaInvite: (invite: GroupInvite) => Promise<{ groupId: string }>;
+  readonly sendDirectMessageRequest: (request: {
+    readonly targetPeerId: string;
+    readonly groupId: string;
+    readonly groupName: string;
+    readonly inviteCode: string;
+  }) => Promise<void>;
   readonly renameGroup: (groupId: string, newName: string) => Promise<void>;
   readonly approveJoin: (
     groupId: string,
@@ -172,6 +191,7 @@ export type MultiGroupChat = {
   readonly getSyncProgressState: () => SyncProgressState;
   readonly onMessage: (listener: MessageListener) => () => void;
   readonly onJoinRequest: (listener: JoinRequestListener) => () => void;
+  readonly onDirectMessageRequest: (listener: DirectMessageRequestListener) => () => void;
   readonly onPeerChange: (listener: (count: number) => void) => () => void;
   readonly onEvent: (listener: EventListener) => () => void;
   readonly getNetworkStatus: () => NetworkStatus;
@@ -209,6 +229,8 @@ type CreateMultiGroupChatOptions = {
   readonly syncReconcileIntervalMs?: number;
   readonly syncReconcileStaleMs?: number;
   readonly onApprovalReceived?: (groupId: string) => void;
+  readonly getDisplayName?: () => string | undefined;
+  readonly onProfileAnnounce?: (peerId: string, displayName: string) => void;
 };
 
 const MAX_CACHED_PEER_PATHS_PER_PEER = 4;
@@ -238,6 +260,8 @@ const MAX_SYNC_PROGRESS_PEERS_PER_GROUP = 128;
 const SYNC_PROGRESS_STALE_MS = 24 * 60 * 60 * 1_000;
 const DEFAULT_SYNC_RECONCILE_INTERVAL_MS = 20_000;
 const DEFAULT_SYNC_RECONCILE_STALE_MS = 45_000;
+const DIRECT_MESSAGE_REQUEST_TOPIC = "anypost/system/dm-requests/v1";
+const PROFILE_SYNC_TOPIC = "anypost/system/profile/v1";
 
 export const createMultiGroupChat = async (
   options: CreateMultiGroupChatOptions,
@@ -267,6 +291,8 @@ export const createMultiGroupChat = async (
     syncReconcileIntervalMs = DEFAULT_SYNC_RECONCILE_INTERVAL_MS,
     syncReconcileStaleMs = DEFAULT_SYNC_RECONCILE_STALE_MS,
     onApprovalReceived,
+    getDisplayName,
+    onProfileAnnounce,
   } = options;
 
   const privateKey = rawPeerPrivateKey
@@ -347,6 +373,7 @@ export const createMultiGroupChat = async (
   const joinedGroups: string[] = [];
   const messageListeners: MessageListener[] = [];
   const joinRequestListeners: JoinRequestListener[] = [];
+  const directMessageRequestListeners: DirectMessageRequestListener[] = [];
   const peerChangeListeners: Array<(count: number) => void> = [];
   const eventListeners: EventListener[] = [];
 
@@ -1065,6 +1092,224 @@ export const createMultiGroupChat = async (
       payload.requesterPublicKey,
     );
 
+  const encodeDirectMessageRequestSigningPayload = (
+    payload: {
+      readonly requestId: string;
+      readonly senderPeerId: string;
+      readonly senderPublicKey: Uint8Array;
+      readonly targetPeerId: string;
+      readonly groupId: string;
+      readonly groupName: string;
+      readonly inviteCode: string;
+      readonly sentAt: number;
+    },
+  ): Uint8Array =>
+    new Uint8Array(
+      encode({
+        type: "dm_request",
+        requestId: payload.requestId,
+        senderPeerId: payload.senderPeerId,
+        senderPublicKey: payload.senderPublicKey,
+        targetPeerId: payload.targetPeerId,
+        groupId: payload.groupId,
+        groupName: payload.groupName,
+        inviteCode: payload.inviteCode,
+        sentAt: payload.sentAt,
+      }),
+    );
+
+  const signDirectMessageRequest = (
+    payload: {
+      readonly requestId: string;
+      readonly senderPeerId: string;
+      readonly senderPublicKey: Uint8Array;
+      readonly targetPeerId: string;
+      readonly groupId: string;
+      readonly groupName: string;
+      readonly inviteCode: string;
+      readonly sentAt: number;
+    },
+  ): Uint8Array =>
+    new Uint8Array([...ed25519.sign(
+      encodeDirectMessageRequestSigningPayload(payload),
+      accountKey.privateKey,
+    )]);
+
+  const verifyDirectMessageRequest = (
+    payload: {
+      readonly requestId: string;
+      readonly senderPeerId: string;
+      readonly senderPublicKey: Uint8Array;
+      readonly targetPeerId: string;
+      readonly groupId: string;
+      readonly groupName: string;
+      readonly inviteCode: string;
+      readonly sentAt: number;
+      readonly signature: Uint8Array;
+    },
+  ): boolean =>
+    ed25519.verify(
+      payload.signature,
+      encodeDirectMessageRequestSigningPayload(payload),
+      payload.senderPublicKey,
+    );
+
+  const encodeProfileRequestSigningPayload = (
+    payload: {
+      readonly requestId: string;
+      readonly senderPeerId: string;
+      readonly senderPublicKey: Uint8Array;
+      readonly targetPeerId: string;
+      readonly sentAt: number;
+    },
+  ): Uint8Array =>
+    new Uint8Array(
+      encode({
+        type: "profile_request",
+        requestId: payload.requestId,
+        senderPeerId: payload.senderPeerId,
+        senderPublicKey: payload.senderPublicKey,
+        targetPeerId: payload.targetPeerId,
+        sentAt: payload.sentAt,
+      }),
+    );
+
+  const signProfileRequest = (
+    payload: {
+      readonly requestId: string;
+      readonly senderPeerId: string;
+      readonly senderPublicKey: Uint8Array;
+      readonly targetPeerId: string;
+      readonly sentAt: number;
+    },
+  ): Uint8Array =>
+    new Uint8Array([...ed25519.sign(
+      encodeProfileRequestSigningPayload(payload),
+      accountKey.privateKey,
+    )]);
+
+  const verifyProfileRequest = (
+    payload: {
+      readonly requestId: string;
+      readonly senderPeerId: string;
+      readonly senderPublicKey: Uint8Array;
+      readonly targetPeerId: string;
+      readonly sentAt: number;
+      readonly signature: Uint8Array;
+    },
+  ): boolean =>
+    ed25519.verify(
+      payload.signature,
+      encodeProfileRequestSigningPayload(payload),
+      payload.senderPublicKey,
+    );
+
+  const encodeProfileAnnounceSigningPayload = (
+    payload: {
+      readonly senderPeerId: string;
+      readonly senderPublicKey: Uint8Array;
+      readonly targetPeerId?: string;
+      readonly displayName: string;
+      readonly sentAt: number;
+    },
+  ): Uint8Array =>
+    new Uint8Array(
+      encode({
+        type: "profile_announce",
+        senderPeerId: payload.senderPeerId,
+        senderPublicKey: payload.senderPublicKey,
+        targetPeerId: payload.targetPeerId,
+        displayName: payload.displayName,
+        sentAt: payload.sentAt,
+      }),
+    );
+
+  const signProfileAnnounce = (
+    payload: {
+      readonly senderPeerId: string;
+      readonly senderPublicKey: Uint8Array;
+      readonly targetPeerId?: string;
+      readonly displayName: string;
+      readonly sentAt: number;
+    },
+  ): Uint8Array =>
+    new Uint8Array([...ed25519.sign(
+      encodeProfileAnnounceSigningPayload(payload),
+      accountKey.privateKey,
+    )]);
+
+  const verifyProfileAnnounce = (
+    payload: {
+      readonly senderPeerId: string;
+      readonly senderPublicKey: Uint8Array;
+      readonly targetPeerId?: string;
+      readonly displayName: string;
+      readonly sentAt: number;
+      readonly signature: Uint8Array;
+    },
+  ): boolean =>
+    ed25519.verify(
+      payload.signature,
+      encodeProfileAnnounceSigningPayload(payload),
+      payload.senderPublicKey,
+    );
+
+  const currentDisplayName = (): string | null => {
+    const name = getDisplayName?.()?.trim();
+    return name && name.length > 0 ? name : null;
+  };
+
+  const publishProfileAnnounce = async (targetPeerId?: string): Promise<void> => {
+    const displayName = currentDisplayName();
+    if (!displayName) return;
+    const senderPublicKey = new Uint8Array(accountKey.publicKey);
+    const sentAt = Date.now();
+    const signature = signProfileAnnounce({
+      senderPeerId: ownPeerId,
+      senderPublicKey,
+      targetPeerId,
+      displayName,
+      sentAt,
+    });
+    const wireMessage: WireMessage = {
+      type: "profile_announce",
+      payload: {
+        senderPeerId: ownPeerId,
+        senderPublicKey,
+        targetPeerId,
+        displayName,
+        sentAt,
+        signature: new Uint8Array(Array.from(signature)),
+      },
+    };
+    await pubsub.publish(PROFILE_SYNC_TOPIC, encodeWireMessage(wireMessage));
+  };
+
+  const publishProfileRequest = async (targetPeerId: string): Promise<void> => {
+    const senderPublicKey = new Uint8Array(accountKey.publicKey);
+    const requestId = crypto.randomUUID();
+    const sentAt = Date.now();
+    const signature = signProfileRequest({
+      requestId,
+      senderPeerId: ownPeerId,
+      senderPublicKey,
+      targetPeerId,
+      sentAt,
+    });
+    const wireMessage: WireMessage = {
+      type: "profile_request",
+      payload: {
+        requestId,
+        senderPeerId: ownPeerId,
+        senderPublicKey,
+        targetPeerId,
+        sentAt,
+        signature: new Uint8Array(Array.from(signature)),
+      },
+    };
+    await pubsub.publish(PROFILE_SYNC_TOPIC, encodeWireMessage(wireMessage));
+  };
+
   const publishSyncRequest = async (
     groupId: string,
     targetPeerId?: string,
@@ -1413,6 +1658,8 @@ export const createMultiGroupChat = async (
     if (isMember) {
       tagGroupMemberKeepAlive(remotePeerId);
     }
+
+    void publishProfileRequest(remotePeerId).catch(() => {});
 
     for (const groupId of joinedGroups) {
       requestSyncFromPeer(groupId, remotePeerId);
@@ -1830,15 +2077,72 @@ export const createMultiGroupChat = async (
 
   const handlePubsubMessage = (event: CustomEvent) => {
     const detail = event.detail as { topic: string; data: Uint8Array; from?: { toString(): string } };
-    const matchedGroupId = topicToGroupId.get(detail.topic);
-    if (matchedGroupId === undefined) return;
-
     const senderPeerId = detail.from?.toString() ?? "unknown";
 
     const result = decodeWireMessage(detail.data);
     if (!result.success) return;
 
     const wireMessage = result.data;
+    if (wireMessage.type === "dm_request") {
+      const payload = wireMessage.payload;
+      if (detail.topic !== DIRECT_MESSAGE_REQUEST_TOPIC) return;
+      if (payload.targetPeerId !== ownPeerId) return;
+      if (senderPeerId === "unknown") return;
+      if (payload.senderPeerId !== senderPeerId) return;
+      if (!verifyDirectMessageRequest(payload)) return;
+
+      const senderPublicKeyHex = toHex(payload.senderPublicKey);
+      publicKeyToPeerId.set(senderPublicKeyHex, payload.senderPeerId);
+      notifyPublicKeyToPeerIdChange();
+
+      const eventPayload: DirectMessageRequestEvent = {
+        requestId: payload.requestId,
+        senderPeerId: payload.senderPeerId,
+        senderPublicKey: new Uint8Array(payload.senderPublicKey),
+        targetPeerId: payload.targetPeerId,
+        groupId: payload.groupId,
+        groupName: payload.groupName,
+        inviteCode: payload.inviteCode,
+        sentAt: payload.sentAt,
+      };
+      directMessageRequestListeners.forEach((listener) => listener(eventPayload));
+      emit("info", `DM request from ${payload.senderPeerId.slice(0, 12)}...`);
+      return;
+    }
+
+    if (wireMessage.type === "profile_request") {
+      const payload = wireMessage.payload;
+      if (detail.topic !== PROFILE_SYNC_TOPIC) return;
+      if (payload.targetPeerId !== ownPeerId) return;
+      if (senderPeerId === "unknown") return;
+      if (payload.senderPeerId !== senderPeerId) return;
+      if (!verifyProfileRequest(payload)) return;
+
+      const senderPublicKeyHex = toHex(payload.senderPublicKey);
+      publicKeyToPeerId.set(senderPublicKeyHex, payload.senderPeerId);
+      notifyPublicKeyToPeerIdChange();
+
+      void publishProfileAnnounce(payload.senderPeerId).catch(() => {});
+      return;
+    }
+
+    if (wireMessage.type === "profile_announce") {
+      const payload = wireMessage.payload;
+      if (detail.topic !== PROFILE_SYNC_TOPIC) return;
+      if (payload.targetPeerId && payload.targetPeerId !== ownPeerId) return;
+      if (senderPeerId === "unknown") return;
+      if (payload.senderPeerId !== senderPeerId) return;
+      if (!verifyProfileAnnounce(payload)) return;
+
+      const senderPublicKeyHex = toHex(payload.senderPublicKey);
+      publicKeyToPeerId.set(senderPublicKeyHex, payload.senderPeerId);
+      notifyPublicKeyToPeerIdChange();
+      onProfileAnnounce?.(payload.senderPeerId, payload.displayName);
+      return;
+    }
+
+    const matchedGroupId = topicToGroupId.get(detail.topic);
+    if (matchedGroupId === undefined) return;
 
     if (wireMessage.type === "sync_request") {
       const payload = wireMessage.payload;
@@ -2110,6 +2414,9 @@ export const createMultiGroupChat = async (
   };
 
   pubsub.addEventListener("message", handlePubsubMessage);
+  pubsub.subscribe(DIRECT_MESSAGE_REQUEST_TOPIC);
+  pubsub.subscribe(PROFILE_SYNC_TOPIC);
+  void publishProfileAnnounce().catch(() => {});
 
   if (isBrowser) {
     createProviderCid(ANYPOST_CHAT_NAMESPACE).then((chatCid) => {
@@ -2546,6 +2853,42 @@ export const createMultiGroupChat = async (
 
       return { groupId };
     },
+    sendDirectMessageRequest: async (request): Promise<void> => {
+      const targetPeerId = request.targetPeerId.trim();
+      if (targetPeerId.length === 0) throw new Error("Target peer ID is required");
+      if (request.groupId.trim().length === 0) throw new Error("Group ID is required");
+      if (request.groupName.trim().length === 0) throw new Error("Group name is required");
+      if (request.inviteCode.trim().length === 0) throw new Error("Invite code is required");
+      const senderPublicKey = new Uint8Array(accountKey.publicKey);
+      const requestId = crypto.randomUUID();
+      const sentAt = Date.now();
+      const signature = signDirectMessageRequest({
+        requestId,
+        senderPeerId: ownPeerId,
+        senderPublicKey,
+        targetPeerId,
+        groupId: request.groupId,
+        groupName: request.groupName,
+        inviteCode: request.inviteCode,
+        sentAt,
+      });
+      const wireMessage: WireMessage = {
+        type: "dm_request",
+        payload: {
+          requestId,
+          senderPeerId: ownPeerId,
+          senderPublicKey,
+          targetPeerId,
+          groupId: request.groupId,
+          groupName: request.groupName,
+          inviteCode: request.inviteCode,
+          sentAt,
+          signature: new Uint8Array(Array.from(signature)),
+        },
+      };
+      await pubsub.publish(DIRECT_MESSAGE_REQUEST_TOPIC, encodeWireMessage(wireMessage));
+      emit("info", `Sent DM request to ${targetPeerId.slice(0, 12)}...`);
+    },
     renameGroup: async (groupId: string, newName: string): Promise<void> => {
       const trimmed = newName.trim();
       if (trimmed.length === 0) throw new Error("Group name cannot be empty");
@@ -2682,6 +3025,13 @@ export const createMultiGroupChat = async (
         if (index !== -1) joinRequestListeners.splice(index, 1);
       };
     },
+    onDirectMessageRequest: (listener: DirectMessageRequestListener) => {
+      directMessageRequestListeners.push(listener);
+      return () => {
+        const index = directMessageRequestListeners.indexOf(listener);
+        if (index !== -1) directMessageRequestListeners.splice(index, 1);
+      };
+    },
     onPeerChange: (listener: (count: number) => void) => {
       peerChangeListeners.push(listener);
       return () => {
@@ -2763,10 +3113,13 @@ export const createMultiGroupChat = async (
       for (const topic of topicToGroupId.keys()) {
         pubsub.unsubscribe(topic);
       }
+      pubsub.unsubscribe(DIRECT_MESSAGE_REQUEST_TOPIC);
+      pubsub.unsubscribe(PROFILE_SYNC_TOPIC);
       topicToGroupId.clear();
       joinedGroups.length = 0;
       messageListeners.length = 0;
       joinRequestListeners.length = 0;
+      directMessageRequestListeners.length = 0;
       peerChangeListeners.length = 0;
       eventListeners.length = 0;
       actionDags.clear();

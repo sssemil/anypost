@@ -85,6 +85,36 @@ const SyncResponsePayloadSchema = z.object({
   envelopes: z.array(SignedActionEnvelopeWireSchema),
 });
 
+const DirectMessageRequestPayloadSchema = z.object({
+  requestId: z.string().uuid(),
+  senderPeerId: PeerIdSchema,
+  senderPublicKey: Uint8ArraySchema,
+  targetPeerId: PeerIdSchema,
+  groupId: GroupIdSchema,
+  groupName: z.string().min(1),
+  inviteCode: z.string().min(1),
+  sentAt: z.number(),
+  signature: Uint8ArraySchema,
+});
+
+const ProfileRequestPayloadSchema = z.object({
+  requestId: z.string().uuid(),
+  senderPeerId: PeerIdSchema,
+  senderPublicKey: Uint8ArraySchema,
+  targetPeerId: PeerIdSchema,
+  sentAt: z.number(),
+  signature: Uint8ArraySchema,
+});
+
+const ProfileAnnouncePayloadSchema = z.object({
+  senderPeerId: PeerIdSchema,
+  senderPublicKey: Uint8ArraySchema,
+  targetPeerId: PeerIdSchema.optional(),
+  displayName: z.string().min(1).max(100),
+  sentAt: z.number(),
+  signature: Uint8ArraySchema,
+});
+
 const InviteGrantClaimsSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("targeted-peer"),
@@ -128,6 +158,18 @@ export const WireMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("sync_response"),
     payload: SyncResponsePayloadSchema,
+  }),
+  z.object({
+    type: z.literal("dm_request"),
+    payload: DirectMessageRequestPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("profile_request"),
+    payload: ProfileRequestPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("profile_announce"),
+    payload: ProfileAnnouncePayloadSchema,
   }),
   z.object({
     type: z.literal("signed_action"),

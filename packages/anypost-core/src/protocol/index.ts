@@ -134,6 +134,7 @@ export type {
   MultiGroupChat,
   MultiGroupChatMessageEvent,
   JoinRequestEvent,
+  DirectMessageRequestEvent,
   DiscoveryProfile,
   PeerDiscoveryMetrics,
   ConnectionMetrics,

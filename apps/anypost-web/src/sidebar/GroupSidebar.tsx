@@ -24,6 +24,14 @@ type GroupSidebarProps = {
   readonly onJoinViaInvite: (invite: GroupInvite) => Promise<string | null>;
   readonly onCreateGroup: (name: string) => Promise<string | null>;
   readonly onStartDirectMessage: (targetPeerId: string) => Promise<string | null>;
+  readonly pendingDirectMessageRequests: readonly {
+    readonly requestId: string;
+    readonly senderLabel: string;
+    readonly groupName: string;
+    readonly sentAt: number;
+  }[];
+  readonly onAcceptDirectMessageRequest: (requestId: string) => Promise<string | null>;
+  readonly onDeclineDirectMessageRequest: (requestId: string) => void;
   readonly onLeaveGroup: (groupId: string) => void;
 };
 
@@ -55,6 +63,8 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
   const [dmPeerIdInput, setDmPeerIdInput] = createSignal("");
   const [dmStarting, setDmStarting] = createSignal(false);
   const [dmError, setDmError] = createSignal("");
+  const [dmRequestActionId, setDmRequestActionId] = createSignal<string | null>(null);
+  const [dmRequestError, setDmRequestError] = createSignal("");
 
   const dispatch = (event: Parameters<typeof transitionSidebar>[1]) => {
     setState((s) => transitionSidebar(s, event));
@@ -131,6 +141,17 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
     setDmPeerIdInput("");
   };
 
+  const handleAcceptDmRequest = async (requestId: string) => {
+    setDmRequestError("");
+    setDmRequestActionId(requestId);
+    const error = await props.onAcceptDirectMessageRequest(requestId);
+    setDmRequestActionId(null);
+    if (error) setDmRequestError(error);
+  };
+
+  const formatRequestTime = (timestamp: number): string =>
+    new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
   return (
     <div class="flex flex-col h-full bg-tg-sidebar">
       {props.topBanners}
@@ -178,6 +199,46 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
           <div class="text-tg-danger text-xs mt-1">{dmError()}</div>
         </Show>
       </div>
+
+      <Show when={props.pendingDirectMessageRequests.length > 0}>
+        <div class="px-3 py-2 border-b border-tg-border bg-tg-chat space-y-2">
+          <div class="text-[10px] text-tg-text-dim uppercase tracking-wider">
+            DM Requests ({props.pendingDirectMessageRequests.length})
+          </div>
+          <div class="space-y-1">
+            <For each={props.pendingDirectMessageRequests}>
+              {(request) => (
+                <div class="rounded border border-tg-border bg-tg-sidebar px-2 py-1.5">
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="text-xs text-tg-text truncate">{request.senderLabel}</span>
+                    <span class="text-[10px] text-tg-text-dim">{formatRequestTime(request.sentAt)}</span>
+                  </div>
+                  <div class="text-[10px] text-tg-text-dim truncate">{request.groupName}</div>
+                  <div class="mt-1 flex gap-1.5">
+                    <button
+                      class="text-[10px] bg-tg-success text-white px-2 py-1 rounded cursor-pointer disabled:opacity-50"
+                      disabled={dmRequestActionId() === request.requestId}
+                      onClick={() => void handleAcceptDmRequest(request.requestId)}
+                    >
+                      Accept
+                    </button>
+                    <button
+                      class="text-[10px] border border-tg-border text-tg-text px-2 py-1 rounded hover:bg-tg-hover cursor-pointer"
+                      disabled={dmRequestActionId() === request.requestId}
+                      onClick={() => props.onDeclineDirectMessageRequest(request.requestId)}
+                    >
+                      Decline
+                    </button>
+                  </div>
+                </div>
+              )}
+            </For>
+          </div>
+          <Show when={dmRequestError()}>
+            <div class="text-tg-danger text-xs">{dmRequestError()}</div>
+          </Show>
+        </div>
+      </Show>
 
       <Show when={state().isJoinFormOpen}>
         <div class="px-3 py-2.5 border-b border-tg-border bg-tg-chat">
