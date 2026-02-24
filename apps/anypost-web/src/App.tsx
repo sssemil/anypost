@@ -106,10 +106,8 @@ const CONTACTS_LAST_SEEN_UPDATE_MS = 60_000;
 const CONTACTS_SELF_NAME_HISTORY_LIMIT = 12;
 const PROFILE_SYNC_REQUEST_COOLDOWN_MS = 15_000;
 const DM_SELF_JOIN_REQUEST_COOLDOWN_MS = 15_000;
-const OUTGOING_DM_RETRY_BASE_MS = 12_000;
-const OUTGOING_DM_RETRY_MAX_MS = 120_000;
+const OUTGOING_DM_RETRY_INTERVAL_MS = 5_000;
 const OUTGOING_DM_RETRY_SWEEP_MS = 4_000;
-const OUTGOING_DM_RETRY_MAX_AGE_MS = 20 * 60_000;
 const PROJECT_GITHUB_URL = "https://github.com/sssemil/anypost";
 
 const hexToBytes = (hex: string): Uint8Array<ArrayBuffer> => {
@@ -1247,9 +1245,6 @@ export const App = () => {
       const nextQueue: OutgoingDirectMessageRequest[] = [];
 
       for (const entry of snapshot) {
-        if (now - entry.createdAt >= OUTGOING_DM_RETRY_MAX_AGE_MS) {
-          continue;
-        }
         const state = currentChat.getActionChainState(entry.groupId);
         const ownKeyHex = ownPublicKeyHex();
         const ownMembershipMissing = !!state && !!ownKeyHex && !state.members.has(ownKeyHex);
@@ -1280,19 +1275,15 @@ export const App = () => {
             inviteCode: entry.inviteCode,
           });
         } catch {
-          // Retry with backoff whether publish succeeded or failed.
+          // Retry on fixed cadence whether publish succeeded or failed.
         }
 
         const nextAttemptCount = entry.attemptCount + 1;
-        const delay = Math.min(
-          OUTGOING_DM_RETRY_BASE_MS * (2 ** Math.min(nextAttemptCount, 4)),
-          OUTGOING_DM_RETRY_MAX_MS,
-        );
         nextQueue.push({
           ...entry,
           attemptCount: nextAttemptCount,
           lastAttemptAt: now,
-          nextAttemptAt: now + delay,
+          nextAttemptAt: now + OUTGOING_DM_RETRY_INTERVAL_MS,
         });
       }
 
