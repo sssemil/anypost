@@ -26,27 +26,43 @@ cmd_relay() {
 }
 
 cmd_web() {
+  trap 'kill 0; wait' EXIT INT TERM
+
+  echo "Building anypost-core..."
+  pnpm --filter anypost-core build
+
+  echo "Watching anypost-core for changes..."
+  pnpm --filter anypost-core build --watch &
+
   echo "Starting web dev server..."
-  pnpm --filter anypost-web dev
+  # Use vite directly here to avoid running any predev hooks twice.
+  pnpm --filter anypost-web exec vite &
+
+  wait
 }
 
 cmd_dev() {
   trap 'kill 0; wait' EXIT INT TERM
+
+  echo "Building anypost-core..."
+  pnpm --filter anypost-core build
+
+  echo "Watching anypost-core for changes..."
+  pnpm --filter anypost-core build --watch &
 
   echo "Building relay..."
   pnpm --filter anypost-relay build
 
   echo "Starting relay..."
   pnpm --filter anypost-relay start &
-  RELAY_PID=$!
 
   # Give the relay a moment to print its multiaddr
   sleep 2
 
   echo ""
   echo "Starting web dev server..."
-  pnpm --filter anypost-web dev &
-  WEB_PID=$!
+  # Use vite directly here to avoid running any predev hooks twice.
+  pnpm --filter anypost-web exec vite &
 
   wait
 }
