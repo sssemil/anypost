@@ -112,6 +112,7 @@ const DEVTOOLS_RECORD_DURATION_MS = 3 * 60_000;
 const DEVTOOLS_RECORD_SNAPSHOT_MS = 1_000;
 const DEVTOOLS_RECORD_MAX_ENTRIES = 25_000;
 const PROJECT_GITHUB_URL = "https://github.com/sssemil/anypost";
+const DEFAULT_DIRECT_MESSAGE_GROUP_NAME = "Direct Message";
 
 const hexToBytes = (hex: string): Uint8Array<ArrayBuffer> => {
   const buf = new ArrayBuffer(hex.length / 2);
@@ -120,6 +121,11 @@ const hexToBytes = (hex: string): Uint8Array<ArrayBuffer> => {
     bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
   }
   return bytes;
+};
+
+const normalizeDirectMessageGroupName = (name: unknown): string => {
+  const trimmed = typeof name === "string" ? name.trim() : "";
+  return trimmed.length > 0 ? trimmed : DEFAULT_DIRECT_MESSAGE_GROUP_NAME;
 };
 
 type SerializedPendingJoin = {
@@ -219,15 +225,29 @@ const loadPendingDirectMessageRequests = (): readonly PendingDirectMessageReques
     if (!json) return [];
     const parsed = JSON.parse(json) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((entry): entry is PendingDirectMessageRequest =>
-      typeof entry === "object" &&
-      entry !== null &&
-      typeof (entry as Record<string, unknown>).requestId === "string" &&
-      typeof (entry as Record<string, unknown>).senderPeerId === "string" &&
-      typeof (entry as Record<string, unknown>).groupId === "string" &&
-      typeof (entry as Record<string, unknown>).groupName === "string" &&
-      typeof (entry as Record<string, unknown>).inviteCode === "string" &&
-      typeof (entry as Record<string, unknown>).sentAt === "number");
+    return parsed.flatMap((entry): PendingDirectMessageRequest[] => {
+      if (typeof entry !== "object" || entry === null) return [];
+      const value = entry as Record<string, unknown>;
+      if (
+        typeof value.requestId !== "string" ||
+        typeof value.senderPeerId !== "string" ||
+        typeof value.groupId !== "string" ||
+        typeof value.inviteCode !== "string" ||
+        value.inviteCode.trim().length === 0 ||
+        typeof value.sentAt !== "number" ||
+        !Number.isFinite(value.sentAt)
+      ) {
+        return [];
+      }
+      return [{
+        requestId: value.requestId,
+        senderPeerId: value.senderPeerId,
+        groupId: value.groupId,
+        groupName: normalizeDirectMessageGroupName(value.groupName),
+        inviteCode: value.inviteCode.trim(),
+        sentAt: Math.floor(value.sentAt),
+      }];
+    });
   } catch {
     return [];
   }
@@ -243,23 +263,37 @@ const loadOutgoingDirectMessageRequests = (): readonly OutgoingDirectMessageRequ
     if (!json) return [];
     const parsed = JSON.parse(json) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((entry): entry is OutgoingDirectMessageRequest =>
-      typeof entry === "object" &&
-      entry !== null &&
-      typeof (entry as Record<string, unknown>).requestKey === "string" &&
-      typeof (entry as Record<string, unknown>).targetPeerId === "string" &&
-      typeof (entry as Record<string, unknown>).groupId === "string" &&
-      typeof (entry as Record<string, unknown>).groupName === "string" &&
-      typeof (entry as Record<string, unknown>).inviteCode === "string" &&
-      typeof (entry as Record<string, unknown>).createdAt === "number" &&
-      (typeof (entry as Record<string, unknown>).lastAttemptAt === "number" ||
-        (entry as Record<string, unknown>).lastAttemptAt === null) &&
-      typeof (entry as Record<string, unknown>).attemptCount === "number" &&
-      typeof (entry as Record<string, unknown>).nextAttemptAt === "number")
-      .map((entry) => ({
-        ...entry,
-        attemptCount: Math.max(0, Math.floor(entry.attemptCount)),
-      }));
+    return parsed.flatMap((entry): OutgoingDirectMessageRequest[] => {
+      if (typeof entry !== "object" || entry === null) return [];
+      const value = entry as Record<string, unknown>;
+      if (
+        typeof value.requestKey !== "string" ||
+        typeof value.targetPeerId !== "string" ||
+        typeof value.groupId !== "string" ||
+        typeof value.inviteCode !== "string" ||
+        value.inviteCode.trim().length === 0 ||
+        typeof value.createdAt !== "number" ||
+        !Number.isFinite(value.createdAt) ||
+        (typeof value.lastAttemptAt !== "number" && value.lastAttemptAt !== null) ||
+        typeof value.attemptCount !== "number" ||
+        !Number.isFinite(value.attemptCount) ||
+        typeof value.nextAttemptAt !== "number" ||
+        !Number.isFinite(value.nextAttemptAt)
+      ) {
+        return [];
+      }
+      return [{
+        requestKey: value.requestKey,
+        targetPeerId: value.targetPeerId,
+        groupId: value.groupId,
+        groupName: normalizeDirectMessageGroupName(value.groupName),
+        inviteCode: value.inviteCode.trim(),
+        createdAt: Math.floor(value.createdAt),
+        lastAttemptAt: value.lastAttemptAt === null ? null : Math.floor(value.lastAttemptAt),
+        attemptCount: Math.max(0, Math.floor(value.attemptCount)),
+        nextAttemptAt: Math.floor(value.nextAttemptAt),
+      }];
+    });
   } catch {
     return [];
   }
@@ -1454,20 +1488,11 @@ export const App = () => {
             connectedPeerIds: current.peers.map((peer) => peer.peerId),
             subscriberCount: current.subscriberCount,
           });
-          for (const peer of current.peers) {
-            maybeRequestProfileSync(peer.peerId);
-          }
         }
       });
 
       statusInterval = setInterval(() => {
         refreshNetworkStatus();
-        const current = chat?.getNetworkStatus();
-        if (current) {
-          for (const peer of current.peers) {
-            maybeRequestProfileSync(peer.peerId);
-          }
-        }
         const activeId = groupState().activeGroupId;
         if (activeId) syncMessagesFromActionChain(activeId);
       }, 3000);
@@ -1726,11 +1751,6 @@ export const App = () => {
   const buildOutgoingDmRequestKey = (groupId: string, targetPeerId: string): string =>
     `${groupId}:${targetPeerId}`;
 
-  const normalizeDirectMessageGroupName = (name: string | null | undefined): string => {
-    const trimmed = name?.trim() ?? "";
-    return trimmed.length > 0 ? trimmed : "Direct Message";
-  };
-
   const upsertOutgoingDirectMessageRequest = (
     request: {
       readonly targetPeerId: string;
@@ -1794,6 +1814,28 @@ export const App = () => {
 
       for (const entry of snapshot) {
         const state = currentChat.getActionChainState(entry.groupId);
+        const normalizedGroupName = normalizeDirectMessageGroupName(
+          entry.groupName.length > 0 ? entry.groupName : state?.groupName,
+        );
+        const normalizedInviteCode = entry.inviteCode.trim();
+        if (normalizedInviteCode.length === 0) {
+          appendDiagnosticsEntry("dm-request-resolved", {
+            requestKey: entry.requestKey,
+            groupId: entry.groupId,
+            targetPeerId: entry.targetPeerId,
+            reason: "invalid-invite",
+          });
+          continue;
+        }
+
+        const baseEntry = entry.groupName === normalizedGroupName && entry.inviteCode === normalizedInviteCode
+          ? entry
+          : {
+              ...entry,
+              groupName: normalizedGroupName,
+              inviteCode: normalizedInviteCode,
+            };
+
         const ownKeyHex = ownPublicKeyHex();
         const ownMembershipMissing = !!state && !!ownKeyHex && !state.members.has(ownKeyHex);
         if (ownMembershipMissing) {
@@ -1825,7 +1867,7 @@ export const App = () => {
           continue;
         }
         if (entry.nextAttemptAt > now) {
-          nextQueue.push(entry);
+          nextQueue.push(baseEntry);
           continue;
         }
 
@@ -1836,13 +1878,12 @@ export const App = () => {
           attemptCount: entry.attemptCount + 1,
         });
         try {
-          const normalizedGroupName = normalizeDirectMessageGroupName(entry.groupName);
           void currentChat.connectToPeerId(entry.targetPeerId).catch(() => {});
           await currentChat.sendDirectMessageRequest({
             targetPeerId: entry.targetPeerId,
             groupId: entry.groupId,
             groupName: normalizedGroupName,
-            inviteCode: entry.inviteCode,
+            inviteCode: normalizedInviteCode,
           });
           appendDiagnosticsEntry("dm-request-published", {
             requestKey: entry.requestKey,
@@ -1861,7 +1902,7 @@ export const App = () => {
 
         const nextAttemptCount = entry.attemptCount + 1;
         nextQueue.push({
-          ...entry,
+          ...baseEntry,
           attemptCount: nextAttemptCount,
           lastAttemptAt: now,
           nextAttemptAt: now + OUTGOING_DM_RETRY_INTERVAL_MS,
@@ -1910,6 +1951,15 @@ export const App = () => {
       });
     });
   };
+
+  createEffect(() => {
+    if (chatStatus() !== "connected") return;
+    const activeGroupId = groupState().activeGroupId;
+    if (!activeGroupId) return;
+    const dmPeerId = directMessagePeersByGroup().get(activeGroupId);
+    if (!dmPeerId) return;
+    maybeRequestProfileSync(dmPeerId);
+  });
 
   const handleStartDirectMessage = async (targetPeerId: string): Promise<string | null> => {
     const currentChat = chat;

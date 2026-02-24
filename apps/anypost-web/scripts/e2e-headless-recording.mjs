@@ -2,7 +2,7 @@
 
 import { chromium } from "playwright";
 import { spawn } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -251,6 +251,59 @@ const downloadRecorderFile = async (page, label, outDir, timeoutMs) => {
   return targetPath;
 };
 
+const loadRecordingEntries = async (recordingPath) => {
+  const text = await readFile(recordingPath, "utf8");
+  const parsed = JSON.parse(text);
+  if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.entries)) {
+    throw new Error(`Invalid recording payload: ${recordingPath}`);
+  }
+  return parsed.entries;
+};
+
+const countEntriesByType = (entries, type) =>
+  entries.reduce((sum, entry) => (entry?.type === type ? sum + 1 : sum), 0);
+
+const existsEntry = (entries, predicate) => entries.some((entry) => predicate(entry));
+
+const validateRecordings = async (alicePath, bobPath, alicePeerId, bobPeerId) => {
+  const [aliceEntries, bobEntries] = await Promise.all([
+    loadRecordingEntries(alicePath),
+    loadRecordingEntries(bobPath),
+  ]);
+
+  const bobPublishFailures = countEntriesByType(bobEntries, "dm-request-publish-failed");
+  if (bobPublishFailures > 0) {
+    throw new Error(`Validation failed: Bob has ${bobPublishFailures} dm-request-publish-failed entries`);
+  }
+
+  const bobPublishedCount = countEntriesByType(bobEntries, "dm-request-published");
+  if (bobPublishedCount < 1) {
+    throw new Error("Validation failed: Bob never published a DM request");
+  }
+
+  const aliceInboundCount = countEntriesByType(aliceEntries, "dm-request-inbound");
+  const aliceQueuedCount = countEntriesByType(aliceEntries, "dm-request-inbound-queued");
+  if (aliceInboundCount < 1 && aliceQueuedCount < 1) {
+    throw new Error("Validation failed: Alice did not receive a DM request");
+  }
+
+  const aliceHasPeerProfileRequest = existsEntry(
+    aliceEntries,
+    (entry) => entry?.type === "profile-request" && entry?.payload?.peerId === bobPeerId,
+  );
+  if (!aliceHasPeerProfileRequest) {
+    throw new Error("Validation failed: Alice did not trigger profile sync for Bob");
+  }
+
+  const bobHasPeerProfileRequest = existsEntry(
+    bobEntries,
+    (entry) => entry?.type === "profile-request" && entry?.payload?.peerId === alicePeerId,
+  );
+  if (!bobHasPeerProfileRequest) {
+    throw new Error("Validation failed: Bob did not trigger profile sync for Alice");
+  }
+};
+
 const main = async () => {
   const options = parseArgs();
   await mkdir(options.outDir, { recursive: true });
@@ -345,6 +398,10 @@ const main = async () => {
     log("Completed.");
     log(`Alice log: ${aliceFile}`);
     log(`Bob log:   ${bobFile}`);
+
+    log("Validating recordings...");
+    await validateRecordings(aliceFile, bobFile, alicePeerId, bobPeerId);
+    log("Validation passed.");
 
     await aliceContext.close();
     await bobContext.close();
