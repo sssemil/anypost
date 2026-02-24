@@ -14,7 +14,9 @@ import type {
   PeerDiscoveryMetrics,
   JoinRetryEntry,
   JoinPolicy,
+  SyncPeerProgress,
 } from "anypost-core/protocol";
+import type { ContactsBook } from "anypost-core/data";
 
 export type PendingJoinRequest = {
   readonly publicKeyHex: string;
@@ -47,6 +49,7 @@ type GroupInfoPanelProps = {
   readonly connectionMetrics: ConnectionMetrics | null;
   readonly activeGroupDiscoveryMetrics: PeerDiscoveryMetrics | null;
   readonly joinRetryEntry: JoinRetryEntry | null;
+  readonly syncProgressByPeer: ReadonlyMap<string, SyncPeerProgress>;
   readonly pendingJoins: readonly PendingJoinRequest[];
   readonly joinPolicy: JoinPolicy;
   readonly isAdmin: boolean;
@@ -54,6 +57,7 @@ type GroupInfoPanelProps = {
   readonly ownPublicKeyHex: string;
   readonly ownDisplayName: string;
   readonly publicKeyToPeerId: ReadonlyMap<string, string>;
+  readonly contactsBook?: ContactsBook;
   readonly connectedPeerIds: ReadonlySet<string>;
   readonly latencyMap: ReadonlyMap<string, number>;
   readonly onStartDirectMessage?: ((peerId: string) => Promise<string | null> | string | null) | null;
@@ -97,6 +101,34 @@ const formatDuration = (ms: number): string => {
 };
 
 const ENVELOPES_PER_PAGE = 10;
+const SYNC_ACTIVE_MS = 30_000;
+const SYNC_STALE_MS = 5 * 60_000;
+
+const formatRelativeTime = (timestampMs: number | null, nowMs: number): string => {
+  if (timestampMs === null) return "--";
+  const deltaMs = Math.max(0, nowMs - timestampMs);
+  if (deltaMs < 3_000) return "just now";
+  const deltaSeconds = Math.floor(deltaMs / 1_000);
+  if (deltaSeconds < 60) return `${deltaSeconds}s ago`;
+  const deltaMinutes = Math.floor(deltaSeconds / 60);
+  if (deltaMinutes < 60) return `${deltaMinutes}m ago`;
+  const deltaHours = Math.floor(deltaMinutes / 60);
+  if (deltaHours < 24) return `${deltaHours}h ago`;
+  const deltaDays = Math.floor(deltaHours / 24);
+  return `${deltaDays}d ago`;
+};
+
+const shortHash = (hash: string | null): string => {
+  if (!hash) return "--";
+  return hash.length > 12 ? `${hash.slice(0, 10)}...` : hash;
+};
+
+const syncActivityAtMs = (progress: SyncPeerProgress): number =>
+  Math.max(
+    progress.lastRequestedAtMs ?? 0,
+    progress.lastServedAtMs ?? 0,
+    progress.lastReceivedAtMs ?? 0,
+  );
 
 const summarizePayload = (payload: ActionPayload): string => {
   switch (payload.type) {
@@ -239,6 +271,46 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
         valid: true as const,
       };
     });
+  });
+
+  const syncRows = createMemo(() => {
+    const now = nowMs();
+    const rows = [...props.syncProgressByPeer.entries()].map(([peerId, progress]) => {
+      const activityAtMs = syncActivityAtMs(progress);
+      const contact = props.contactsBook?.get(peerId);
+      const peerLabel = contact?.nickname?.trim()
+        || contact?.selfName?.trim()
+        || truncatePeerId(peerId);
+      const envelopeHint = progress.lastReceivedAtMs !== null
+        ? `recv ${progress.lastReceivedEnvelopeCount}`
+        : progress.lastServedAtMs !== null
+          ? `served ${progress.lastServedEnvelopeCount}`
+          : progress.lastRequestedAtMs !== null
+            ? "req"
+            : "--";
+      const ageMs = activityAtMs > 0 ? now - activityAtMs : Number.POSITIVE_INFINITY;
+      const status = ageMs <= SYNC_ACTIVE_MS
+        ? "active"
+        : ageMs <= SYNC_STALE_MS
+          ? "stale"
+          : "idle";
+      return {
+        peerId,
+        peerLabel,
+        connected: props.connectedPeerIds.has(peerId),
+        progress,
+        activityAtMs,
+        lastSyncLabel: activityAtMs > 0 ? formatRelativeTime(activityAtMs, now) : "--",
+        envelopeHint,
+        status,
+      };
+    });
+
+    rows.sort((a, b) => {
+      if (b.activityAtMs !== a.activityAtMs) return b.activityAtMs - a.activityAtMs;
+      return a.peerId.localeCompare(b.peerId);
+    });
+    return rows;
   });
 
   const inviteDetails = createMemo(() => {
@@ -913,6 +985,94 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
           </div>
         )}
       </Show>
+
+      <div>
+        <h4 class="text-xs font-medium text-tg-text-dim uppercase tracking-wider mb-2">
+          Node Sync Progress ({syncRows().length})
+        </h4>
+        <Show
+          when={syncRows().length > 0}
+          fallback={<p class="text-sm text-tg-text-dim">No per-node sync activity yet for this group.</p>}
+        >
+          <div class="rounded border border-tg-border bg-tg-hover divide-y divide-tg-border">
+            <For each={syncRows()}>
+              {(row) => (
+                <details class="px-2 py-2">
+                  <summary class="list-none cursor-pointer">
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="flex items-center gap-2 min-w-0">
+                        <span
+                          class="w-2 h-2 rounded-full shrink-0"
+                          classList={{
+                            "bg-green-500": row.connected,
+                            "bg-gray-500": !row.connected,
+                          }}
+                        />
+                        <span class="text-xs text-tg-text truncate">{row.peerLabel}</span>
+                        <span class="font-mono text-[10px] text-tg-text-dim shrink-0">
+                          {truncatePeerId(row.peerId)}
+                        </span>
+                      </div>
+                      <div class="flex items-center gap-2 shrink-0">
+                        <span class="text-[10px] text-tg-text-dim">{row.lastSyncLabel}</span>
+                        <span class="text-[10px] text-tg-text">{row.envelopeHint}</span>
+                        <span
+                          class="text-[10px] uppercase px-1.5 py-0.5 rounded"
+                          classList={{
+                            "text-tg-success bg-tg-success/10": row.status === "active",
+                            "text-tg-warning bg-tg-warning/10": row.status === "stale",
+                            "text-tg-text-dim bg-tg-text-dim/10": row.status === "idle",
+                          }}
+                        >
+                          {row.status}
+                        </span>
+                      </div>
+                    </div>
+                  </summary>
+                  <div class="mt-2 rounded border border-tg-border bg-tg-chat px-2 py-2 text-[10px] space-y-1">
+                    <div class="flex justify-between gap-2">
+                      <span class="text-tg-text-dim">Requested</span>
+                      <span class="text-tg-text">
+                        {formatRelativeTime(row.progress.lastRequestedAtMs, nowMs())}
+                        {" · "}
+                        {shortHash(row.progress.lastRequestKnownHashHex)}
+                      </span>
+                    </div>
+                    <div class="flex justify-between gap-2">
+                      <span class="text-tg-text-dim">Served</span>
+                      <span class="text-tg-text">
+                        {formatRelativeTime(row.progress.lastServedAtMs, nowMs())}
+                        {" · "}
+                        {row.progress.lastServedEnvelopeCount}
+                      </span>
+                    </div>
+                    <div class="flex justify-between gap-2">
+                      <span class="text-tg-text-dim">Served known/head</span>
+                      <span class="text-tg-text">
+                        {shortHash(row.progress.lastServedKnownHashHex)}
+                        {" / "}
+                        {shortHash(row.progress.lastServedHeadHashHex)}
+                      </span>
+                    </div>
+                    <div class="flex justify-between gap-2">
+                      <span class="text-tg-text-dim">Received</span>
+                      <span class="text-tg-text">
+                        {formatRelativeTime(row.progress.lastReceivedAtMs, nowMs())}
+                        {" · "}
+                        {row.progress.lastReceivedEnvelopeCount}
+                      </span>
+                    </div>
+                    <div class="flex justify-between gap-2">
+                      <span class="text-tg-text-dim">Last received hash</span>
+                      <span class="text-tg-text">{shortHash(row.progress.lastReceivedHashHex)}</span>
+                    </div>
+                  </div>
+                </details>
+              )}
+            </For>
+          </div>
+        </Show>
+      </div>
 
       <Show when={props.activeGroupDiscoveryMetrics}>
         {(metrics) => (

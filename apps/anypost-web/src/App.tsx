@@ -406,6 +406,7 @@ export const App = () => {
   const [connectionMetrics, setConnectionMetrics] = createSignal<ConnectionMetrics | null>(null);
   const [peerDiscoveryMetricsByGroup, setPeerDiscoveryMetricsByGroup] = createSignal<ReadonlyMap<string, PeerDiscoveryMetrics>>(new Map());
   const [joinRetryState, setJoinRetryState] = createSignal<JoinRetryState>(new Map());
+  const [syncProgressState, setSyncProgressState] = createSignal<SyncProgressState>(new Map());
   const [mobileView, setMobileView] = createSignal(createMobileViewState());
   const [actionChainState, setActionChainState] = createSignal<ActionChainGroupState | null>(null);
   const [pendingJoinsMap, setPendingJoinsMap] = createSignal<ReadonlyMap<string, readonly PendingJoinRequest[]>>(new Map());
@@ -1120,6 +1121,12 @@ export const App = () => {
     return joinRetryState().get(activeId) ?? null;
   };
 
+  const activeSyncProgressByPeer = () => {
+    const activeId = groupState().activeGroupId;
+    if (!activeId) return new Map();
+    return syncProgressState().get(activeId) ?? new Map();
+  };
+
   createEffect(() => {
     const activeId = groupState().activeGroupId;
     refreshActionChainState();
@@ -1416,6 +1423,7 @@ export const App = () => {
 
       setContactsBook(initialContactsBook);
       setBlockedPeerIds(initialBlockedPeerIds);
+      setSyncProgressState(initialSyncProgressState);
 
       const initialPublicKeyToPeerId = loadPublicKeyToPeerId();
       const initialPendingJoins = loadPendingJoins();
@@ -1503,6 +1511,7 @@ export const App = () => {
           persistJoinRetryState(state);
         },
         onSyncProgressStateChange: (state) => {
+          setSyncProgressState(state);
           persistSyncProgressState(state);
         },
         onApprovalReceived: (groupId) => {
@@ -3035,6 +3044,7 @@ export const App = () => {
                 connectionMetrics={connectionMetrics()}
                 activeGroupDiscoveryMetrics={activeGroupDiscoveryMetrics()}
                 joinRetryEntry={activeJoinRetryEntry()}
+                syncProgressByPeer={activeSyncProgressByPeer()}
                 pendingJoins={pendingJoinsMap().get(groupState().activeGroupId ?? "") ?? []}
                 joinPolicy={actionChainState()?.joinPolicy ?? "manual"}
                 isAdmin={isCurrentUserAdmin()}
@@ -3042,6 +3052,7 @@ export const App = () => {
                 ownPublicKeyHex={ownPublicKeyHex()}
                 ownDisplayName={displayName()}
                 publicKeyToPeerId={publicKeyToPeerIdMap()}
+                contactsBook={contactsBook()}
                 connectedPeerIds={connectedPeerIds()}
                 latencyMap={latencyMap()}
                 directMessagePeerId={activeDirectMessagePeerId()}
