@@ -1,0 +1,46 @@
+name: Soak Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: "Number of soak iterations"
+        required: false
+        default: "10"
+  schedule:
+    - cron: "0 6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: soak-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dm-no-relay-soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter anypost-web exec playwright install --with-deps chromium
+
+      - name: Run DM No-Relay Soak
+        run: pnpm --filter anypost-web run e2e:soak -- --iterations ${{ github.event.inputs.iterations || '10' }} --out-dir artifacts/soak/ci
+
+      - name: Upload Soak Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-artifacts
+          path: artifacts/soak/ci
+          if-no-files-found: ignore

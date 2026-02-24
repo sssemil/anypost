@@ -6,3 +6,6 @@ dist/
 .env
 .env.local
 data/
+artifacts/
+apps/anypost-web/artifacts/
+anypost-devtools-recording-*.json

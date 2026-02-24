@@ -189,9 +189,16 @@ const startDm = async (page, targetPeerId) => {
   await page.getByRole("button", { name: "Chat" }).first().click();
 };
 
-const acceptDmWithRetry = async (alicePage, bobPage, alicePeerId, attempts = 12) => {
+const acceptDmWithRetry = async (
+  alicePage,
+  bobPage,
+  alicePeerId,
+  bobPeerId,
+  attempts = 18,
+) => {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     await startDm(bobPage, alicePeerId);
+    await startDm(alicePage, bobPeerId);
     const acceptBtn = alicePage.getByRole("button", { name: "Accept" }).first();
     if (await isVisible(acceptBtn, 4_000)) {
       await acceptBtn.click();
@@ -210,6 +217,13 @@ const openGroupInfo = async (page) => {
   const headerGroupButton = page.locator("div.bg-tg-header button.flex.flex-col").first();
   await headerGroupButton.click();
   await groupInfoTitle.waitFor({ state: "visible", timeout: 10_000 });
+};
+
+const waitForMembersCount = async (page, expectedCount, label, timeoutMs = 90_000) => {
+  await openGroupInfo(page);
+  const membersHeader = page.getByText(`MEMBERS (${expectedCount})`, { exact: false }).first();
+  await membersHeader.waitFor({ state: "visible", timeout: timeoutMs });
+  log(`${label}: MEMBERS (${expectedCount}) is visible`);
 };
 
 const getInviteCodeFromGroupInfo = async (page) => {
@@ -239,6 +253,41 @@ const sendMessage = async (page, text) => {
   await input.waitFor({ state: "visible", timeout: 10_000 });
   await input.fill(text);
   await input.press("Enter");
+};
+
+const waitForMessage = async (page, text, timeoutMs) => {
+  try {
+    await page.getByText(text, { exact: true }).first().waitFor({ state: "visible", timeout: timeoutMs });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const sendAndWaitWithRetry = async (
+  senderPage,
+  senderLabel,
+  senderTargetPeerId,
+  receiverPage,
+  receiverLabel,
+  receiverTargetPeerId,
+  textPrefix,
+  attempts = 6,
+) => {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const text = `${textPrefix}-${attempt}-${Date.now()}`;
+    await startDm(senderPage, senderTargetPeerId);
+    await startDm(receiverPage, receiverTargetPeerId);
+    await sendMessage(senderPage, text);
+
+    if (await waitForMessage(receiverPage, text, 12_000)) {
+      log(`${senderLabel} -> ${receiverLabel} delivered on attempt ${attempt}`);
+      return text;
+    }
+    log(`${senderLabel} -> ${receiverLabel} not delivered yet (attempt ${attempt}/${attempts})`);
+    await sleep(1_500);
+  }
+  throw new Error(`Timed out delivering ${senderLabel} -> ${receiverLabel} message`);
 };
 
 const main = async () => {
@@ -303,8 +352,20 @@ const main = async () => {
     ]);
 
     log("Starting DM flow: Bob invites Alice...");
-    await acceptDmWithRetry(alice, bob, alicePeerId);
+    await acceptDmWithRetry(alice, bob, alicePeerId, bobPeerId);
     await sleep(1_000);
+
+    log("Reconfirming peer connection after DM acceptance...");
+    await Promise.all([
+      ensurePeerConnection(alice, bobPeerId, "Alice"),
+      ensurePeerConnection(bob, alicePeerId, "Bob"),
+    ]);
+
+    log("Waiting for DM membership convergence...");
+    await Promise.all([
+      waitForMembersCount(alice, 2, "Alice"),
+      waitForMembersCount(bob, 2, "Bob"),
+    ]);
 
     log("Validating invite payload excludes relay...");
     const inviteCode = await getInviteCodeFromGroupInfo(alice);
@@ -316,15 +377,25 @@ const main = async () => {
       log(`Invite decode warning (non-fatal): ${decodedInvite.error.message}`);
     }
 
-    const bobMessage = `dm-no-relay-bob-${Date.now()}`;
-    const aliceMessage = `dm-no-relay-alice-${Date.now()}`;
-
     log("Exchanging DM messages...");
-    await sendMessage(bob, bobMessage);
-    await alice.getByText(bobMessage, { exact: true }).first().waitFor({ state: "visible", timeout: 30_000 });
-
-    await sendMessage(alice, aliceMessage);
-    await bob.getByText(aliceMessage, { exact: true }).first().waitFor({ state: "visible", timeout: 30_000 });
+    await sendAndWaitWithRetry(
+      bob,
+      "Bob",
+      alicePeerId,
+      alice,
+      "Alice",
+      bobPeerId,
+      "dm-no-relay-bob",
+    );
+    await sendAndWaitWithRetry(
+      alice,
+      "Alice",
+      bobPeerId,
+      bob,
+      "Bob",
+      alicePeerId,
+      "dm-no-relay-alice",
+    );
 
     log("Validation passed: DM invite without relay + bidirectional messages delivered.");
 

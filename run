@@ -13,6 +13,7 @@ Commands:
   web            Start the web app dev server
   dev            Start both relay and web app (Ctrl+C stops both)
   e2e-record     Run headless Chromium Alice/Bob scenario + download diagnostics logs
+  e2e-soak       Run repeated headless DM no-relay browser integration test
   build          Build all packages
   test           Run all tests
   typecheck      Type-check all packages
@@ -85,6 +86,11 @@ cmd_e2e_record() {
   pnpm --filter anypost-web run e2e:record -- "$@"
 }
 
+cmd_e2e_soak() {
+  shift || true
+  pnpm --filter anypost-web run e2e:soak -- "$@"
+}
+
 if [[ $# -eq 0 ]]; then
   usage
   exit 1
@@ -95,6 +101,7 @@ case "$1" in
   web)       cmd_web ;;
   dev)       cmd_dev ;;
   e2e-record) cmd_e2e_record "$@" ;;
+  e2e-soak)  cmd_e2e_soak "$@" ;;
   build)     cmd_build ;;
   test)      cmd_test ;;
   typecheck) cmd_typecheck ;;
