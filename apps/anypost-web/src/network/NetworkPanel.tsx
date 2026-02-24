@@ -25,6 +25,7 @@ type NetworkPanelProps = {
 };
 
 const PEERS_PER_PAGE = 10;
+const CONTACTS_PER_PAGE = 10;
 
 const latencyBadge = (ms: number) => {
   const classes = ms < 50
@@ -61,10 +62,24 @@ const ratio = (num: number, den: number): string =>
 const formatMs = (ms: number | null): string =>
   ms === null ? "--" : `${Math.round(ms)}ms`;
 
+const formatLastSeen = (timestamp: number, now = Date.now()): string => {
+  const deltaMs = Math.max(0, now - timestamp);
+  const seconds = Math.floor(deltaMs / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+};
+
 export const NetworkPanel = (props: NetworkPanelProps) => {
   const [showPanel, setShowPanel] = createSignal(true);
   const [peerSearch, setPeerSearch] = createSignal("");
   const [peerPage, setPeerPage] = createSignal(0);
+  const [contactsSearch, setContactsSearch] = createSignal("");
+  const [contactsPage, setContactsPage] = createSignal(0);
   const [manualRelay, setManualRelay] = createSignal("");
 
   const relayAddresses = () => {
@@ -454,6 +469,105 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                       <Show when={query && filtered.length === 0}>
                         <div class="text-tg-text-dim text-center py-2">
                           No peers matching "{peerSearch()}"
+                        </div>
+                      </Show>
+                    </>
+                  );
+                })()}
+              </Show>
+            </details>
+
+            <details class="mt-2">
+              <summary class="cursor-pointer text-tg-text-dim">
+                Contacts Book ({props.contactsBook.size})
+              </summary>
+              <Show
+                when={props.contactsBook.size > 0}
+                fallback={
+                  <div class="text-tg-text-dim text-center py-2">
+                    No contacts recorded yet.
+                  </div>
+                }
+              >
+                <div class="my-1.5">
+                  <input
+                    type="text"
+                    value={contactsSearch()}
+                    onInput={(e) => { setContactsSearch(e.currentTarget.value); setContactsPage(0); }}
+                    placeholder="Search by name, peer ID, or group ID..."
+                    class="w-full px-2 py-1.5 rounded-lg bg-tg-sidebar border border-tg-border text-tg-text font-mono text-xs box-border placeholder:text-tg-text-dim"
+                  />
+                </div>
+                {(() => {
+                  const query = contactsSearch().trim().toLowerCase();
+                  const connectedPeerIds = new Set(status().peers.map((peer) => peer.peerId));
+                  const contacts = [...props.contactsBook.values()]
+                    .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
+                    .filter((contact) =>
+                      query.length === 0 ||
+                      (contact.selfName?.toLowerCase().includes(query) ?? false) ||
+                      contact.peerId.toLowerCase().includes(query) ||
+                      contact.groupIds.some((groupId) => groupId.toLowerCase().includes(query))
+                    );
+                  const totalPages = Math.max(1, Math.ceil(contacts.length / CONTACTS_PER_PAGE));
+                  const page = Math.min(contactsPage(), totalPages - 1);
+                  const paged = contacts.slice(page * CONTACTS_PER_PAGE, (page + 1) * CONTACTS_PER_PAGE);
+                  return (
+                    <>
+                      <For each={paged}>
+                        {(contact) => (
+                          <div class="p-2 mb-1.5 bg-tg-sidebar rounded-lg border border-tg-border">
+                            <div class="flex items-center justify-between gap-2">
+                              <div class="flex items-center gap-1.5 min-w-0">
+                                <span
+                                  class="inline-block w-2 h-2 rounded-full shrink-0"
+                                  classList={{
+                                    "bg-tg-success": connectedPeerIds.has(contact.peerId),
+                                    "bg-tg-text-dim": !connectedPeerIds.has(contact.peerId),
+                                  }}
+                                />
+                                <span class="text-tg-text font-semibold truncate">
+                                  {contact.selfName ?? "(unknown name)"}
+                                </span>
+                              </div>
+                              <span class="text-[10px] text-tg-text-dim shrink-0">
+                                {formatLastSeen(contact.lastSeenAt)}
+                              </span>
+                            </div>
+                            <div class="text-tg-text-dim break-all mt-1">
+                              {contact.peerId}
+                            </div>
+                            <div class="text-tg-text-dim mt-0.5">
+                              Groups: {contact.groupIds.length}
+                            </div>
+                          </div>
+                        )}
+                      </For>
+                      <Show when={totalPages > 1}>
+                        <div class="flex justify-center items-center gap-2 mt-2">
+                          <button
+                            onClick={() => setContactsPage(Math.max(0, page - 1))}
+                            disabled={page === 0}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                          >
+                            prev
+                          </button>
+                          <span class="text-tg-text-dim text-xs">
+                            {page + 1} / {totalPages}
+                            {query && ` (${contacts.length} match${contacts.length !== 1 ? "es" : ""})`}
+                          </span>
+                          <button
+                            onClick={() => setContactsPage(Math.min(totalPages - 1, page + 1))}
+                            disabled={page >= totalPages - 1}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                          >
+                            next
+                          </button>
+                        </div>
+                      </Show>
+                      <Show when={query.length > 0 && contacts.length === 0}>
+                        <div class="text-tg-text-dim text-center py-2">
+                          No contacts matching "{contactsSearch()}"
                         </div>
                       </Show>
                     </>
