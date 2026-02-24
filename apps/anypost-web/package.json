@@ -9,7 +9,8 @@
     "build": "vite build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "e2e:record": "node ./scripts/e2e-headless-recording.mjs"
+    "e2e:record": "node ./scripts/e2e-headless-recording.mjs",
+    "e2e:dm-no-relay-ipfs": "node ./scripts/e2e-dm-no-relay-ipfs.mjs"
   },
   "dependencies": {
     "anypost-core": "workspace:*",
