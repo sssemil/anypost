@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { encode as cborEncode, decode as cborDecode } from "cbor-x";
 import { encodeGroupInvite, decodeGroupInvite } from "./group-invite.js";
 import type { GroupInvite } from "./group-invite.js";
 import { createSignedActionEnvelope } from "./action-signing.js";
@@ -9,6 +10,64 @@ import { createInviteGrant } from "./invite-grant.js";
 const TEST_RELAY_ADDR = "/ip4/127.0.0.1/tcp/4001/ws/p2p/12D3KooWTestRelay";
 const TEST_ADMIN_PEER_ID = "12D3KooWTestAdminPeerId";
 const TEST_GROUP_ID = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11";
+
+type SerializedInvitePayload = {
+  v: number;
+  sb: Uint8Array;
+  sg: Uint8Array;
+  a?: string;
+  r?: string;
+  g?: {
+    c: unknown;
+    p: Uint8Array;
+    s: Uint8Array;
+  };
+};
+
+const bytesToBase64Url = (bytes: Uint8Array): string => {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+};
+
+const base64UrlToBytes = (code: string): Uint8Array => {
+  const base64 = code.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(code.length / 4) * 4, "=");
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+};
+
+const decodeSerializedInvite = (code: string): SerializedInvitePayload =>
+  cborDecode(base64UrlToBytes(code)) as SerializedInvitePayload;
+
+const encodeSerializedInvite = (payload: SerializedInvitePayload): string =>
+  bytesToBase64Url(new Uint8Array(cborEncode(payload)));
+
+const toHexString = (bytes: Uint8Array): string =>
+  [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+const legacyEncodeInviteLength = (invite: GroupInvite): number => {
+  const legacy = {
+    signedBytes: toHexString(invite.genesisEnvelope.signedBytes),
+    signature: toHexString(invite.genesisEnvelope.signature),
+    hash: toHexString(invite.genesisEnvelope.hash),
+    relayAddr: invite.relayAddr,
+    adminPeerId: invite.adminPeerId,
+    inviteGrant: invite.inviteGrant
+      ? {
+          claims: invite.inviteGrant.claims,
+          issuerPublicKey: toHexString(invite.inviteGrant.issuerPublicKey),
+          signature: toHexString(invite.inviteGrant.signature),
+        }
+      : undefined,
+  };
+  return btoa(JSON.stringify(legacy))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "")
+    .length;
+};
 
 const createGenesisInvite = (
   overrides?: Partial<{
@@ -49,6 +108,13 @@ describe("Group invite", () => {
       expect(encoded.length).toBeGreaterThan(0);
       expect(encoded).toMatch(/^[A-Za-z0-9_-]+$/);
     });
+
+    it("should be smaller than the legacy hex/json invite format", () => {
+      const invite = createGenesisInvite({ withInviteGrant: true });
+      const compact = encodeGroupInvite(invite);
+      const legacyLength = legacyEncodeInviteLength(invite);
+      expect(compact.length).toBeLessThan(legacyLength);
+    });
   });
 
   describe("decodeGroupInvite", () => {
@@ -81,13 +147,9 @@ describe("Group invite", () => {
     it("should reject tampered signature", () => {
       const invite = createGenesisInvite();
       const encoded = encodeGroupInvite(invite);
-
-      const decoded = JSON.parse(atob(encoded.replace(/-/g, "+").replace(/_/g, "/")));
-      decoded.signature = "ff".repeat(64);
-      const tampered = btoa(JSON.stringify(decoded))
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/, "");
+      const payload = decodeSerializedInvite(encoded);
+      payload.sg = new Uint8Array(64).fill(0xff);
+      const tampered = encodeSerializedInvite(payload);
 
       const result = decodeGroupInvite(tampered);
 
@@ -145,14 +207,8 @@ describe("Group invite", () => {
       }
     });
 
-    it("should reject malformed JSON payload", () => {
-      const result = decodeGroupInvite(
-        btoa("not json")
-          .replace(/\+/g, "-")
-          .replace(/\//g, "_")
-          .replace(/=+$/, ""),
-      );
-
+    it("should reject malformed binary payload", () => {
+      const result = decodeGroupInvite(bytesToBase64Url(new Uint8Array([1, 2, 3, 4])));
       expect(result.success).toBe(false);
     });
 
@@ -170,12 +226,9 @@ describe("Group invite", () => {
     it("should decode invites without relayAddr", () => {
       const invite = createGenesisInvite();
       const encoded = encodeGroupInvite(invite);
-      const decoded = JSON.parse(atob(encoded.replace(/-/g, "+").replace(/_/g, "/")));
-      delete decoded.relayAddr;
-      const noRelayCode = btoa(JSON.stringify(decoded))
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/, "");
+      const payload = decodeSerializedInvite(encoded);
+      delete payload.r;
+      const noRelayCode = encodeSerializedInvite(payload);
 
       const result = decodeGroupInvite(noRelayCode);
 
@@ -188,13 +241,9 @@ describe("Group invite", () => {
     it("should reject invite missing adminPeerId", () => {
       const invite = createGenesisInvite();
       const encoded = encodeGroupInvite(invite);
-
-      const decoded = JSON.parse(atob(encoded.replace(/-/g, "+").replace(/_/g, "/")));
-      delete decoded.adminPeerId;
-      const tampered = btoa(JSON.stringify(decoded))
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/, "");
+      const payload = decodeSerializedInvite(encoded);
+      delete payload.a;
+      const tampered = encodeSerializedInvite(payload);
 
       const result = decodeGroupInvite(tampered);
 
@@ -216,12 +265,10 @@ describe("Group invite", () => {
     it("should reject tampered invite grant signature", () => {
       const invite = createGenesisInvite({ withInviteGrant: true });
       const encoded = encodeGroupInvite(invite);
-      const decoded = JSON.parse(atob(encoded.replace(/-/g, "+").replace(/_/g, "/")));
-      decoded.inviteGrant.signature = "ff".repeat(64);
-      const tampered = btoa(JSON.stringify(decoded))
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/, "");
+      const payload = decodeSerializedInvite(encoded);
+      if (!payload.g) throw new Error("Missing invite grant in fixture");
+      payload.g.s = new Uint8Array(64).fill(0xff);
+      const tampered = encodeSerializedInvite(payload);
 
       const result = decodeGroupInvite(tampered);
       expect(result.success).toBe(false);

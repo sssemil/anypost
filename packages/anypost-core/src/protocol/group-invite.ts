@@ -6,6 +6,8 @@ import {
   verifyInviteGrant,
   type InviteGrantProof,
 } from "./invite-grant.js";
+import { encode as cborEncode, decode as cborDecode } from "cbor-x";
+import { sha256 } from "@noble/hashes/sha2.js";
 
 export type GroupInvite = {
   readonly genesisEnvelope: SignedActionEnvelope;
@@ -15,92 +17,122 @@ export type GroupInvite = {
 };
 
 type SerializedInvite = {
-  readonly signedBytes: string;
-  readonly signature: string;
-  readonly hash: string;
-  readonly relayAddr?: string;
-  readonly adminPeerId: string;
-  readonly inviteGrant?: {
-    readonly claims: InviteGrantProof["claims"];
-    readonly issuerPublicKey: string;
-    readonly signature: string;
+  readonly v: 2;
+  readonly sb: Uint8Array;
+  readonly sg: Uint8Array;
+  readonly a: string;
+  readonly r?: string;
+  readonly g?: {
+    readonly c: InviteGrantProof["claims"];
+    readonly p: Uint8Array;
+    readonly s: Uint8Array;
   };
 };
 
 const GENESIS_HASH_HEX = toHex(GENESIS_HASH);
 
-export const encodeGroupInvite = (invite: GroupInvite): string => {
-  const serialized: SerializedInvite = {
-    signedBytes: toHex(invite.genesisEnvelope.signedBytes),
-    signature: toHex(invite.genesisEnvelope.signature),
-    hash: toHex(invite.genesisEnvelope.hash),
-    relayAddr: invite.relayAddr,
-    adminPeerId: invite.adminPeerId,
-    inviteGrant: invite.inviteGrant
-      ? {
-          claims: invite.inviteGrant.claims,
-          issuerPublicKey: toHex(invite.inviteGrant.issuerPublicKey),
-          signature: toHex(invite.inviteGrant.signature),
-        }
-      : undefined,
-  };
-
-  const json = JSON.stringify(serialized);
-  return btoa(json)
+const bytesToBase64Url = (bytes: Uint8Array): string => {
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary)
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/, "");
 };
 
-const hexToBytes = (hex: string): Uint8Array<ArrayBuffer> => {
-  const buf = new ArrayBuffer(hex.length / 2);
-  const bytes = new Uint8Array(buf);
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+const base64UrlToBytes = (code: string): Uint8Array => {
+  const base64 = code
+    .replace(/-/g, "+")
+    .replace(/_/g, "/")
+    .padEnd(Math.ceil(code.length / 4) * 4, "=");
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
 };
 
+const cloneBytes = (input: Uint8Array): Uint8Array<ArrayBuffer> => {
+  const copy = new Uint8Array(new ArrayBuffer(input.length));
+  copy.set(input);
+  return copy;
+};
+
+const asUint8Array = (value: unknown): Uint8Array<ArrayBuffer> | null => {
+  if (value instanceof Uint8Array) return cloneBytes(value);
+  if (value instanceof ArrayBuffer) return cloneBytes(new Uint8Array(value));
+  if (ArrayBuffer.isView(value)) {
+    return cloneBytes(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+  }
+  return null;
+};
+
+export const encodeGroupInvite = (invite: GroupInvite): string => {
+  const serialized: SerializedInvite = {
+    v: 2,
+    sb: invite.genesisEnvelope.signedBytes,
+    sg: invite.genesisEnvelope.signature,
+    r: invite.relayAddr?.trim() || undefined,
+    a: invite.adminPeerId,
+    g: invite.inviteGrant
+      ? {
+          c: invite.inviteGrant.claims,
+          p: invite.inviteGrant.issuerPublicKey,
+          s: invite.inviteGrant.signature,
+        }
+      : undefined,
+  };
+
+  return bytesToBase64Url(new Uint8Array(cborEncode(serialized)));
+};
+
 export const decodeGroupInvite = (code: string): Result<GroupInvite, Error> => {
   try {
-    const base64 = code.replace(/-/g, "+").replace(/_/g, "/");
-    const json = atob(base64);
-    const parsed: unknown = JSON.parse(json);
+    const bytes = base64UrlToBytes(code);
+    const parsed: unknown = cborDecode(bytes);
 
     if (
       typeof parsed !== "object" ||
       parsed === null ||
-      !("signedBytes" in parsed) ||
-      !("signature" in parsed) ||
-      !("hash" in parsed) ||
-      !("adminPeerId" in parsed)
+      !("v" in parsed) ||
+      !("sb" in parsed) ||
+      !("sg" in parsed) ||
+      !("a" in parsed)
     ) {
       return Result.failure(new Error("Invalid invite format"));
     }
 
     const {
-      signedBytes,
-      signature,
-      hash,
-      relayAddr,
-      adminPeerId,
-      inviteGrant: serializedInviteGrant,
+      v,
+      sb,
+      sg,
+      r,
+      a,
+      g,
     } = parsed as SerializedInvite;
 
-    if (typeof signedBytes !== "string" || typeof signature !== "string" || typeof hash !== "string") {
+    if (v !== 2) {
       return Result.failure(new Error("Invalid invite format"));
     }
-    if (typeof adminPeerId !== "string" || adminPeerId.trim().length === 0) {
+    const signedBytes = asUint8Array(sb);
+    const signature = asUint8Array(sg);
+    if (!signedBytes || !signature || signedBytes.length === 0 || signature.length === 0) {
       return Result.failure(new Error("Invalid invite format"));
     }
-    if (relayAddr !== undefined && typeof relayAddr !== "string") {
+    if (typeof a !== "string" || a.trim().length === 0) {
+      return Result.failure(new Error("Invalid invite format"));
+    }
+    if (r !== undefined && typeof r !== "string") {
       return Result.failure(new Error("Invalid invite format"));
     }
 
     const envelope: SignedActionEnvelope = {
-      signedBytes: hexToBytes(signedBytes),
-      signature: hexToBytes(signature),
-      hash: hexToBytes(hash),
+      signedBytes,
+      signature,
+      hash: cloneBytes(new Uint8Array(sha256(signedBytes))),
     };
 
     const verifyResult = verifyAndDecodeAction(envelope);
@@ -127,11 +159,20 @@ export const decodeGroupInvite = (code: string): Result<GroupInvite, Error> => {
     }
 
     let inviteGrant: InviteGrantProof | undefined;
-    if (serializedInviteGrant !== undefined) {
+    if (g !== undefined) {
+      if (typeof g !== "object" || g === null || !("c" in g) || !("p" in g) || !("s" in g)) {
+        return Result.failure(new Error("Invalid invite format"));
+      }
+      const grantData = g as NonNullable<SerializedInvite["g"]>;
+      const issuerPublicKey = asUint8Array(grantData.p);
+      const grantSignature = asUint8Array(grantData.s);
+      if (!issuerPublicKey || !grantSignature) {
+        return Result.failure(new Error("Invalid invite format"));
+      }
       inviteGrant = {
-        claims: serializedInviteGrant.claims,
-        issuerPublicKey: hexToBytes(serializedInviteGrant.issuerPublicKey),
-        signature: hexToBytes(serializedInviteGrant.signature),
+        claims: grantData.c,
+        issuerPublicKey,
+        signature: grantSignature,
       };
       const grantResult = verifyInviteGrant(inviteGrant, { groupId: action.groupId });
       if (!grantResult.success) {
@@ -141,8 +182,8 @@ export const decodeGroupInvite = (code: string): Result<GroupInvite, Error> => {
 
     return Result.success({
       genesisEnvelope: envelope,
-      relayAddr: relayAddr?.trim() ? relayAddr.trim() : undefined,
-      adminPeerId,
+      relayAddr: r?.trim() ? r.trim() : undefined,
+      adminPeerId: a,
       inviteGrant,
     });
   } catch (error) {
