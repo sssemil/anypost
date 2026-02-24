@@ -21,6 +21,11 @@ export const AboutPage = (props: AboutPageProps) => {
       </div>
 
       <div class="rounded border border-tg-border bg-tg-hover px-3 py-3 space-y-2">
+        <div class="text-[11px] text-tg-text-dim">License</div>
+        <div class="text-xs text-tg-text">MIT</div>
+      </div>
+
+      <div class="rounded border border-tg-border bg-tg-hover px-3 py-3 space-y-2">
         <div class="text-[11px] text-tg-text-dim">Project</div>
         <a
           class="text-xs text-tg-accent hover:text-tg-accent/80 break-all"
