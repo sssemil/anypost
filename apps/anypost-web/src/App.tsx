@@ -104,6 +104,7 @@ const MAX_EVENTS = 200;
 const SYSTEM_SENDER_ID = "__system__";
 const CONTACTS_LAST_SEEN_UPDATE_MS = 60_000;
 const CONTACTS_SELF_NAME_HISTORY_LIMIT = 12;
+const PROFILE_SYNC_REQUEST_COOLDOWN_MS = 15_000;
 const OUTGOING_DM_RETRY_BASE_MS = 12_000;
 const OUTGOING_DM_RETRY_MAX_MS = 120_000;
 const OUTGOING_DM_RETRY_SWEEP_MS = 4_000;
@@ -337,6 +338,7 @@ export const App = () => {
   let statusInterval: ReturnType<typeof setInterval> | undefined;
   let pingInterval: ReturnType<typeof setInterval> | undefined;
   let outgoingDmRetrySweepInFlight = false;
+  const profileSyncLastRequestAtByPeer = new Map<string, number>();
 
   const dispatchMobileView = (event: Parameters<typeof transitionMobileView>[1]) => {
     setMobileView((s) => transitionMobileView(s, event));
@@ -1005,6 +1007,7 @@ export const App = () => {
         if (dmPeerId && blockedPeerIds().has(msg.senderPeerId)) {
           return;
         }
+        maybeRequestProfileSync(msg.senderPeerId);
         removeOutgoingDirectMessageRequests((entry) =>
           entry.groupId === msg.groupId && entry.targetPeerId === msg.senderPeerId);
         upsertContact(msg.senderPeerId, {
@@ -1298,12 +1301,27 @@ export const App = () => {
     }
   };
 
+  const maybeRequestProfileSync = (peerId: string) => {
+    const currentChat = chat;
+    if (!currentChat) return;
+    const target = peerId.trim();
+    if (target.length === 0 || target === currentChat.peerId) return;
+
+    const now = Date.now();
+    const lastRequestedAt = profileSyncLastRequestAtByPeer.get(target) ?? 0;
+    if (now - lastRequestedAt < PROFILE_SYNC_REQUEST_COOLDOWN_MS) return;
+
+    profileSyncLastRequestAtByPeer.set(target, now);
+    void currentChat.requestProfile(target).catch(() => {});
+  };
+
   const handleStartDirectMessage = async (targetPeerId: string): Promise<string | null> => {
     const currentChat = chat;
     if (!currentChat) return "Not connected";
     const trimmedTarget = targetPeerId.trim();
     if (!isValidPeerId(trimmedTarget)) return "Invalid peer ID";
     if (trimmedTarget === currentChat.peerId) return "Cannot DM yourself";
+    maybeRequestProfileSync(trimmedTarget);
 
     try {
       const dmGroupId = await deriveDirectMessageGroupId(currentChat.peerId, trimmedTarget);

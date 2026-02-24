@@ -197,6 +197,7 @@ export type MultiGroupChat = {
   readonly getNetworkStatus: () => NetworkStatus;
   readonly connectTo: (addr: Multiaddr) => Promise<void>;
   readonly connectToPeerId: (targetPeerId: string) => Promise<void>;
+  readonly requestProfile: (targetPeerId: string) => Promise<void>;
   readonly pingPeer: (targetPeerId: string) => Promise<number>;
   readonly retryJoinNow: (groupId: string) => Promise<void>;
   readonly cancelJoinRetry: (groupId: string) => void;
@@ -260,6 +261,7 @@ const MAX_SYNC_PROGRESS_PEERS_PER_GROUP = 128;
 const SYNC_PROGRESS_STALE_MS = 24 * 60 * 60 * 1_000;
 const DEFAULT_SYNC_RECONCILE_INTERVAL_MS = 20_000;
 const DEFAULT_SYNC_RECONCILE_STALE_MS = 45_000;
+const FULL_SYNC_FALLBACK_COOLDOWN_MS = 30_000;
 const DIRECT_MESSAGE_REQUEST_TOPIC = "anypost/system/dm-requests/v1";
 const PROFILE_SYNC_TOPIC = "anypost/system/profile/v1";
 
@@ -410,6 +412,7 @@ export const createMultiGroupChat = async (
   const outgoingApprovalRate = new Map<string, RateWindow>();
   const pendingSyncRequests = new Map<string, number>();
   const seenSyncResponses = new Map<string, number>();
+  const fullSyncFallbackByGroupPeer = new Map<string, number>();
 
   const isRateLimited = (
     bucket: Map<string, RateWindow>,
@@ -2285,6 +2288,22 @@ export const createMultiGroupChat = async (
         const remoteHeadHex = toHex(payload.headHash);
         if (localHeadHex !== remoteHeadHex) {
           requestSyncFromPeer(matchedGroupId, senderPeerId);
+          return;
+        }
+
+        const requestedKnownHash = payload.requestKnownHash;
+        if (requestedKnownHash && requestedKnownHash.length > 0) {
+          const fallbackKey = `${matchedGroupId}:${senderPeerId}`;
+          const now = Date.now();
+          const last = fullSyncFallbackByGroupPeer.get(fallbackKey) ?? 0;
+          if (now - last >= FULL_SYNC_FALLBACK_COOLDOWN_MS) {
+            fullSyncFallbackByGroupPeer.set(fallbackKey, now);
+            requestSyncFromPeer(matchedGroupId, senderPeerId, new Uint8Array(0));
+            emit(
+              "sync",
+              `Requested full sync fallback from ${senderPeerId.slice(0, 12)}... for group ${matchedGroupId.slice(0, 8)}...`,
+            );
+          }
         }
       }
       return;
@@ -3076,6 +3095,12 @@ export const createMultiGroupChat = async (
     connectToPeerId: async (targetPeerId: string) => {
       await tryConnectToPeerId(targetPeerId);
     },
+    requestProfile: async (targetPeerId: string) => {
+      const trimmed = targetPeerId.trim();
+      if (trimmed.length === 0) return;
+      if (trimmed === ownPeerId) return;
+      await publishProfileRequest(trimmed);
+    },
     pingPeer: async (targetPeerId: string) => {
       const remotePeer = peerIdFromString(targetPeerId);
       const services = node.services as Record<string, unknown>;
@@ -3137,6 +3162,7 @@ export const createMultiGroupChat = async (
       outgoingApprovalRate.clear();
       pendingSyncRequests.clear();
       seenSyncResponses.clear();
+      fullSyncFallbackByGroupPeer.clear();
       await node.stop();
     },
   };
