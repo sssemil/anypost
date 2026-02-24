@@ -1517,7 +1517,9 @@ export const App = () => {
     const envelopes = currentChat.getActionChainEnvelopes(groupId);
     if (!envelopes || envelopes.length === 0) return { error: "Group has no genesis action", code: null };
 
-    const relayAddr = getBestRelayAddress();
+    const includeRelay = options.includeRelay ?? false;
+    const relayAddr = includeRelay ? getBestRelayAddress() : null;
+    if (includeRelay && !relayAddr) return { error: "No relay address available to include", code: null };
     const accountKey = getCurrentAccountKey();
     if (!accountKey) return { error: "No account key available", code: null };
 

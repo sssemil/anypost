@@ -3,6 +3,7 @@ import QRCode from "qrcode";
 import {
   toHex,
   verifyAndDecodeAction,
+  decodeGroupInvite,
 } from "anypost-core/protocol";
 import type {
   ActionPayload,
@@ -24,11 +25,13 @@ export type InviteCreateOptions =
   | {
       readonly kind: "targeted-peer";
       readonly targetPeerId: string;
+      readonly includeRelay?: boolean;
     }
   | {
       readonly kind: "open";
       readonly expiresInMinutes?: number;
       readonly maxJoiners?: number;
+      readonly includeRelay?: boolean;
     };
 
 export type InviteCreateResult = {
@@ -143,6 +146,7 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
   const [renameError, setRenameError] = createSignal("");
   const [renaming, setRenaming] = createSignal(false);
   const [inviteMode, setInviteMode] = createSignal<"targeted-peer" | "open">("open");
+  const [inviteIncludeRelay, setInviteIncludeRelay] = createSignal(false);
   const [inviteTargetPeerId, setInviteTargetPeerId] = createSignal("");
   const [inviteExpiresMinutesInput, setInviteExpiresMinutesInput] = createSignal("");
   const [inviteMaxJoinersInput, setInviteMaxJoinersInput] = createSignal("");
@@ -235,6 +239,48 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
     });
   });
 
+  const inviteDetails = createMemo(() => {
+    const code = inviteCode().trim();
+    if (!code) return null;
+    const decoded = decodeGroupInvite(code);
+    if (!decoded.success) {
+      return {
+        error: decoded.error.message,
+      } as const;
+    }
+    const invite = decoded.data;
+    const genesis = verifyAndDecodeAction(invite.genesisEnvelope);
+    const claims = invite.inviteGrant?.claims;
+
+    return {
+      adminPeerId: invite.adminPeerId,
+      relayAddr: invite.relayAddr ?? null,
+      tokenKind: claims?.kind ?? null,
+      tokenId: claims?.tokenId ?? null,
+      targetPeerId: claims?.kind === "targeted-peer" ? claims.targetPeerId : null,
+      expiresAt: claims?.kind === "open" ? claims.expiresAt ?? null : null,
+      maxJoiners: claims?.kind === "open" ? claims.maxJoiners ?? null : null,
+      genesis: genesis.success
+        ? {
+            groupId: genesis.data.groupId,
+            actionId: genesis.data.id,
+            timestamp: genesis.data.timestamp,
+            payloadType: genesis.data.payload.type,
+            groupName: genesis.data.payload.type === "group-created"
+              ? genesis.data.payload.groupName
+              : null,
+            parentHashCount: genesis.data.parentHashes.length,
+            authorPublicKeyHex: toHex(genesis.data.authorPublicKey),
+          }
+        : {
+            error: genesis.error.message,
+          },
+      envelopeHashHex: toHex(invite.genesisEnvelope.hash),
+      signedBytesLength: invite.genesisEnvelope.signedBytes.length,
+      signatureLength: invite.genesisEnvelope.signature.length,
+    } as const;
+  });
+
   const copyGroupId = () => {
     if (!props.groupId) return;
     navigator.clipboard.writeText(props.groupId).then(() => {
@@ -257,6 +303,7 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
       result = props.onCreateInvite({
         kind: "targeted-peer",
         targetPeerId: target,
+        includeRelay: inviteIncludeRelay(),
       });
     } else {
       const rawExpiry = inviteExpiresMinutesInput().trim();
@@ -275,6 +322,7 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
         kind: "open",
         expiresInMinutes,
         maxJoiners,
+        includeRelay: inviteIncludeRelay(),
       });
     }
 
@@ -396,6 +444,14 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
               Specific Peer
             </label>
           </div>
+          <label class="flex items-center gap-1.5 text-[11px] text-tg-text-dim">
+            <input
+              type="checkbox"
+              checked={inviteIncludeRelay()}
+              onChange={(e) => setInviteIncludeRelay(e.currentTarget.checked)}
+            />
+            Include relay address in invite
+          </label>
           <Show when={inviteMode() === "targeted-peer"}>
             <input
               type="text"
@@ -463,6 +519,57 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
                 {inviteCode()}
               </p>
             </div>
+          </Show>
+          <Show when={inviteDetails()}>
+            {(details) => (
+              <div class="rounded border border-tg-border bg-tg-chat p-2 space-y-1">
+                <h5 class="text-[10px] uppercase tracking-wider text-tg-text-dim">Invite Contents</h5>
+                <Show when={"error" in details()}>
+                  <p class="text-[10px] text-red-400">
+                    Failed to decode invite: {details().error}
+                  </p>
+                </Show>
+                <Show when={!("error" in details())}>
+                  <div class="text-[10px] text-tg-text-dim space-y-1">
+                    <div>Admin: <span class="font-mono text-tg-text break-all">{details().adminPeerId}</span></div>
+                    <div>
+                      Relay:{" "}
+                      <span class="font-mono text-tg-text break-all">
+                        {details().relayAddr ?? "(none)"}
+                      </span>
+                    </div>
+                    <div>Token kind: <span class="text-tg-text">{details().tokenKind ?? "(none)"}</span></div>
+                    <Show when={details().tokenId}>
+                      <div>Token ID: <span class="font-mono text-tg-text break-all">{details().tokenId}</span></div>
+                    </Show>
+                    <Show when={details().targetPeerId}>
+                      <div>Target peer: <span class="font-mono text-tg-text break-all">{details().targetPeerId}</span></div>
+                    </Show>
+                    <Show when={details().expiresAt !== null}>
+                      <div>
+                        Expires at:{" "}
+                        <span class="text-tg-text">
+                          {details().expiresAt ? new Date(details().expiresAt).toLocaleString() : "(none)"}
+                        </span>
+                      </div>
+                    </Show>
+                    <Show when={details().maxJoiners !== null}>
+                      <div>Max joiners: <span class="text-tg-text">{details().maxJoiners ?? "(none)"}</span></div>
+                    </Show>
+                    <Show when={!("error" in details().genesis)}>
+                      <div>Group ID: <span class="font-mono text-tg-text break-all">{details().genesis.groupId}</span></div>
+                      <div>Genesis action: <span class="font-mono text-tg-text break-all">{details().genesis.actionId}</span></div>
+                      <Show when={details().genesis.groupName}>
+                        <div>Group name: <span class="text-tg-text">{details().genesis.groupName}</span></div>
+                      </Show>
+                      <div>Envelope hash: <span class="font-mono text-tg-text break-all">{details().envelopeHashHex}</span></div>
+                      <div>Envelope bytes: <span class="text-tg-text">{details().signedBytesLength}</span></div>
+                      <div>Signature bytes: <span class="text-tg-text">{details().signatureLength}</span></div>
+                    </Show>
+                  </div>
+                </Show>
+              </div>
+            )}
           </Show>
         </div>
       </Show>
