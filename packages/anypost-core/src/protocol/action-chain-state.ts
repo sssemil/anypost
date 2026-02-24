@@ -10,6 +10,8 @@ export const createActionChainGroupState = (
 ): ActionChainGroupState => ({
   groupId,
   groupName: "",
+  isDirectMessage: false,
+  directMessagePeerIds: null,
   joinPolicy: "manual",
   createdAt: 0,
   members: new Map(),
@@ -26,6 +28,8 @@ export const applyAction = (
   switch (action.payload.type) {
     case "group-created":
       return applyGroupCreated(state, action, authorHex);
+    case "dm-created":
+      return applyDirectMessageCreated(state, action, authorHex);
     case "join-request":
       return applyJoinRequest(state, action, authorHex);
     case "member-approved":
@@ -87,7 +91,45 @@ const applyGroupCreated = (
   return Result.success({
     ...state,
     groupName: payload.groupName,
+    isDirectMessage: false,
+    directMessagePeerIds: null,
     joinPolicy: payload.joinPolicy ?? "manual",
+    createdAt: action.timestamp,
+    members,
+  });
+};
+
+const applyDirectMessageCreated = (
+  state: ActionChainGroupState,
+  action: SignedAction,
+  authorHex: string,
+): Result<ActionChainGroupState, Error> => {
+  if (state.members.size > 0) {
+    return Result.failure(new Error("Group already created"));
+  }
+
+  const payload = action.payload as {
+    readonly peerIds: readonly [string, string];
+  };
+  const [firstPeerId, secondPeerId] = payload.peerIds;
+  if (firstPeerId.localeCompare(secondPeerId) >= 0) {
+    return Result.failure(new Error("Invalid DM peer ID ordering"));
+  }
+
+  const members = new Map(state.members);
+  members.set(authorHex, {
+    publicKeyHex: authorHex,
+    publicKey: action.authorPublicKey,
+    role: "owner",
+    joinedAt: action.timestamp,
+  });
+
+  return Result.success({
+    ...state,
+    groupName: "",
+    isDirectMessage: true,
+    directMessagePeerIds: [firstPeerId, secondPeerId],
+    joinPolicy: "auto_with_invite",
     createdAt: action.timestamp,
     members,
   });
@@ -231,6 +273,9 @@ const applyGroupRenamed = (
 ): Result<ActionChainGroupState, Error> => {
   if (!isAdmin(state, authorHex)) {
     return Result.failure(new Error("Only admins can rename the group"));
+  }
+  if (state.isDirectMessage) {
+    return Result.failure(new Error("Direct messages cannot be renamed"));
   }
 
   const payload = action.payload as { readonly newName: string };

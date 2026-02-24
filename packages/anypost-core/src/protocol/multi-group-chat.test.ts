@@ -715,7 +715,11 @@ describe("MultiGroupChat", () => {
     await alice.chat.connectTo(bob.chat.multiaddrs[0]);
     await waitFor(400);
 
-    const { groupId, genesisEnvelope } = await alice.chat.createGroup("DM Boot");
+    const groupId = crypto.randomUUID();
+    const { genesisEnvelope } = await alice.chat.createDirectMessageGroupWithId(groupId, [
+      alice.peerId,
+      bob.peerId,
+    ]);
     const inviteCode = encodeGroupInvite({
       genesisEnvelope,
       adminPeerId: alice.peerId,
@@ -742,8 +746,8 @@ describe("MultiGroupChat", () => {
     const bob = await createTestNode();
     const groupId = crypto.randomUUID();
 
-    await alice.chat.createGroupWithId(groupId, "Concurrent DM");
-    await bob.chat.createGroupWithId(groupId, "Concurrent DM");
+    await alice.chat.createDirectMessageGroupWithId(groupId, [alice.peerId, bob.peerId]);
+    await bob.chat.createDirectMessageGroupWithId(groupId, [bob.peerId, alice.peerId]);
 
     await alice.chat.connectTo(bob.chat.multiaddrs[0]);
     await waitFor(400);

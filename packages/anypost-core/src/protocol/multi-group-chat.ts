@@ -161,6 +161,10 @@ export type MultiGroupChat = {
   readonly sendMessage: (groupId: string, text: string, displayName?: string) => Promise<void>;
   readonly createGroup: (name: string) => Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }>;
   readonly createGroupWithId: (groupId: string, name: string) => Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }>;
+  readonly createDirectMessageGroupWithId: (
+    groupId: string,
+    peerIds: readonly [string, string],
+  ) => Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }>;
   readonly joinViaInvite: (invite: GroupInvite) => Promise<{ groupId: string }>;
   readonly sendDirectMessageRequest: (request: {
     readonly targetPeerId: string;
@@ -2791,6 +2795,61 @@ export const createMultiGroupChat = async (
     return { groupId, genesisEnvelope: envelope };
   };
 
+  const normalizeDirectMessagePeerIds = (
+    peerIds: readonly [string, string],
+  ): readonly [string, string] => {
+    const a = peerIds[0].trim();
+    const b = peerIds[1].trim();
+    if (a.length === 0 || b.length === 0) {
+      throw new Error("DM peer IDs cannot be empty");
+    }
+    if (a === b) {
+      throw new Error("DM peer IDs must be unique");
+    }
+    return a.localeCompare(b) < 0 ? [a, b] : [b, a];
+  };
+
+  const createDirectMessageGroupWithResolvedId = async (
+    groupId: string,
+    peerIds: readonly [string, string],
+  ): Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }> => {
+    if (groupId.trim().length === 0) throw new Error("Group ID cannot be empty");
+
+    const normalizedPeerIds = normalizeDirectMessagePeerIds(peerIds);
+    if (!normalizedPeerIds.includes(ownPeerId)) {
+      throw new Error("Local peer must be one of the DM peers");
+    }
+
+    const topic = groupTopic(groupId);
+
+    if (!joinedGroups.includes(groupId)) {
+      topicToGroupId.set(topic, groupId);
+      joinedGroups.push(groupId);
+      getOrCreatePeerDiscoveryMetrics(groupId);
+      pubsub.subscribe(topic);
+      groupDiscoveryManager?.joinGroup(groupId);
+    }
+
+    actionChainStates.set(groupId, createActionChainGroupState(groupId));
+    reconcilePeerPathCache();
+
+    const envelope = createSignedActionEnvelope({
+      accountKey,
+      groupId,
+      parentHashes: [GENESIS_HASH],
+      payload: { type: "dm-created", peerIds: normalizedPeerIds },
+    });
+
+    processSignedAction(groupId, envelope);
+    await publishEnvelope(groupId, envelope);
+
+    emit(
+      "info",
+      `Created DM group (${groupId.slice(0, 8)}...) for ${normalizedPeerIds[0].slice(0, 12)}... and ${normalizedPeerIds[1].slice(0, 12)}...`,
+    );
+    return { groupId, genesisEnvelope: envelope };
+  };
+
   return {
     peerId: node.peerId.toString(),
     getPeerPrivateKey: () => new Uint8Array(privateKey.raw),
@@ -2859,6 +2918,12 @@ export const createMultiGroupChat = async (
     },
     createGroupWithId: async (groupId: string, name: string): Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }> => {
       return await createGroupWithResolvedId(groupId, name);
+    },
+    createDirectMessageGroupWithId: async (
+      groupId: string,
+      peerIds: readonly [string, string],
+    ): Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }> => {
+      return await createDirectMessageGroupWithResolvedId(groupId, peerIds);
     },
     joinViaInvite: async (invite: GroupInvite): Promise<{ groupId: string }> => {
       const verifyResult = verifyAndDecodeAction(invite.genesisEnvelope);

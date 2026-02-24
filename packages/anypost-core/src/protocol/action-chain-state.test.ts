@@ -48,6 +48,8 @@ describe("Action chain state", () => {
 
       expect(state.groupId).toBe(DEFAULT_GROUP_ID);
       expect(state.groupName).toBe("");
+      expect(state.isDirectMessage).toBe(false);
+      expect(state.directMessagePeerIds).toBeNull();
       expect(state.joinPolicy).toBe("manual");
       expect(state.members.size).toBe(0);
       expect(state.pendingJoins.size).toBe(0);
@@ -105,6 +107,38 @@ describe("Action chain state", () => {
       const result2 = applyAction(result1.data, secondGenesis);
 
       expect(result2.success).toBe(false);
+    });
+  });
+
+  describe("applyAction — dm-created", () => {
+    it("should mark the group as direct-message and store sorted peers", () => {
+      const creator = generateAccountKey();
+      const action = makeAction({
+        accountKey: creator,
+        parentHashes: [GENESIS_HASH],
+        payload: {
+          type: "dm-created",
+          peerIds: ["12D3KooWAlicePeer", "12D3KooWBobPeer"],
+        },
+        timestamp: 1000,
+      });
+
+      const result = applyAction(
+        createActionChainGroupState(DEFAULT_GROUP_ID),
+        action,
+      );
+
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.data.isDirectMessage).toBe(true);
+      expect(result.data.directMessagePeerIds).toEqual([
+        "12D3KooWAlicePeer",
+        "12D3KooWBobPeer",
+      ]);
+      expect(result.data.groupName).toBe("");
+      expect(result.data.joinPolicy).toBe("auto_with_invite");
+      expect(result.data.members.size).toBe(1);
+      expect(result.data.members.get(toHex(creator.publicKey))?.role).toBe("owner");
     });
   });
 

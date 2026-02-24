@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { GroupIdSchema } from "../shared/schemas.js";
+import { GroupIdSchema, PeerIdSchema } from "../shared/schemas.js";
 
 const Uint8ArraySchema = z.instanceof(Uint8Array);
 
@@ -12,11 +12,21 @@ export type ActionRole = z.infer<typeof ActionRoleSchema>;
 export const JoinPolicySchema = z.enum(["manual", "auto_with_invite"]);
 export type JoinPolicy = z.infer<typeof JoinPolicySchema>;
 
+const DirectMessagePeerIdsSchema = z
+  .tuple([PeerIdSchema, PeerIdSchema])
+  .refine(([a, b]) => a.localeCompare(b) < 0, {
+    message: "DM peer IDs must be unique and sorted ascending",
+  });
+
 export const ActionPayloadSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("group-created"),
     groupName: z.string().min(1),
     joinPolicy: JoinPolicySchema.optional(),
+  }),
+  z.object({
+    type: z.literal("dm-created"),
+    peerIds: DirectMessagePeerIdsSchema,
   }),
   z.object({
     type: z.literal("join-request"),
@@ -99,6 +109,8 @@ export type GroupMember = {
 export type ActionChainGroupState = {
   readonly groupId: string;
   readonly groupName: string;
+  readonly isDirectMessage: boolean;
+  readonly directMessagePeerIds: readonly [string, string] | null;
   readonly joinPolicy: JoinPolicy;
   readonly createdAt: number;
   readonly members: ReadonlyMap<string, GroupMember>;

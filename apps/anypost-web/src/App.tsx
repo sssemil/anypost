@@ -1128,7 +1128,9 @@ export const App = () => {
     try {
       const { groupId } = await currentChat.joinViaInvite(invite);
       const chainState = currentChat.getActionChainState(groupId);
-      const groupName = chainState?.groupName || "Unnamed Group";
+      const groupName = chainState?.isDirectMessage
+        ? "Direct Message"
+        : (chainState?.groupName || "Unnamed Group");
       dispatchGroupEvent({ type: "group-joined", groupId, groupName, hasActionChain: true });
       dispatchGroupEvent({ type: "group-selected", groupId });
       refreshActionChainState();
@@ -1349,11 +1351,8 @@ export const App = () => {
 
       const chainState = currentChat.getActionChainState(dmGroupId);
       if (!chainState || chainState.createdAt <= 0) {
-        const contact = contactsBook().get(trimmedTarget);
-        const targetLabel = contact?.nickname ?? contact?.selfName ?? `${trimmedTarget.slice(0, 12)}...`;
-        const dmName = `DM with ${targetLabel}`;
-        await currentChat.createGroupWithId(dmGroupId, dmName);
-        dispatchGroupEvent({ type: "group-created", groupId: dmGroupId, groupName: dmName });
+        await currentChat.createDirectMessageGroupWithId(dmGroupId, [currentChat.peerId, trimmedTarget]);
+        dispatchGroupEvent({ type: "group-created", groupId: dmGroupId, groupName: "Direct Message" });
       } else {
         currentChat.joinGroup(dmGroupId);
         dispatchGroupEvent({
@@ -2014,7 +2013,11 @@ export const App = () => {
                     : null
                 }
                 onSetJoinPolicy={isCurrentUserAdmin() ? handleSetJoinPolicy : null}
-                onRenameGroup={isCurrentUserAdmin() ? handleRenameGroup : null}
+                onRenameGroup={
+                  isCurrentUserAdmin() && !(actionChainState()?.isDirectMessage ?? false)
+                    ? handleRenameGroup
+                    : null
+                }
               />
             }
             contactsContent={

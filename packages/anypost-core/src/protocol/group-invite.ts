@@ -142,9 +142,9 @@ export const decodeGroupInvite = (code: string): Result<GroupInvite, Error> => {
 
     const action = verifyResult.data;
 
-    if (action.payload.type !== "group-created") {
+    if (action.payload.type !== "group-created" && action.payload.type !== "dm-created") {
       return Result.failure(
-        new Error("Invite must contain a group-created action"),
+        new Error("Invite must contain a group-created or dm-created action"),
       );
     }
 

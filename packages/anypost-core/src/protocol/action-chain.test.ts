@@ -35,6 +35,15 @@ describe("Action chain schemas", () => {
       expect(payload.type).toBe("group-created");
     });
 
+    it("should accept dm-created payload with sorted peers", () => {
+      const payload = ActionPayloadSchema.parse({
+        type: "dm-created",
+        peerIds: ["12D3KooWAlicePeer", "12D3KooWBobPeer"],
+      });
+
+      expect(payload.type).toBe("dm-created");
+    });
+
     it("should accept join-request payload", () => {
       const payload = ActionPayloadSchema.parse({
         type: "join-request",
@@ -136,6 +145,15 @@ describe("Action chain schemas", () => {
     it("should reject group-created with empty name", () => {
       expect(() =>
         ActionPayloadSchema.parse({ type: "group-created", groupName: "" }),
+      ).toThrow();
+    });
+
+    it("should reject dm-created with unsorted peers", () => {
+      expect(() =>
+        ActionPayloadSchema.parse({
+          type: "dm-created",
+          peerIds: ["12D3KooWZuluPeer", "12D3KooWAlphaPeer"],
+        }),
       ).toThrow();
     });
 

@@ -102,6 +102,8 @@ const summarizePayload = (payload: ActionPayload): string => {
   switch (payload.type) {
     case "group-created":
       return `Group created: "${payload.groupName}" (${payload.joinPolicy ?? "manual"})`;
+    case "dm-created":
+      return `DM created for ${payload.peerIds[0]} and ${payload.peerIds[1]}`;
     case "join-request":
       return `Join request from ${truncateHex(toHex(payload.requesterPublicKey))}`;
     case "member-approved":
@@ -268,6 +270,9 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
             payloadType: genesis.data.payload.type,
             groupName: genesis.data.payload.type === "group-created"
               ? genesis.data.payload.groupName
+              : null,
+            dmPeerIds: genesis.data.payload.type === "dm-created"
+              ? genesis.data.payload.peerIds
               : null,
             parentHashCount: genesis.data.parentHashes.length,
             authorPublicKeyHex: toHex(genesis.data.authorPublicKey),
@@ -562,6 +567,14 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
                       <Show when={details().genesis.groupName}>
                         <div>Group name: <span class="text-tg-text">{details().genesis.groupName}</span></div>
                       </Show>
+                      <Show when={details().genesis.dmPeerIds}>
+                        <div>
+                          DM peers:{" "}
+                          <span class="font-mono text-tg-text break-all">
+                            {details().genesis.dmPeerIds?.join(" , ")}
+                          </span>
+                        </div>
+                      </Show>
                       <div>Envelope hash: <span class="font-mono text-tg-text break-all">{details().envelopeHashHex}</span></div>
                       <div>Envelope bytes: <span class="text-tg-text">{details().signedBytesLength}</span></div>
                       <div>Signature bytes: <span class="text-tg-text">{details().signatureLength}</span></div>
@@ -574,7 +587,7 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
         </div>
       </Show>
 
-      <Show when={props.isAdmin}>
+      <Show when={props.isAdmin && !!props.onRenameGroup}>
         <div class="rounded border border-tg-border bg-tg-hover px-2 py-2 space-y-2">
           <h4 class="text-xs font-medium text-tg-text-dim uppercase tracking-wider">
             Rename Group

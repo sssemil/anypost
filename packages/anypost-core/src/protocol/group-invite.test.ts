@@ -74,6 +74,7 @@ const createGenesisInvite = (
     relayAddr: string;
     adminPeerId: string;
     withInviteGrant: boolean;
+    dmCreated: boolean;
   }>,
 ): GroupInvite => {
   const accountKey = generateAccountKey();
@@ -81,7 +82,9 @@ const createGenesisInvite = (
     accountKey,
     groupId: TEST_GROUP_ID,
     parentHashes: [GENESIS_HASH],
-    payload: { type: "group-created", groupName: "Test Group" },
+    payload: overrides?.dmCreated
+      ? { type: "dm-created", peerIds: ["12D3KooWAlicePeer", "12D3KooWBobPeer"] }
+      : { type: "group-created", groupName: "Test Group" },
   });
 
   return {
@@ -176,8 +179,16 @@ describe("Group invite", () => {
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error.message).toContain("group-created");
+        expect(result.error.message).toContain("group-created or dm-created");
       }
+    });
+
+    it("should accept a dm-created genesis invite", () => {
+      const invite = createGenesisInvite({ dmCreated: true });
+      const encoded = encodeGroupInvite(invite);
+      const result = decodeGroupInvite(encoded);
+
+      expect(result.success).toBe(true);
     });
 
     it("should reject envelope with non-genesis parent hash", () => {
