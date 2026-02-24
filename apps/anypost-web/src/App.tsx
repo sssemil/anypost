@@ -1192,6 +1192,27 @@ export const App = () => {
     return new Set(status.peers.map((p) => p.peerId));
   };
 
+  const pinnedPeerIds = (): readonly string[] => {
+    // Recompute when group/network snapshots change so membership updates propagate.
+    groupState();
+    networkStatus();
+    const currentChat = chat;
+    if (!currentChat) return [];
+    const peerIdMap = publicKeyToPeerIdMap();
+    const pinned = new Set<string>();
+    for (const groupId of currentChat.getJoinedGroups()) {
+      const chainState = currentChat.getActionChainState(groupId);
+      if (!chainState) continue;
+      for (const member of chainState.members.values()) {
+        const memberPeerId = peerIdMap.get(member.publicKeyHex);
+        if (memberPeerId && memberPeerId !== currentChat.peerId) {
+          pinned.add(memberPeerId);
+        }
+      }
+    }
+    return [...pinned].sort((a, b) => a.localeCompare(b));
+  };
+
   const sidebarGroups = () =>
     getGroupList(groupState()).map((g) => {
       const lastMsg = g.messages.length > 0 ? g.messages[g.messages.length - 1] : undefined;
@@ -1272,8 +1293,8 @@ export const App = () => {
                 activeGroupId={groupState().activeGroupId}
                 topBanners={
                   <>
-                    <div class="bg-tg-accent/10 border-b border-tg-accent/20 px-3 py-2">
-                      <p class="text-tg-accent text-[11px] leading-tight">
+                    <div class="bg-red-500/15 border-b border-red-500/30 px-3 py-2">
+                      <p class="text-red-400 text-[11px] leading-tight">
                         Beta software. Messages are <strong>not encrypted</strong> and may be lost.
                       </p>
                     </div>
@@ -1321,6 +1342,7 @@ export const App = () => {
                   displayName={displayName()}
                   latencyMap={latencyMap()}
                   contactsBook={contactsBook()}
+                  pinnedPeerIds={pinnedPeerIds()}
                   onAddRelay={handleAddRelay}
                 />
                 <EventLog

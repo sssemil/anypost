@@ -40,9 +40,11 @@ const classifyTransport = (addr: string): string => {
 };
 
 export const PeerSharingPanel = (props: PeerSharingPanelProps) => {
+  const CONNECTIONS_PER_PAGE = 6;
   const [state, setState] = createSignal(createPeerSharingState(props.ownPeerId));
   const [checkPeerId, setCheckPeerId] = createSignal("");
   const [connectionCheck, setConnectionCheck] = createSignal<ConnectionCheckState>({ status: "idle" });
+  const [connectionsPage, setConnectionsPage] = createSignal(0);
 
   const checkedPeerId = () =>
     connectionCheck().status === "idle" ? "" : connectionCheck().peerId;
@@ -110,6 +112,7 @@ export const PeerSharingPanel = (props: PeerSharingPanelProps) => {
       return;
     }
 
+    setConnectionsPage(0);
     setConnectionCheck({
       status: "connected",
       peerId,
@@ -208,18 +211,48 @@ export const PeerSharingPanel = (props: PeerSharingPanelProps) => {
                 <p class="text-tg-success">
                   Connected to <code class="font-mono">{checkedPeerId().slice(0, 20)}...</code>
                 </p>
-                <div class="space-y-1">
-                  <For each={checkedConnections()}>
-                    {(conn) => (
-                      <div class="rounded border border-tg-border bg-tg-sidebar px-2 py-1">
-                        <div class="text-tg-text-dim">
-                          via <span class="text-tg-text">{conn.transport}</span> • {conn.direction} • mux: {conn.protocol}
+                {(() => {
+                  const allConnections = checkedConnections();
+                  const totalPages = Math.max(1, Math.ceil(allConnections.length / CONNECTIONS_PER_PAGE));
+                  const page = Math.min(connectionsPage(), totalPages - 1);
+                  const paged = allConnections.slice(
+                    page * CONNECTIONS_PER_PAGE,
+                    (page + 1) * CONNECTIONS_PER_PAGE,
+                  );
+                  return (
+                    <div class="space-y-1">
+                      <For each={paged}>
+                        {(conn) => (
+                          <div class="rounded border border-tg-border bg-tg-sidebar px-2 py-1">
+                            <div class="text-tg-text-dim">
+                              via <span class="text-tg-text">{conn.transport}</span> • {conn.direction} • mux: {conn.protocol}
+                            </div>
+                            <code class="block break-all text-[11px] text-tg-text">{conn.addr}</code>
+                          </div>
+                        )}
+                      </For>
+                      <Show when={totalPages > 1}>
+                        <div class="flex justify-center items-center gap-2 pt-1">
+                          <button
+                            onClick={() => setConnectionsPage(Math.max(0, page - 1))}
+                            disabled={page === 0}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                          >
+                            prev
+                          </button>
+                          <span class="text-tg-text-dim text-xs">{page + 1} / {totalPages}</span>
+                          <button
+                            onClick={() => setConnectionsPage(Math.min(totalPages - 1, page + 1))}
+                            disabled={page >= totalPages - 1}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                          >
+                            next
+                          </button>
                         </div>
-                        <code class="block break-all text-[11px] text-tg-text">{conn.addr}</code>
-                      </div>
-                    )}
-                  </For>
-                </div>
+                      </Show>
+                    </div>
+                  );
+                })()}
               </div>
             </Show>
           </div>

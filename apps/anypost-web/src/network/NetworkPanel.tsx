@@ -21,11 +21,19 @@ type NetworkPanelProps = {
   readonly displayName: string;
   readonly latencyMap: ReadonlyMap<string, number>;
   readonly contactsBook: ContactsBook;
+  readonly pinnedPeerIds: readonly string[];
   readonly onAddRelay?: (addr: string) => void;
 };
 
 const PEERS_PER_PAGE = 10;
 const CONTACTS_PER_PAGE = 10;
+const RELAYS_PER_PAGE = 8;
+const RELAY_CANDIDATES_PER_PAGE = 12;
+const RESERVATIONS_PER_PAGE = 12;
+const GROUP_DISCOVERY_GROUPS_PER_PAGE = 6;
+const GROUP_DISCOVERY_PEERS_PER_PAGE = 8;
+const ADDRESSES_PER_PAGE = 8;
+const PINNED_PEERS_PER_PAGE = 10;
 
 const latencyBadge = (ms: number) => {
   const classes = ms < 50
@@ -76,6 +84,13 @@ const formatLastSeen = (timestamp: number, now = Date.now()): string => {
 
 export const NetworkPanel = (props: NetworkPanelProps) => {
   const [showPanel, setShowPanel] = createSignal(true);
+  const [relayPoolPage, setRelayPoolPage] = createSignal(0);
+  const [relayCandidatePage, setRelayCandidatePage] = createSignal(0);
+  const [reservationPage, setReservationPage] = createSignal(0);
+  const [groupDiscoveryPage, setGroupDiscoveryPage] = createSignal(0);
+  const [groupPeerPages, setGroupPeerPages] = createSignal<ReadonlyMap<string, number>>(new Map());
+  const [addressesPage, setAddressesPage] = createSignal(0);
+  const [pinnedPeerPage, setPinnedPeerPage] = createSignal(0);
   const [peerSearch, setPeerSearch] = createSignal("");
   const [peerPage, setPeerPage] = createSignal(0);
   const [contactsSearch, setContactsSearch] = createSignal("");
@@ -94,6 +109,15 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
       props.onAddRelay(addr);
       setManualRelay("");
     }
+  };
+
+  const getGroupPeerPage = (groupId: string): number => groupPeerPages().get(groupId) ?? 0;
+  const setGroupPeerPage = (groupId: string, page: number) => {
+    setGroupPeerPages((prev) => {
+      const next = new Map(prev);
+      next.set(groupId, page);
+      return next;
+    });
   };
 
   return (
@@ -140,17 +164,46 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                       <span class="text-tg-accent text-[10px]">discovering...</span>
                     </Show>
                   </div>
-                  <For each={pool().relays}>
-                    {(relay) => (
-                      <div class="flex items-center gap-2 py-0.5">
-                        {relayStatusDot(relay.status)}
-                        <code class="text-tg-text break-all flex-1">{relay.address}</code>
-                        <Show when={relay.latencyMs !== null}>
-                          {latencyBadge(relay.latencyMs!)}
+                  {(() => {
+                    const relays = pool().relays;
+                    const totalPages = Math.max(1, Math.ceil(relays.length / RELAYS_PER_PAGE));
+                    const page = Math.min(relayPoolPage(), totalPages - 1);
+                    const paged = relays.slice(page * RELAYS_PER_PAGE, (page + 1) * RELAYS_PER_PAGE);
+                    return (
+                      <>
+                        <For each={paged}>
+                          {(relay) => (
+                            <div class="flex items-center gap-2 py-0.5">
+                              {relayStatusDot(relay.status)}
+                              <code class="text-tg-text break-all flex-1">{relay.address}</code>
+                              <Show when={relay.latencyMs !== null}>
+                                {latencyBadge(relay.latencyMs!)}
+                              </Show>
+                            </div>
+                          )}
+                        </For>
+                        <Show when={totalPages > 1}>
+                          <div class="flex justify-center items-center gap-2 mt-2">
+                            <button
+                              onClick={() => setRelayPoolPage(Math.max(0, page - 1))}
+                              disabled={page === 0}
+                              class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                            >
+                              prev
+                            </button>
+                            <span class="text-tg-text-dim text-xs">{page + 1} / {totalPages}</span>
+                            <button
+                              onClick={() => setRelayPoolPage(Math.min(totalPages - 1, page + 1))}
+                              disabled={page >= totalPages - 1}
+                              class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                            >
+                              next
+                            </button>
+                          </div>
                         </Show>
-                      </div>
-                    )}
-                  </For>
+                      </>
+                    );
+                  })()}
                   <Show when={props.onAddRelay}>
                     <div class="flex gap-2 mt-2">
                       <input
@@ -184,17 +237,54 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                         {getReservedCount(candidateState())} reserved / {candidateState().candidates.size} candidate{candidateState().candidates.size !== 1 ? "s" : ""}
                       </span>
                     </div>
-                    <For each={getCandidatesByRtt(candidateState()) as readonly { peerId: string; addresses: readonly string[]; rttMs: number | null; hasReservation: boolean }[]}>
-                      {(candidate) => (
-                        <div class="flex items-center gap-2 py-0.5">
-                          {reservationDot(candidate.hasReservation)}
-                          <code class="text-tg-text flex-1">{candidate.peerId.slice(0, 20)}...</code>
-                          <Show when={candidate.rttMs !== null}>
-                            {latencyBadge(candidate.rttMs!)}
+                    {(() => {
+                      const candidates = getCandidatesByRtt(candidateState()) as readonly {
+                        readonly peerId: string;
+                        readonly addresses: readonly string[];
+                        readonly rttMs: number | null;
+                        readonly hasReservation: boolean;
+                      }[];
+                      const totalPages = Math.max(1, Math.ceil(candidates.length / RELAY_CANDIDATES_PER_PAGE));
+                      const page = Math.min(relayCandidatePage(), totalPages - 1);
+                      const paged = candidates.slice(
+                        page * RELAY_CANDIDATES_PER_PAGE,
+                        (page + 1) * RELAY_CANDIDATES_PER_PAGE,
+                      );
+                      return (
+                        <>
+                          <For each={paged}>
+                            {(candidate) => (
+                              <div class="flex items-center gap-2 py-0.5">
+                                {reservationDot(candidate.hasReservation)}
+                                <code class="text-tg-text flex-1">{candidate.peerId.slice(0, 20)}...</code>
+                                <Show when={candidate.rttMs !== null}>
+                                  {latencyBadge(candidate.rttMs!)}
+                                </Show>
+                              </div>
+                            )}
+                          </For>
+                          <Show when={totalPages > 1}>
+                            <div class="flex justify-center items-center gap-2 mt-2">
+                              <button
+                                onClick={() => setRelayCandidatePage(Math.max(0, page - 1))}
+                                disabled={page === 0}
+                                class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                              >
+                                prev
+                              </button>
+                              <span class="text-tg-text-dim text-xs">{page + 1} / {totalPages}</span>
+                              <button
+                                onClick={() => setRelayCandidatePage(Math.min(totalPages - 1, page + 1))}
+                                disabled={page >= totalPages - 1}
+                                class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                              >
+                                next
+                              </button>
+                            </div>
                           </Show>
-                        </div>
-                      )}
-                    </For>
+                        </>
+                      );
+                    })()}
                   </div>
                 </Show>
               )}
@@ -240,23 +330,52 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                         {reservationState().entries.size} relay{reservationState().entries.size !== 1 ? "s" : ""}
                       </span>
                     </div>
-                    <For each={[...reservationState().entries.values()]}>
-                      {(entry) => (
-                        <div class="flex items-center gap-2 py-0.5">
-                          <span
-                            class="inline-block w-2 h-2 rounded-full"
-                            classList={{
-                              "bg-tg-success": entry.status === "active",
-                              "bg-tg-warning": entry.status === "renewing" || entry.status === "reserving",
-                              "bg-tg-danger": entry.status === "backoff",
-                              "bg-tg-text-dim": entry.status === "idle" || entry.status === "evicted",
-                            }}
-                          />
-                          <code class="text-tg-text flex-1">{entry.peerId.slice(0, 20)}...</code>
-                          <span class="text-[10px] text-tg-text-dim uppercase">{entry.status}</span>
-                        </div>
-                      )}
-                    </For>
+                    {(() => {
+                      const entries = [...reservationState().entries.values()];
+                      const totalPages = Math.max(1, Math.ceil(entries.length / RESERVATIONS_PER_PAGE));
+                      const page = Math.min(reservationPage(), totalPages - 1);
+                      const paged = entries.slice(page * RESERVATIONS_PER_PAGE, (page + 1) * RESERVATIONS_PER_PAGE);
+                      return (
+                        <>
+                          <For each={paged}>
+                            {(entry) => (
+                              <div class="flex items-center gap-2 py-0.5">
+                                <span
+                                  class="inline-block w-2 h-2 rounded-full"
+                                  classList={{
+                                    "bg-tg-success": entry.status === "active",
+                                    "bg-tg-warning": entry.status === "renewing" || entry.status === "reserving",
+                                    "bg-tg-danger": entry.status === "backoff",
+                                    "bg-tg-text-dim": entry.status === "idle" || entry.status === "evicted",
+                                  }}
+                                />
+                                <code class="text-tg-text flex-1">{entry.peerId.slice(0, 20)}...</code>
+                                <span class="text-[10px] text-tg-text-dim uppercase">{entry.status}</span>
+                              </div>
+                            )}
+                          </For>
+                          <Show when={totalPages > 1}>
+                            <div class="flex justify-center items-center gap-2 mt-2">
+                              <button
+                                onClick={() => setReservationPage(Math.max(0, page - 1))}
+                                disabled={page === 0}
+                                class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                              >
+                                prev
+                              </button>
+                              <span class="text-tg-text-dim text-xs">{page + 1} / {totalPages}</span>
+                              <button
+                                onClick={() => setReservationPage(Math.min(totalPages - 1, page + 1))}
+                                disabled={page >= totalPages - 1}
+                                class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                              >
+                                next
+                              </button>
+                            </div>
+                          </Show>
+                        </>
+                      );
+                    })()}
                   </div>
                 </Show>
               )}
@@ -275,60 +394,123 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                         {[...discovery().groups.values()].reduce((sum, g) => sum + g.peers.length, 0)} peers found
                       </span>
                     </div>
-                    <For each={[...discovery().groups.values()]}>
-                      {(group) => (
-                        <div class="p-2 mb-1.5 bg-tg-sidebar rounded-lg border border-tg-border">
-                          <div class="flex items-center justify-between mb-1">
-                            <code class="font-bold text-tg-text">{group.groupId.slice(0, 8)}...</code>
-                            <div class="flex items-center gap-2">
-                              <Show when={group.isAdvertising}>
-                                <span class="px-1.5 rounded-full text-[10px] bg-tg-success/20 text-tg-success">
-                                  advertising
-                                </span>
-                              </Show>
-                              <Show
-                                when={group.isSearching}
-                                fallback={
-                                  <span class="px-1.5 rounded-full text-[10px] bg-tg-text-dim/20 text-tg-text-dim">
-                                    idle
-                                  </span>
-                                }
-                              >
-                                <span class="px-1.5 rounded-full text-[10px] bg-tg-accent/20 text-tg-accent">
-                                  searching...
-                                </span>
-                              </Show>
-                            </div>
-                          </div>
-                          <div class="text-tg-text-dim mb-1">
-                            Searches: {group.searchCount}
-                            <Show when={group.lastSearchAt !== null}>
-                              {" "}(last: {Math.round((Date.now() - group.lastSearchAt!) / 1000)}s ago)
-                            </Show>
-                          </div>
-                          <Show
-                            when={group.peers.length > 0}
-                            fallback={
-                              <div class="text-tg-text-dim text-[10px]">No peers discovered yet</div>
-                            }
-                          >
-                            <div class="text-tg-text-dim text-[10px] mb-0.5">
-                              Peers ({group.peers.length}):
-                            </div>
-                            <For each={group.peers}>
-                              {(peer) => (
-                                <div class="pl-2 text-tg-text break-all text-[10px]">
-                                  {peer.peerId.slice(0, 20)}...
-                                  <Show when={peer.addrs.length > 0}>
-                                    <span class="text-tg-text-dim ml-1">{peer.addrs[0]}</span>
+                    {(() => {
+                      const groups = [...discovery().groups.values()].sort((a, b) => a.groupId.localeCompare(b.groupId));
+                      const totalPages = Math.max(1, Math.ceil(groups.length / GROUP_DISCOVERY_GROUPS_PER_PAGE));
+                      const page = Math.min(groupDiscoveryPage(), totalPages - 1);
+                      const pagedGroups = groups.slice(
+                        page * GROUP_DISCOVERY_GROUPS_PER_PAGE,
+                        (page + 1) * GROUP_DISCOVERY_GROUPS_PER_PAGE,
+                      );
+                      return (
+                        <>
+                          <For each={pagedGroups}>
+                            {(group) => (
+                              <div class="p-2 mb-1.5 bg-tg-sidebar rounded-lg border border-tg-border">
+                                <div class="flex items-center justify-between mb-1">
+                                  <code class="font-bold text-tg-text">{group.groupId.slice(0, 8)}...</code>
+                                  <div class="flex items-center gap-2">
+                                    <Show when={group.isAdvertising}>
+                                      <span class="px-1.5 rounded-full text-[10px] bg-tg-success/20 text-tg-success">
+                                        advertising
+                                      </span>
+                                    </Show>
+                                    <Show
+                                      when={group.isSearching}
+                                      fallback={
+                                        <span class="px-1.5 rounded-full text-[10px] bg-tg-text-dim/20 text-tg-text-dim">
+                                          idle
+                                        </span>
+                                      }
+                                    >
+                                      <span class="px-1.5 rounded-full text-[10px] bg-tg-accent/20 text-tg-accent">
+                                        searching...
+                                      </span>
+                                    </Show>
+                                  </div>
+                                </div>
+                                <div class="text-tg-text-dim mb-1">
+                                  Searches: {group.searchCount}
+                                  <Show when={group.lastSearchAt !== null}>
+                                    {" "}(last: {Math.round((Date.now() - group.lastSearchAt!) / 1000)}s ago)
                                   </Show>
                                 </div>
-                              )}
-                            </For>
+                                <Show
+                                  when={group.peers.length > 0}
+                                  fallback={
+                                    <div class="text-tg-text-dim text-[10px]">No peers discovered yet</div>
+                                  }
+                                >
+                                  {(() => {
+                                    const totalPeerPages = Math.max(1, Math.ceil(group.peers.length / GROUP_DISCOVERY_PEERS_PER_PAGE));
+                                    const peerPage = Math.min(getGroupPeerPage(group.groupId), totalPeerPages - 1);
+                                    const pagedPeers = group.peers.slice(
+                                      peerPage * GROUP_DISCOVERY_PEERS_PER_PAGE,
+                                      (peerPage + 1) * GROUP_DISCOVERY_PEERS_PER_PAGE,
+                                    );
+                                    return (
+                                      <>
+                                        <div class="text-tg-text-dim text-[10px] mb-0.5">
+                                          Peers ({group.peers.length}):
+                                        </div>
+                                        <For each={pagedPeers}>
+                                          {(peer) => (
+                                            <div class="pl-2 text-tg-text break-all text-[10px]">
+                                              {peer.peerId.slice(0, 20)}...
+                                              <Show when={peer.addrs.length > 0}>
+                                                <span class="text-tg-text-dim ml-1">{peer.addrs[0]}</span>
+                                              </Show>
+                                            </div>
+                                          )}
+                                        </For>
+                                        <Show when={totalPeerPages > 1}>
+                                          <div class="flex justify-center items-center gap-2 mt-2">
+                                            <button
+                                              onClick={() => setGroupPeerPage(group.groupId, Math.max(0, peerPage - 1))}
+                                              disabled={peerPage === 0}
+                                              class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                                            >
+                                              prev
+                                            </button>
+                                            <span class="text-tg-text-dim text-xs">{peerPage + 1} / {totalPeerPages}</span>
+                                            <button
+                                              onClick={() => setGroupPeerPage(group.groupId, Math.min(totalPeerPages - 1, peerPage + 1))}
+                                              disabled={peerPage >= totalPeerPages - 1}
+                                              class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                                            >
+                                              next
+                                            </button>
+                                          </div>
+                                        </Show>
+                                      </>
+                                    );
+                                  })()}
+                                </Show>
+                              </div>
+                            )}
+                          </For>
+                          <Show when={totalPages > 1}>
+                            <div class="flex justify-center items-center gap-2 mt-2">
+                              <button
+                                onClick={() => setGroupDiscoveryPage(Math.max(0, page - 1))}
+                                disabled={page === 0}
+                                class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                              >
+                                prev
+                              </button>
+                              <span class="text-tg-text-dim text-xs">{page + 1} / {totalPages}</span>
+                              <button
+                                onClick={() => setGroupDiscoveryPage(Math.min(totalPages - 1, page + 1))}
+                                disabled={page >= totalPages - 1}
+                                class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                              >
+                                next
+                              </button>
+                            </div>
                           </Show>
-                        </div>
-                      )}
-                    </For>
+                        </>
+                      );
+                    })()}
                   </div>
                 </Show>
               )}
@@ -354,16 +536,112 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                   <summary class="cursor-pointer text-tg-text-dim">
                     My addresses ({status().multiaddrs.length})
                   </summary>
-                  <For each={status().multiaddrs}>
-                    {(addr) => (
-                      <div class="pl-3 break-all mt-0.5 text-tg-text">
-                        {addr}
-                      </div>
-                    )}
-                  </For>
+                  {(() => {
+                    const totalPages = Math.max(1, Math.ceil(status().multiaddrs.length / ADDRESSES_PER_PAGE));
+                    const page = Math.min(addressesPage(), totalPages - 1);
+                    const paged = status().multiaddrs.slice(page * ADDRESSES_PER_PAGE, (page + 1) * ADDRESSES_PER_PAGE);
+                    return (
+                      <>
+                        <For each={paged}>
+                          {(addr) => (
+                            <div class="pl-3 break-all mt-0.5 text-tg-text">
+                              {addr}
+                            </div>
+                          )}
+                        </For>
+                        <Show when={totalPages > 1}>
+                          <div class="flex justify-center items-center gap-2 mt-2">
+                            <button
+                              onClick={() => setAddressesPage(Math.max(0, page - 1))}
+                              disabled={page === 0}
+                              class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                            >
+                              prev
+                            </button>
+                            <span class="text-tg-text-dim text-xs">{page + 1} / {totalPages}</span>
+                            <button
+                              onClick={() => setAddressesPage(Math.min(totalPages - 1, page + 1))}
+                              disabled={page >= totalPages - 1}
+                              class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                            >
+                              next
+                            </button>
+                          </div>
+                        </Show>
+                      </>
+                    );
+                  })()}
                 </details>
               </Show>
             </div>
+
+            <details class="mt-1">
+              <summary class="cursor-pointer text-tg-text-dim">
+                Pinned Peer IDs ({props.pinnedPeerIds.length})
+              </summary>
+              <Show
+                when={props.pinnedPeerIds.length > 0}
+                fallback={
+                  <div class="text-tg-text-dim text-center py-2">
+                    No pinned peers yet.
+                  </div>
+                }
+              >
+                {(() => {
+                  const totalPages = Math.max(1, Math.ceil(props.pinnedPeerIds.length / PINNED_PEERS_PER_PAGE));
+                  const page = Math.min(pinnedPeerPage(), totalPages - 1);
+                  const paged = props.pinnedPeerIds.slice(
+                    page * PINNED_PEERS_PER_PAGE,
+                    (page + 1) * PINNED_PEERS_PER_PAGE,
+                  );
+                  const connectedPeerIds = new Set(status().peers.map((peer) => peer.peerId));
+                  return (
+                    <>
+                      <For each={paged}>
+                        {(peerId) => {
+                          const contact = props.contactsBook.get(peerId);
+                          const label = contact?.nickname ?? contact?.selfName ?? `${peerId.slice(0, 12)}...`;
+                          return (
+                            <div class="p-2 mb-1.5 bg-tg-sidebar rounded-lg border border-tg-border">
+                              <div class="flex items-center gap-1.5 min-w-0">
+                                <span
+                                  class="inline-block w-2 h-2 rounded-full shrink-0"
+                                  classList={{
+                                    "bg-tg-success": connectedPeerIds.has(peerId),
+                                    "bg-tg-text-dim": !connectedPeerIds.has(peerId),
+                                  }}
+                                />
+                                <span class="text-tg-text font-semibold truncate">{label}</span>
+                              </div>
+                              <code class="block mt-1 text-tg-text-dim break-all">{peerId}</code>
+                            </div>
+                          );
+                        }}
+                      </For>
+                      <Show when={totalPages > 1}>
+                        <div class="flex justify-center items-center gap-2 mt-2">
+                          <button
+                            onClick={() => setPinnedPeerPage(Math.max(0, page - 1))}
+                            disabled={page === 0}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                          >
+                            prev
+                          </button>
+                          <span class="text-tg-text-dim text-xs">{page + 1} / {totalPages}</span>
+                          <button
+                            onClick={() => setPinnedPeerPage(Math.min(totalPages - 1, page + 1))}
+                            disabled={page >= totalPages - 1}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                          >
+                            next
+                          </button>
+                        </div>
+                      </Show>
+                    </>
+                  );
+                })()}
+              </Show>
+            </details>
 
             <details class="mt-1">
               <summary class="cursor-pointer text-tg-text-dim">
