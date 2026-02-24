@@ -11,6 +11,8 @@ import { QrScannerModal } from "../qr/QrScannerModal.js";
 type GroupItem = {
   readonly groupId: string;
   readonly groupName?: string;
+  readonly isDirectMessage?: boolean;
+  readonly directMessageConnected?: boolean;
   readonly unreadCount: number;
   readonly seenPeerCount: number;
   readonly lastMessage?: { readonly text: string; readonly timestamp: number };
@@ -151,6 +153,15 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
 
   const formatRequestTime = (timestamp: number): string =>
     new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+  const GroupIcon = () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="w-3.5 h-3.5 text-tg-text-dim shrink-0">
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="3" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a3 3 0 0 1 0 5.75" />
+    </svg>
+  );
 
   return (
     <div class="flex flex-col h-full bg-tg-sidebar">
@@ -356,6 +367,12 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center justify-between">
                     <span class="flex items-center gap-1.5 min-w-0">
+                      <Show when={!group.isDirectMessage}>
+                        <GroupIcon />
+                      </Show>
+                      <Show when={group.isDirectMessage && group.directMessageConnected}>
+                        <span class="inline-block w-2 h-2 rounded-full bg-tg-success shrink-0" title="Connected" />
+                      </Show>
                       <span class="text-sm text-tg-text truncate" classList={{ "font-mono": !group.groupName }}>
                         {group.groupName ?? `${group.groupId.slice(0, 8)}...`}
                       </span>

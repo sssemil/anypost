@@ -5,6 +5,7 @@ type HeaderBarProps = {
   readonly connectionStatus: "connecting" | "connected" | "disconnected";
   readonly activeGroupId: string | null;
   readonly activeGroupName?: string;
+  readonly activeDirectMessageConnected?: boolean;
   readonly memberCount: number;
   readonly showBackButton: boolean;
   readonly onBackPress: () => void;
@@ -66,8 +67,13 @@ export const HeaderBar = (props: HeaderBarProps) => {
         class="flex flex-col flex-1 min-w-0 text-left hover:bg-tg-hover rounded-lg px-2 py-1 -mx-2 -my-1 cursor-pointer"
         onClick={() => props.onGroupInfoToggle()}
       >
-        <span class="font-semibold text-tg-text truncate text-[15px] leading-tight">
-          {groupDisplayName()}
+        <span class="flex items-center gap-2 min-w-0">
+          <Show when={props.activeDirectMessageConnected}>
+            <span class="inline-block w-2 h-2 rounded-full bg-tg-success shrink-0" />
+          </Show>
+          <span class="font-semibold text-tg-text truncate text-[15px] leading-tight">
+            {groupDisplayName()}
+          </span>
         </span>
         <span class="text-xs text-tg-text-dim leading-tight">
           {subtitle()}

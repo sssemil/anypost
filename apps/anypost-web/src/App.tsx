@@ -1697,6 +1697,12 @@ export const App = () => {
   const activeGroupName = () => {
     const activeId = groupState().activeGroupId;
     if (!activeId) return undefined;
+    const dmPeerId = directMessagePeerIdForGroup(activeId);
+    if (dmPeerId) {
+      return contactsBook().get(dmPeerId)?.nickname
+        ?? contactsBook().get(dmPeerId)?.selfName
+        ?? `${dmPeerId.slice(0, 12)}...`;
+    }
     return chat?.getActionChainState(activeId)?.groupName
       ?? groupState().groups.get(activeId)?.groupName;
   };
@@ -1769,9 +1775,12 @@ export const App = () => {
           ?? contactsBook().get(dmPeerId)?.selfName
           ?? `${dmPeerId.slice(0, 12)}...`
         : null;
+      const isDm = dmPeerId !== null;
       return {
         groupId: g.groupId,
-        groupName: dmLabel ? `DM • ${dmLabel}` : (chainName ?? g.groupName),
+        groupName: dmLabel ?? (chainName ?? g.groupName),
+        isDirectMessage: isDm,
+        directMessageConnected: isDm ? connectedPeerIds().has(dmPeerId!) : false,
         unreadCount: g.unreadCount,
         seenPeerCount: visiblePeerCount,
         lastMessage: lastMsg
@@ -1847,6 +1856,12 @@ export const App = () => {
                 connectionStatus={chatStatus()}
                 activeGroupId={groupState().activeGroupId}
                 activeGroupName={activeGroupName()}
+                activeDirectMessageConnected={
+                  (() => {
+                    const activeDmPeer = activeDirectMessagePeerId();
+                    return !!activeDmPeer && connectedPeerIds().has(activeDmPeer);
+                  })()
+                }
                 memberCount={actionChainState()?.members.size ?? 0}
                 showBackButton={mobileView().currentView === "chat"}
                 onBackPress={() => dispatchMobileView({ type: "back-pressed" })}
