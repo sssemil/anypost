@@ -49,7 +49,7 @@ cmd_electron() {
   shift || true
   local profile="${1:-}"
   if [[ -n "$profile" ]]; then
-    ANYPOST_PROFILE="$profile" pnpm --filter anypost-electron run dev
+    ANYPOST_PROFILE="$profile" pnpm --filter anypost-electron run dev -- --profile "$profile"
   else
     pnpm --filter anypost-electron run dev
   fi
