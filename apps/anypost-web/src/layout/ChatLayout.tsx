@@ -10,6 +10,7 @@ type ChatLayoutProps = {
   readonly devDrawerContent: JSX.Element;
   readonly groupInfoContent: JSX.Element;
   readonly contactsContent: JSX.Element;
+  readonly profileContent: JSX.Element;
   readonly mobileView: "group-list" | "chat";
   readonly rightPanel: RightPanel;
   readonly onRightPanelClose: () => void;
@@ -19,6 +20,7 @@ const PANEL_TITLES: Record<Exclude<RightPanel, "none">, string> = {
   "dev-tools": "Developer Tools",
   "group-info": "Group Info",
   "contacts": "Contacts",
+  "profile": "Profile",
 };
 
 export const ChatLayout = (props: ChatLayoutProps) => {
@@ -30,8 +32,8 @@ export const ChatLayout = (props: ChatLayoutProps) => {
         <div
           class="w-full sm:w-80 sm:min-w-80 sm:!flex flex-col border-r border-tg-border"
           classList={{
-            flex: props.mobileView === "group-list",
-            hidden: props.mobileView !== "group-list",
+            flex: props.mobileView === "group-list" && props.rightPanel === "none",
+            hidden: props.mobileView !== "group-list" || props.rightPanel !== "none",
           }}
         >
           {props.sidebar}
@@ -40,8 +42,8 @@ export const ChatLayout = (props: ChatLayoutProps) => {
         <div
           class="flex-1 sm:!flex flex-col min-w-0"
           classList={{
-            flex: props.mobileView === "chat",
-            hidden: props.mobileView !== "chat",
+            flex: props.mobileView === "chat" && props.rightPanel === "none",
+            hidden: props.mobileView !== "chat" || props.rightPanel !== "none",
           }}
         >
           <div class="flex-1 min-h-0">
@@ -54,7 +56,7 @@ export const ChatLayout = (props: ChatLayoutProps) => {
         </div>
 
         <Show when={props.rightPanel !== "none"}>
-          <div class="w-full sm:w-[420px] sm:min-w-[420px] flex flex-col border-l border-tg-border bg-tg-sidebar">
+          <div class="fixed inset-0 z-20 w-full flex flex-col bg-tg-sidebar sm:static sm:z-auto sm:w-[420px] sm:min-w-[420px] sm:border-l sm:border-tg-border">
             <div class="flex items-center justify-between px-4 py-3 border-b border-tg-border shrink-0">
               <span class="font-semibold text-tg-text">
                 {PANEL_TITLES[props.rightPanel as Exclude<RightPanel, "none">]}
@@ -76,6 +78,9 @@ export const ChatLayout = (props: ChatLayoutProps) => {
                 </Match>
                 <Match when={props.rightPanel === "contacts"}>
                   {props.contactsContent}
+                </Match>
+                <Match when={props.rightPanel === "profile"}>
+                  {props.profileContent}
                 </Match>
               </Switch>
             </div>

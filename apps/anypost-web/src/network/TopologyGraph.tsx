@@ -14,6 +14,7 @@ export type TopologyGraphProps = {
   readonly networkStatus: NetworkStatus;
   readonly bootstrapAddrs: readonly string[];
   readonly latencyMap: ReadonlyMap<string, number>;
+  readonly contactLabelByPeerId?: ReadonlyMap<string, string>;
 };
 
 type SimNode = SimulationNodeDatum & GraphNode;
@@ -127,7 +128,12 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
     simRef?.stop();
     if (rafId !== undefined) cancelAnimationFrame(rafId);
 
-    const graph = buildTopologyGraph(props.networkStatus, props.bootstrapAddrs, props.latencyMap);
+    const graph = buildTopologyGraph(
+      props.networkStatus,
+      props.bootstrapAddrs,
+      props.latencyMap,
+      props.contactLabelByPeerId,
+    );
 
     const prevPositions = new Map<string, { x: number; y: number; vx: number; vy: number }>();
     for (const n of simNodes) {
@@ -169,6 +175,7 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
     const _status = props.networkStatus;
     const _addrs = props.bootstrapAddrs;
     const _latency = props.latencyMap;
+    const _contacts = props.contactLabelByPeerId;
     rebuildSimulation();
   });
 

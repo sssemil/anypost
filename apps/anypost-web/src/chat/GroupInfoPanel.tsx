@@ -1,4 +1,5 @@
 import { createSignal, createMemo, createEffect, For, Show, onCleanup } from "solid-js";
+import QRCode from "qrcode";
 import {
   toHex,
   verifyAndDecodeAction,
@@ -30,6 +31,11 @@ export type InviteCreateOptions =
       readonly maxJoiners?: number;
     };
 
+export type InviteCreateResult = {
+  readonly error: string | null;
+  readonly code: string | null;
+};
+
 type GroupInfoPanelProps = {
   readonly groupId: string | null;
   readonly groupName: string;
@@ -53,7 +59,11 @@ type GroupInfoPanelProps = {
   readonly onAddByPeerId: (peerId: string) => string | null;
   readonly onRetryJoinNow: () => void;
   readonly onCancelJoinRetry: () => void;
-  readonly onCreateInvite: ((options: InviteCreateOptions) => string | null) | null;
+  readonly onCreateInvite: ((options: InviteCreateOptions) => InviteCreateResult) | null;
+  readonly directMessagePeerId?: string | null;
+  readonly directMessagePeerLabel?: string | null;
+  readonly directMessageBlocked?: boolean;
+  readonly onSetDirectMessageBlocked?: ((peerId: string, blocked: boolean) => void) | null;
   readonly onSetJoinPolicy: ((joinPolicy: JoinPolicy) => Promise<string | null>) | null;
   readonly onRenameGroup: ((newName: string) => Promise<string | null>) | null;
 };
@@ -136,6 +146,9 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
   const [inviteExpiresMinutesInput, setInviteExpiresMinutesInput] = createSignal("");
   const [inviteMaxJoinersInput, setInviteMaxJoinersInput] = createSignal("");
   const [inviteError, setInviteError] = createSignal("");
+  const [inviteCode, setInviteCode] = createSignal("");
+  const [inviteQrDataUrl, setInviteQrDataUrl] = createSignal("");
+  const [showInviteQr, setShowInviteQr] = createSignal(false);
   const [joinPolicyError, setJoinPolicyError] = createSignal("");
   const [roleActionError, setRoleActionError] = createSignal("");
   const [roleActionTargetHex, setRoleActionTargetHex] = createSignal<string | null>(null);
@@ -148,11 +161,31 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
   createEffect(() => {
     props.groupId;
     setEnvelopePage(0);
+    setInviteCode("");
+    setInviteQrDataUrl("");
+    setShowInviteQr(false);
   });
 
   createEffect(() => {
     setRenameInput(props.groupName);
     setRenameError("");
+  });
+
+  createEffect(() => {
+    const code = inviteCode();
+    if (!code) {
+      setInviteQrDataUrl("");
+      return;
+    }
+    void QRCode.toDataURL(code, {
+      errorCorrectionLevel: "M",
+      margin: 1,
+      width: 220,
+    }).then((dataUrl) => {
+      if (inviteCode() === code) setInviteQrDataUrl(dataUrl);
+    }).catch(() => {
+      if (inviteCode() === code) setInviteQrDataUrl("");
+    });
   });
 
   const envelopeList = createMemo(() => [...props.actionEnvelopes].reverse());
@@ -211,14 +244,14 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
     if (!props.onCreateInvite) return;
     setInviteError("");
 
-    let error: string | null = null;
+    let result: InviteCreateResult = { error: null, code: null };
     if (inviteMode() === "targeted-peer") {
       const target = inviteTargetPeerId().trim();
       if (!target) {
         setInviteError("Target peer ID is required");
         return;
       }
-      error = props.onCreateInvite({
+      result = props.onCreateInvite({
         kind: "targeted-peer",
         targetPeerId: target,
       });
@@ -235,18 +268,24 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
         setInviteError("Max joiners must be a positive integer");
         return;
       }
-      error = props.onCreateInvite({
+      result = props.onCreateInvite({
         kind: "open",
         expiresInMinutes,
         maxJoiners,
       });
     }
 
-    if (error) {
-      setInviteError(error);
+    if (result.error) {
+      setInviteError(result.error);
+      return;
+    }
+    if (!result.code) {
+      setInviteError("Failed to build invite");
       return;
     }
 
+    setInviteCode(result.code);
+    navigator.clipboard.writeText(result.code).catch(() => {});
     setCopiedInvite(true);
     setTimeout(() => setCopiedInvite(false), 2000);
   };
@@ -385,8 +424,29 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
           >
             {copiedInvite() ? "Invite copied!" : "Copy Invite Code"}
           </button>
+          <Show when={inviteCode()}>
+            <button
+              class="w-full py-1.5 px-3 rounded-lg border border-tg-border text-xs text-tg-text hover:bg-tg-hover cursor-pointer"
+              onClick={() => setShowInviteQr((v) => !v)}
+            >
+              {showInviteQr() ? "Hide Invite QR" : "Show Invite QR"}
+            </button>
+          </Show>
           <Show when={inviteError()}>
             <p class="text-[10px] text-red-400">{inviteError()}</p>
+          </Show>
+          <Show when={showInviteQr() && inviteCode()}>
+            <div class="rounded border border-tg-border bg-tg-chat p-2">
+              <Show
+                when={inviteQrDataUrl()}
+                fallback={<div class="text-[10px] text-tg-text-dim">Generating QR...</div>}
+              >
+                <img src={inviteQrDataUrl()} alt="Invite QR" class="mx-auto w-52 h-52 rounded bg-white p-2" />
+              </Show>
+              <p class="text-[10px] text-tg-text-dim mt-2 break-all">
+                {inviteCode()}
+              </p>
+            </div>
           </Show>
         </div>
       </Show>
@@ -597,6 +657,29 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
               }}
             </For>
           </div>
+        </div>
+      </Show>
+
+      <Show when={props.directMessagePeerId}>
+        <div class="rounded border border-tg-border bg-tg-hover px-2 py-2 space-y-2">
+          <h4 class="text-xs font-medium text-tg-text-dim uppercase tracking-wider">
+            Direct Chat
+          </h4>
+          <div class="text-xs text-tg-text">
+            Peer: <span class="font-mono">{props.directMessagePeerLabel ?? truncatePeerId(props.directMessagePeerId!)}</span>
+          </div>
+          <Show when={props.onSetDirectMessageBlocked}>
+            <button
+              class="text-xs px-2.5 py-1 rounded border cursor-pointer"
+              classList={{
+                "border-red-500/40 text-red-400 hover:text-red-300": !props.directMessageBlocked,
+                "border-tg-success/40 text-tg-success hover:text-tg-success/80": !!props.directMessageBlocked,
+              }}
+              onClick={() => props.onSetDirectMessageBlocked?.(props.directMessagePeerId!, !props.directMessageBlocked)}
+            >
+              {props.directMessageBlocked ? "Unblock peer" : "Block peer"}
+            </button>
+          </Show>
         </div>
       </Show>
 

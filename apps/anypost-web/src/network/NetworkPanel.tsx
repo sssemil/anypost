@@ -149,6 +149,12 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                 networkStatus={status()}
                 bootstrapAddrs={relayAddresses()}
                 latencyMap={props.latencyMap}
+                contactLabelByPeerId={new Map(
+                  [...props.contactsBook.values()].map((contact) => [
+                    contact.peerId,
+                    contact.nickname ?? contact.selfName ?? "",
+                  ]),
+                )}
               />
             </div>
 

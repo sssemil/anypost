@@ -8,6 +8,7 @@ type HeaderBarProps = {
   readonly memberCount: number;
   readonly showBackButton: boolean;
   readonly onBackPress: () => void;
+  readonly onProfileToggle: () => void;
   readonly onDevDrawerToggle: () => void;
   readonly onContactsToggle: () => void;
   readonly onGroupInfoToggle: () => void;
@@ -23,6 +24,7 @@ const statusLabel = (status: HeaderBarProps["connectionStatus"]): string => {
 
 export const HeaderBar = (props: HeaderBarProps) => {
   const [copied, setCopied] = createSignal(false);
+  const [menuOpen, setMenuOpen] = createSignal(false);
 
   const copyPeerId = () => {
     navigator.clipboard.writeText(props.peerId).then(() => {
@@ -47,7 +49,7 @@ export const HeaderBar = (props: HeaderBarProps) => {
   };
 
   return (
-    <div class="flex items-center gap-3 px-4 py-2.5 bg-tg-header border-b border-tg-border">
+    <div class="relative flex items-center gap-3 px-4 py-2.5 bg-tg-header border-b border-tg-border">
       <Show when={props.showBackButton}>
         <button
           class="sm:hidden text-tg-accent text-lg p-1 -ml-1"
@@ -84,27 +86,46 @@ export const HeaderBar = (props: HeaderBarProps) => {
 
       <button
         class="text-tg-text-dim hover:text-tg-text p-1 shrink-0"
-        onClick={() => props.onContactsToggle()}
-        title="Contacts"
+        onClick={() => setMenuOpen((v) => !v)}
+        title="Menu"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5">
-          <path d="M17 21v-2a4 4 0 00-4-4H7a4 4 0 00-4 4v2" />
-          <circle cx="10" cy="7" r="3" />
-          <path d="M21 8v6" />
-          <path d="M18 11h6" />
+          <circle cx="12" cy="5" r="1" />
+          <circle cx="12" cy="12" r="1" />
+          <circle cx="12" cy="19" r="1" />
         </svg>
       </button>
-
-      <button
-        class="text-tg-text-dim hover:text-tg-text p-1 shrink-0"
-        onClick={() => props.onDevDrawerToggle()}
-        title="Developer Tools"
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5">
-          <path d="M12 15a3 3 0 100-6 3 3 0 000 6z" />
-          <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
-        </svg>
-      </button>
+      <Show when={menuOpen()}>
+        <div class="absolute right-3 top-12 z-30 w-40 rounded-lg border border-tg-border bg-tg-sidebar shadow-lg overflow-hidden">
+          <button
+            class="w-full text-left px-3 py-2 text-xs text-tg-text hover:bg-tg-hover cursor-pointer"
+            onClick={() => {
+              setMenuOpen(false);
+              props.onProfileToggle();
+            }}
+          >
+            Profile
+          </button>
+          <button
+            class="w-full text-left px-3 py-2 text-xs text-tg-text hover:bg-tg-hover cursor-pointer"
+            onClick={() => {
+              setMenuOpen(false);
+              props.onContactsToggle();
+            }}
+          >
+            Contacts
+          </button>
+          <button
+            class="w-full text-left px-3 py-2 text-xs text-tg-text hover:bg-tg-hover cursor-pointer"
+            onClick={() => {
+              setMenuOpen(false);
+              props.onDevDrawerToggle();
+            }}
+          >
+            Developer Tools
+          </button>
+        </div>
+      </Show>
     </div>
   );
 };

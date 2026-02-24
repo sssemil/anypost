@@ -439,4 +439,43 @@ describe("Account Store", () => {
       }
     });
   });
+
+  describe("blocked peers persistence", () => {
+    it("should return empty set when no blocked peers exist", async () => {
+      const store = await openAccountStore();
+      try {
+        const blocked = await store.getBlockedPeerIds();
+        expect(blocked.size).toBe(0);
+      } finally {
+        await store.destroy();
+      }
+    });
+
+    it("should store and retrieve blocked peers", async () => {
+      const store = await openAccountStore();
+      try {
+        const blocked = new Set<string>(["12D3KooWBlocked1", "12D3KooWBlocked2"]);
+        await store.saveBlockedPeerIds(blocked);
+
+        const retrieved = await store.getBlockedPeerIds();
+        expect(retrieved).toEqual(blocked);
+      } finally {
+        await store.destroy();
+      }
+    });
+
+    it("should persist blocked peers across store instances", async () => {
+      const store1 = await openAccountStore();
+      await store1.saveBlockedPeerIds(new Set(["12D3KooWBlockedA"]));
+      store1.close();
+
+      const store2 = await openAccountStore();
+      try {
+        const retrieved = await store2.getBlockedPeerIds();
+        expect(retrieved).toEqual(new Set(["12D3KooWBlockedA"]));
+      } finally {
+        await store2.destroy();
+      }
+    });
+  });
 });

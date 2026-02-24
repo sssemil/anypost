@@ -12,6 +12,8 @@
   "dependencies": {
     "anypost-core": "workspace:*",
     "d3-force": "^3.0.0",
+    "jsqr": "^1.4.0",
+    "qrcode": "^1.5.4",
     "solid-js": "^1.9.11"
   },
   "devDependencies": {

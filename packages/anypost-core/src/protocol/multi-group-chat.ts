@@ -147,6 +147,7 @@ export type MultiGroupChat = {
   readonly getJoinedGroups: () => readonly string[];
   readonly sendMessage: (groupId: string, text: string, displayName?: string) => Promise<void>;
   readonly createGroup: (name: string) => Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }>;
+  readonly createGroupWithId: (groupId: string, name: string) => Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }>;
   readonly joinViaInvite: (invite: GroupInvite) => Promise<{ groupId: string }>;
   readonly renameGroup: (groupId: string, newName: string) => Promise<void>;
   readonly approveJoin: (
@@ -2385,6 +2386,41 @@ export const createMultiGroupChat = async (
     ? setInterval(reconnectDisconnectedMembers, MEMBER_RECONNECT_INTERVAL)
     : null;
 
+  const createGroupWithResolvedId = async (
+    groupId: string,
+    name: string,
+  ): Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }> => {
+    const trimmedName = name.trim();
+    if (trimmedName.length === 0) throw new Error("Group name cannot be empty");
+    if (groupId.trim().length === 0) throw new Error("Group ID cannot be empty");
+
+    const topic = groupTopic(groupId);
+
+    if (!joinedGroups.includes(groupId)) {
+      topicToGroupId.set(topic, groupId);
+      joinedGroups.push(groupId);
+      getOrCreatePeerDiscoveryMetrics(groupId);
+      pubsub.subscribe(topic);
+      groupDiscoveryManager?.joinGroup(groupId);
+    }
+
+    actionChainStates.set(groupId, createActionChainGroupState(groupId));
+    reconcilePeerPathCache();
+
+    const envelope = createSignedActionEnvelope({
+      accountKey,
+      groupId,
+      parentHashes: [GENESIS_HASH],
+      payload: { type: "group-created", groupName: trimmedName, joinPolicy: "manual" },
+    });
+
+    processSignedAction(groupId, envelope);
+    await publishEnvelope(groupId, envelope);
+
+    emit("info", `Created group \"${trimmedName}\" (${groupId.slice(0, 8)}...)`);
+    return { groupId, genesisEnvelope: envelope };
+  };
+
   return {
     peerId: node.peerId.toString(),
     getPeerPrivateKey: () => new Uint8Array(privateKey.raw),
@@ -2449,31 +2485,10 @@ export const createMultiGroupChat = async (
     },
     createGroup: async (name: string): Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }> => {
       const groupId = crypto.randomUUID();
-      const topic = groupTopic(groupId);
-
-      if (!joinedGroups.includes(groupId)) {
-        topicToGroupId.set(topic, groupId);
-        joinedGroups.push(groupId);
-        getOrCreatePeerDiscoveryMetrics(groupId);
-        pubsub.subscribe(topic);
-        groupDiscoveryManager?.joinGroup(groupId);
-      }
-
-      actionChainStates.set(groupId, createActionChainGroupState(groupId));
-      reconcilePeerPathCache();
-
-      const envelope = createSignedActionEnvelope({
-        accountKey,
-        groupId,
-        parentHashes: [GENESIS_HASH],
-        payload: { type: "group-created", groupName: name, joinPolicy: "manual" },
-      });
-
-      processSignedAction(groupId, envelope);
-      await publishEnvelope(groupId, envelope);
-
-      emit("info", `Created group "${name}" (${groupId.slice(0, 8)}...)`);
-      return { groupId, genesisEnvelope: envelope };
+      return await createGroupWithResolvedId(groupId, name);
+    },
+    createGroupWithId: async (groupId: string, name: string): Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }> => {
+      return await createGroupWithResolvedId(groupId, name);
     },
     joinViaInvite: async (invite: GroupInvite): Promise<{ groupId: string }> => {
       const verifyResult = verifyAndDecodeAction(invite.genesisEnvelope);

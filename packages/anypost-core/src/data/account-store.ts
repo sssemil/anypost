@@ -17,6 +17,7 @@ const PEER_PATH_CACHE_KEY = "peerPathCache";
 const JOIN_RETRY_STATE_KEY = "joinRetryState";
 const SYNC_PROGRESS_STATE_KEY = "syncProgressState";
 const CONTACTS_BOOK_KEY = "contactsBook";
+const BLOCKED_PEERS_KEY = "blockedPeers";
 
 export type ContactBookEntry = {
   readonly peerId: string;
@@ -292,9 +293,29 @@ export type AccountStore = {
   readonly saveSyncProgressState: (state: SyncProgressState) => Promise<void>;
   readonly getContactsBook: () => Promise<ContactsBook>;
   readonly saveContactsBook: (contacts: ContactsBook) => Promise<void>;
+  readonly getBlockedPeerIds: () => Promise<ReadonlySet<string>>;
+  readonly saveBlockedPeerIds: (blockedPeerIds: ReadonlySet<string>) => Promise<void>;
   readonly destroy: () => Promise<void>;
   readonly close: () => void;
 };
+
+const decodeBlockedPeerIds = (value: string): ReadonlySet<string> => {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(
+      parsed
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0),
+    );
+  } catch {
+    return new Set();
+  }
+};
+
+const encodeBlockedPeerIds = (blockedPeerIds: ReadonlySet<string>): string =>
+  JSON.stringify([...blockedPeerIds]);
 
 export const openAccountStore = async (): Promise<AccountStore> => {
   const db: IDBPDatabase<AccountStoreDBSchema> = await openDB<AccountStoreDBSchema>(
@@ -396,6 +417,16 @@ export const openAccountStore = async (): Promise<AccountStore> => {
 
     saveContactsBook: async (contacts: ContactsBook) => {
       await db.put("account", encodeContactsBook(contacts), CONTACTS_BOOK_KEY);
+    },
+
+    getBlockedPeerIds: async () => {
+      const value = await db.get("account", BLOCKED_PEERS_KEY);
+      if (typeof value !== "string") return new Set();
+      return decodeBlockedPeerIds(value);
+    },
+
+    saveBlockedPeerIds: async (blockedPeerIds: ReadonlySet<string>) => {
+      await db.put("account", encodeBlockedPeerIds(blockedPeerIds), BLOCKED_PEERS_KEY);
     },
 
     destroy: async () => {

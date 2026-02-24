@@ -6,6 +6,7 @@ import {
 } from "./sidebar-machine.js";
 import { decodeGroupInvite } from "anypost-core/protocol";
 import type { GroupInvite } from "anypost-core/protocol";
+import { QrScannerModal } from "../qr/QrScannerModal.js";
 
 type GroupItem = {
   readonly groupId: string;
@@ -22,6 +23,7 @@ type GroupSidebarProps = {
   readonly onSelectGroup: (groupId: string) => void;
   readonly onJoinViaInvite: (invite: GroupInvite) => Promise<string | null>;
   readonly onCreateGroup: (name: string) => Promise<string | null>;
+  readonly onStartDirectMessage: (targetPeerId: string) => Promise<string | null>;
   readonly onLeaveGroup: (groupId: string) => void;
 };
 
@@ -49,6 +51,10 @@ const formatTime = (timestamp: number): string => {
 
 export const GroupSidebar = (props: GroupSidebarProps) => {
   const [state, setState] = createSignal(createSidebarState());
+  const [showScanner, setShowScanner] = createSignal(false);
+  const [dmPeerIdInput, setDmPeerIdInput] = createSignal("");
+  const [dmStarting, setDmStarting] = createSignal(false);
+  const [dmError, setDmError] = createSignal("");
 
   const dispatch = (event: Parameters<typeof transitionSidebar>[1]) => {
     setState((s) => transitionSidebar(s, event));
@@ -111,6 +117,20 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
     }
   };
 
+  const handleStartDm = async () => {
+    const targetPeerId = dmPeerIdInput().trim();
+    if (!targetPeerId || dmStarting()) return;
+    setDmError("");
+    setDmStarting(true);
+    const error = await props.onStartDirectMessage(targetPeerId);
+    setDmStarting(false);
+    if (error) {
+      setDmError(error);
+      return;
+    }
+    setDmPeerIdInput("");
+  };
+
   return (
     <div class="flex flex-col h-full bg-tg-sidebar">
       {props.topBanners}
@@ -128,6 +148,35 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
         >
           Create
         </button>
+      </div>
+
+      <div class="px-3 py-2 border-b border-tg-border bg-tg-chat">
+        <div class="text-[10px] text-tg-text-dim uppercase tracking-wider mb-1">Direct Message</div>
+        <div class="flex gap-2">
+          <input
+            type="text"
+            value={dmPeerIdInput()}
+            onInput={(e) => {
+              setDmPeerIdInput(e.currentTarget.value);
+              setDmError("");
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void handleStartDm();
+            }}
+            placeholder="Peer ID..."
+            class="flex-1 px-2.5 py-1.5 rounded-lg bg-tg-sidebar border border-tg-border text-tg-text font-mono text-xs box-border placeholder:text-tg-text-dim"
+          />
+          <button
+            onClick={() => void handleStartDm()}
+            disabled={!dmPeerIdInput().trim() || dmStarting()}
+            class="px-2.5 py-1.5 rounded-lg bg-tg-accent text-white text-xs hover:bg-tg-accent/80 cursor-pointer disabled:opacity-50"
+          >
+            {dmStarting() ? "..." : "Chat"}
+          </button>
+        </div>
+        <Show when={dmError()}>
+          <div class="text-tg-danger text-xs mt-1">{dmError()}</div>
+        </Show>
       </div>
 
       <Show when={state().isJoinFormOpen}>
@@ -154,6 +203,13 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
               {state().isJoining ? "Joining..." : "Join"}
             </button>
             <button
+              onClick={() => setShowScanner(true)}
+              disabled={state().isJoining}
+              class="py-1 px-2 rounded-lg border border-tg-border text-tg-text text-xs cursor-pointer hover:bg-tg-hover"
+            >
+              Scan QR
+            </button>
+            <button
               onClick={() => dispatch({ type: "join-form-closed" })}
               disabled={state().isJoining}
               class="py-1 px-2 rounded-lg border border-tg-border text-tg-text text-xs cursor-pointer hover:bg-tg-hover"
@@ -162,6 +218,19 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
             </button>
           </div>
         </div>
+      </Show>
+
+      <Show when={showScanner()}>
+        <QrScannerModal
+          onDetected={(text) => {
+            setShowScanner(false);
+            dispatch({ type: "join-input-changed", value: text });
+            setTimeout(() => {
+              void handleJoinSubmit();
+            }, 0);
+          }}
+          onClose={() => setShowScanner(false)}
+        />
       </Show>
 
       <Show when={state().isCreateFormOpen}>

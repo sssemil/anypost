@@ -12,6 +12,7 @@ import {
   encodeGroupInvite,
   createInviteGrant,
   verifyAndDecodeAction,
+  isValidPeerId,
 } from "anypost-core/protocol";
 import type {
   MultiGroupChat,
@@ -64,7 +65,12 @@ import { NetworkPanel } from "./network/NetworkPanel.js";
 import { EventLog } from "./network/EventLog.js";
 import { GroupInfoPanel } from "./chat/GroupInfoPanel.js";
 import { ContactsBookPage } from "./contacts/ContactsBookPage.js";
-import type { PendingJoinRequest, InviteCreateOptions } from "./chat/GroupInfoPanel.js";
+import { ProfilePage } from "./profile/ProfilePage.js";
+import type {
+  PendingJoinRequest,
+  InviteCreateOptions,
+  InviteCreateResult,
+} from "./chat/GroupInfoPanel.js";
 import {
   createMobileViewState,
   transitionMobileView,
@@ -77,6 +83,11 @@ import {
   serializeActionChains,
   deserializeActionChains,
 } from "./action-chain-persistence.js";
+import {
+  deriveDirectMessageGroupId,
+  loadDirectMessagePeers,
+  saveDirectMessagePeers,
+} from "./direct-messages.js";
 
 const ENV_RELAY_MULTIADDR = import.meta.env.VITE_RELAY_MULTIADDR as string | undefined;
 const GROUPS_STORAGE_KEY = "anypost:groups";
@@ -222,6 +233,8 @@ export const App = () => {
   const [pendingJoinsMap, setPendingJoinsMap] = createSignal<ReadonlyMap<string, readonly PendingJoinRequest[]>>(new Map());
   const [publicKeyToPeerIdMap, setPublicKeyToPeerIdMap] = createSignal<ReadonlyMap<string, string>>(new Map());
   const [contactsBook, setContactsBook] = createSignal<ContactsBook>(new Map());
+  const [blockedPeerIds, setBlockedPeerIds] = createSignal<ReadonlySet<string>>(new Set());
+  const [directMessagePeersByGroup, setDirectMessagePeersByGroup] = createSignal<ReadonlyMap<string, string>>(loadDirectMessagePeers());
 
   let chat: MultiGroupChat | undefined;
   let unsubscribeMessage: (() => void) | undefined;
@@ -243,6 +256,21 @@ export const App = () => {
         store.close();
       }
     })();
+  };
+
+  const persistBlockedPeerIds = (blocked: ReadonlySet<string>) => {
+    void (async () => {
+      const store = await openAccountStore();
+      try {
+        await store.saveBlockedPeerIds(blocked);
+      } finally {
+        store.close();
+      }
+    })();
+  };
+
+  const persistDirectMessagePeersByGroup = (dmPeers: ReadonlyMap<string, string>) => {
+    saveDirectMessagePeers(dmPeers);
   };
 
   const upsertContact = (
@@ -590,6 +618,29 @@ export const App = () => {
     }
   };
 
+  const handleProfileDisplayNameSave = async (name: string): Promise<string | null> => {
+    const key = getCurrentAccountKey();
+    if (!key) return "No account key loaded";
+    const trimmed = name.trim();
+    if (trimmed.length === 0) return "Name cannot be empty";
+
+    try {
+      const persistedSettings = await createPersistedSettingsDocument(key.publicKey);
+      try {
+        setDisplayName(persistedSettings.doc, trimmed);
+        setDisplayNameState(trimmed);
+        if (chat) {
+          upsertContact(chat.peerId, { selfName: trimmed });
+        }
+      } finally {
+        await persistedSettings.destroy();
+      }
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : "Failed to save profile";
+    }
+  };
+
   const handleBackupConfirmed = async () => {
     try {
       const store = await openAccountStore();
@@ -663,6 +714,7 @@ export const App = () => {
         readonly getSyncProgressState?: () => Promise<SyncProgressState>;
         readonly saveSyncProgressState?: (state: SyncProgressState) => Promise<void>;
         readonly getContactsBook?: () => Promise<ContactsBook>;
+        readonly getBlockedPeerIds?: () => Promise<ReadonlySet<string>>;
       };
 
       const store = await openAccountStore();
@@ -671,6 +723,7 @@ export const App = () => {
       let initialJoinRetryState: JoinRetryState = new Map();
       let initialSyncProgressState: SyncProgressState = new Map();
       let initialContactsBook: ContactsBook = new Map();
+      let initialBlockedPeerIds: ReadonlySet<string> = new Set();
       try {
         const savedKey = await store.getPeerPrivateKey();
         if (savedKey) peerPrivateKey = savedKey;
@@ -687,11 +740,15 @@ export const App = () => {
         if (typeof compatStore.getContactsBook === "function") {
           initialContactsBook = await compatStore.getContactsBook();
         }
+        if (typeof compatStore.getBlockedPeerIds === "function") {
+          initialBlockedPeerIds = await compatStore.getBlockedPeerIds();
+        }
       } finally {
         store.close();
       }
 
       setContactsBook(initialContactsBook);
+      setBlockedPeerIds(initialBlockedPeerIds);
 
       const initialPublicKeyToPeerId = loadPublicKeyToPeerId();
       const initialPendingJoins = loadPendingJoins();
@@ -825,6 +882,18 @@ export const App = () => {
       });
 
       unsubscribeMessage = chat.onMessage((msg) => {
+        const liveChat = chat;
+        if (liveChat) {
+          void deriveDirectMessageGroupId(liveChat.peerId, msg.senderPeerId).then((dmGroupId) => {
+            if (dmGroupId === msg.groupId) {
+              setDirectMessagePeerForGroup(msg.groupId, msg.senderPeerId);
+            }
+          }).catch(() => {});
+        }
+        const dmPeerId = directMessagePeersByGroup().get(msg.groupId);
+        if (dmPeerId && blockedPeerIds().has(msg.senderPeerId)) {
+          return;
+        }
         upsertContact(msg.senderPeerId, {
           selfName: msg.senderDisplayName,
           groupId: msg.groupId,
@@ -956,6 +1025,78 @@ export const App = () => {
     }
   };
 
+  const setDirectMessagePeerForGroup = (groupId: string, peerId: string) => {
+    setDirectMessagePeersByGroup((prev) => {
+      if (prev.get(groupId) === peerId) return prev;
+      const next = new Map(prev);
+      next.set(groupId, peerId);
+      persistDirectMessagePeersByGroup(next);
+      return next;
+    });
+  };
+
+  const handleStartDirectMessage = async (targetPeerId: string): Promise<string | null> => {
+    const currentChat = chat;
+    if (!currentChat) return "Not connected";
+    const trimmedTarget = targetPeerId.trim();
+    if (!isValidPeerId(trimmedTarget)) return "Invalid peer ID";
+    if (trimmedTarget === currentChat.peerId) return "Cannot DM yourself";
+
+    try {
+      const dmGroupId = await deriveDirectMessageGroupId(currentChat.peerId, trimmedTarget);
+      setDirectMessagePeerForGroup(dmGroupId, trimmedTarget);
+      upsertContact(trimmedTarget, { groupId: dmGroupId });
+
+      const existingGroup = groupState().groups.get(dmGroupId);
+      if (existingGroup) {
+        dispatchGroupEvent({ type: "group-selected", groupId: dmGroupId });
+        dispatchMobileView({ type: "group-selected" });
+        return null;
+      }
+
+      const chainState = currentChat.getActionChainState(dmGroupId);
+      if (!chainState || chainState.createdAt <= 0) {
+        const contact = contactsBook().get(trimmedTarget);
+        const targetLabel = contact?.nickname ?? contact?.selfName ?? `${trimmedTarget.slice(0, 12)}...`;
+        const dmName = `DM with ${targetLabel}`;
+        await currentChat.createGroupWithId(dmGroupId, dmName);
+        dispatchGroupEvent({ type: "group-created", groupId: dmGroupId, groupName: dmName });
+      } else {
+        currentChat.joinGroup(dmGroupId);
+        dispatchGroupEvent({
+          type: "group-joined",
+          groupId: dmGroupId,
+          groupName: chainState.groupName || `DM ${trimmedTarget.slice(0, 8)}...`,
+          hasActionChain: true,
+        });
+      }
+
+      dispatchGroupEvent({ type: "group-selected", groupId: dmGroupId });
+      dispatchMobileView({ type: "group-selected" });
+
+      const targetPublicKeyHex = [...publicKeyToPeerIdMap().entries()]
+        .find(([, peerId]) => peerId === trimmedTarget)?.[0];
+      if (targetPublicKeyHex) {
+        try {
+          await currentChat.approveJoin(dmGroupId, hexToBytes(targetPublicKeyHex));
+        } catch {
+          // ignore; peer may already be approved or local node may not be admin
+        }
+      } else {
+        const latestState = currentChat.getActionChainState(dmGroupId);
+        const isLocalMember = latestState?.members.has(ownPublicKeyHex()) ?? false;
+        if (!isLocalMember) {
+          void currentChat.requestJoin(dmGroupId).catch(() => {});
+        }
+      }
+
+      void currentChat.connectToPeerId(trimmedTarget).catch(() => {});
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : "Failed to start direct chat";
+    }
+  };
+
   const handleLeaveGroup = (groupId: string) => {
     chat?.leaveGroup(groupId).catch(() => {}).finally(() => {
       dispatchGroupEvent({ type: "group-left", groupId });
@@ -1023,17 +1164,17 @@ export const App = () => {
     return null;
   };
 
-  const handleCreateInvite = (options: InviteCreateOptions): string | null => {
+  const buildInviteCode = (options: InviteCreateOptions): InviteCreateResult => {
     const currentChat = chat;
     const activeId = groupState().activeGroupId;
-    if (!currentChat || !activeId) return "No active group";
+    if (!currentChat || !activeId) return { error: "No active group", code: null };
     const envelopes = currentChat.getActionChainEnvelopes(activeId);
-    if (!envelopes || envelopes.length === 0) return "Group has no genesis action";
+    if (!envelopes || envelopes.length === 0) return { error: "Group has no genesis action", code: null };
 
     const relayAddr = getBestRelayAddress();
-    if (!relayAddr) return "No relay address available";
+    if (!relayAddr) return { error: "No relay address available", code: null };
     const accountKey = getCurrentAccountKey();
-    if (!accountKey) return "No account key available";
+    if (!accountKey) return { error: "No account key available", code: null };
 
     const policy = options.kind === "targeted-peer"
       ? {
@@ -1049,7 +1190,7 @@ export const App = () => {
         };
 
     if (policy.kind === "targeted-peer" && policy.targetPeerId.length === 0) {
-      return "Target peer ID is required";
+      return { error: "Target peer ID is required", code: null };
     }
 
     const inviteGrant = createInviteGrant({
@@ -1064,8 +1205,15 @@ export const App = () => {
       adminPeerId: currentChat.peerId,
       inviteGrant,
     });
-    navigator.clipboard.writeText(code).catch(() => {});
-    return null;
+    return { error: null, code };
+  };
+
+  const handleCreateInvite = (options: InviteCreateOptions): InviteCreateResult => {
+    const result = buildInviteCode(options);
+    if (result.code) {
+      navigator.clipboard.writeText(result.code).catch(() => {});
+    }
+    return result;
   };
 
   const handleRetryJoinNow = () => {
@@ -1192,6 +1340,34 @@ export const App = () => {
     return new Set(status.peers.map((p) => p.peerId));
   };
 
+  const directMessagePeerIdForGroup = (groupId: string): string | null =>
+    directMessagePeersByGroup().get(groupId) ?? null;
+
+  const activeDirectMessagePeerId = (): string | null => {
+    const activeId = groupState().activeGroupId;
+    if (!activeId) return null;
+    return directMessagePeerIdForGroup(activeId);
+  };
+
+  const isDirectMessageBlocked = (peerId: string | null): boolean =>
+    !!peerId && blockedPeerIds().has(peerId);
+
+  const directMessagePeerLabel = (peerId: string | null): string | null => {
+    if (!peerId) return null;
+    const contact = contactsBook().get(peerId);
+    return contact?.nickname ?? contact?.selfName ?? `${peerId.slice(0, 12)}...`;
+  };
+
+  const setPeerBlocked = (peerId: string, blocked: boolean) => {
+    setBlockedPeerIds((prev) => {
+      const next = new Set(prev);
+      if (blocked) next.add(peerId);
+      else next.delete(peerId);
+      persistBlockedPeerIds(next);
+      return next;
+    });
+  };
+
   const pinnedPeerIds = (): readonly string[] => {
     // Recompute when group/network snapshots change so membership updates propagate.
     groupState();
@@ -1220,9 +1396,15 @@ export const App = () => {
         .filter((peerId) => peerId !== SYSTEM_SENDER_ID)
         .length;
       const chainName = chat?.getActionChainState(g.groupId)?.groupName;
+      const dmPeerId = directMessagePeerIdForGroup(g.groupId);
+      const dmLabel = dmPeerId
+        ? contactsBook().get(dmPeerId)?.nickname
+          ?? contactsBook().get(dmPeerId)?.selfName
+          ?? `${dmPeerId.slice(0, 12)}...`
+        : null;
       return {
         groupId: g.groupId,
-        groupName: chainName ?? g.groupName,
+        groupName: dmLabel ? `DM • ${dmLabel}` : (chainName ?? g.groupName),
         unreadCount: g.unreadCount,
         seenPeerCount: visiblePeerCount,
         lastMessage: lastMsg
@@ -1282,6 +1464,7 @@ export const App = () => {
                 memberCount={actionChainState()?.members.size ?? 0}
                 showBackButton={mobileView().currentView === "chat"}
                 onBackPress={() => dispatchMobileView({ type: "back-pressed" })}
+                onProfileToggle={() => dispatchMobileView({ type: "profile-toggled" })}
                 onDevDrawerToggle={() => dispatchMobileView({ type: "dev-drawer-toggled" })}
                 onContactsToggle={() => dispatchMobileView({ type: "contacts-toggled" })}
                 onGroupInfoToggle={() => dispatchMobileView({ type: "group-info-toggled" })}
@@ -1309,6 +1492,7 @@ export const App = () => {
                 onSelectGroup={handleSelectGroup}
                 onJoinViaInvite={handleJoinViaInvite}
                 onCreateGroup={handleCreateGroup}
+                onStartDirectMessage={handleStartDirectMessage}
                 onLeaveGroup={handleLeaveGroup}
               />
             }
@@ -1321,8 +1505,19 @@ export const App = () => {
             messageInput={
               <MessageInput
                 onSend={handleSendMessage}
-                disabled={chatStatus() !== "connected" || getActiveGroup(groupState()) === null || (getActiveGroup(groupState())?.hasActionChain === true && !actionChainState()?.members.has(ownPublicKeyHex()))}
-                placeholder={getActiveGroup(groupState())?.hasActionChain === true && !actionChainState()?.members.has(ownPublicKeyHex()) ? "Waiting for approval..." : undefined}
+                disabled={
+                  chatStatus() !== "connected" ||
+                  getActiveGroup(groupState()) === null ||
+                  (getActiveGroup(groupState())?.hasActionChain === true && !actionChainState()?.members.has(ownPublicKeyHex())) ||
+                  isDirectMessageBlocked(activeDirectMessagePeerId())
+                }
+                placeholder={
+                  isDirectMessageBlocked(activeDirectMessagePeerId())
+                    ? "You blocked this peer"
+                    : getActiveGroup(groupState())?.hasActionChain === true && !actionChainState()?.members.has(ownPublicKeyHex())
+                      ? "Waiting for approval..."
+                      : undefined
+                }
               />
             }
             devDrawerContent={
@@ -1369,6 +1564,10 @@ export const App = () => {
                 publicKeyToPeerId={publicKeyToPeerIdMap()}
                 connectedPeerIds={connectedPeerIds()}
                 latencyMap={latencyMap()}
+                directMessagePeerId={activeDirectMessagePeerId()}
+                directMessagePeerLabel={directMessagePeerLabel(activeDirectMessagePeerId())}
+                directMessageBlocked={isDirectMessageBlocked(activeDirectMessagePeerId())}
+                onSetDirectMessageBlocked={(peerId, blocked) => setPeerBlocked(peerId, blocked)}
                 onApproveJoin={handleApproveJoin}
                 onRemoveMember={handleRemoveMember}
                 onChangeMemberRole={isCurrentUserAdmin() ? handleChangeMemberRole : null}
@@ -1392,6 +1591,13 @@ export const App = () => {
                 onSetNickname={handleSetContactNickname}
               />
             }
+            profileContent={
+              <ProfilePage
+                peerId={chat!.peerId}
+                displayName={displayName()}
+                onSaveDisplayName={handleProfileDisplayNameSave}
+              />
+            }
             mobileView={mobileView().currentView}
             rightPanel={mobileView().rightPanel}
             onRightPanelClose={() => {
@@ -1402,6 +1608,8 @@ export const App = () => {
                 dispatchMobileView({ type: "group-info-closed" });
               } else if (panel === "contacts") {
                 dispatchMobileView({ type: "contacts-closed" });
+              } else if (panel === "profile") {
+                dispatchMobileView({ type: "profile-closed" });
               }
             }}
           />

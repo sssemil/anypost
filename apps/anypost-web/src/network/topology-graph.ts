@@ -23,6 +23,7 @@ export type TopologyGraph = {
 };
 
 const SHORT_ID_LENGTH = 16;
+const PEER_SUFFIX_LENGTH = 4;
 
 const MIN_LATENCY = 10;
 const MAX_LATENCY = 2000;
@@ -91,6 +92,7 @@ export const buildTopologyGraph = (
   status: NetworkStatus,
   bootstrapAddrs: readonly string[],
   latencyMap?: ReadonlyMap<string, number>,
+  contactLabelByPeerId?: ReadonlyMap<string, string>,
 ): TopologyGraph => {
   const selfNode: GraphNode = {
     id: status.peerId,
@@ -115,9 +117,15 @@ export const buildTopologyGraph = (
         ? "bootstrap" as const
         : "peer" as const;
 
+    const suffix = peer.peerId.slice(-PEER_SUFFIX_LENGTH);
+    const contactLabel = contactLabelByPeerId?.get(peer.peerId)?.trim();
+    const label = contactLabel && contactLabel.length > 0
+      ? `${contactLabel} …${suffix}`
+      : `${peer.peerId.slice(0, SHORT_ID_LENGTH)}...`;
+
     peerNodes.push({
       id: peer.peerId,
-      label: `${peer.peerId.slice(0, SHORT_ID_LENGTH)}...`,
+      label,
       nodeType,
     });
 

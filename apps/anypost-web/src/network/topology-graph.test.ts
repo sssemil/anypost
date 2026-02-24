@@ -219,4 +219,21 @@ describe("buildTopologyGraph", () => {
     const peerNodes = graph.nodes.filter((n) => n.id === "12D3Same");
     expect(peerNodes).toHaveLength(1);
   });
+
+  it("should label peer nodes with contact names and last 4 peer-id chars when available", () => {
+    const peer = createPeerInfo({
+      peerId: "12D3KooWPeerWithSuffixABCD",
+      addrs: ["/ip4/1.2.3.4/tcp/9090/ws/p2p/12D3KooWPeerWithSuffixABCD"],
+    });
+    const status = createNetworkStatus({ peers: [peer] });
+    const graph = buildTopologyGraph(
+      status,
+      [],
+      undefined,
+      new Map([["12D3KooWPeerWithSuffixABCD", "Alice"]]),
+    );
+
+    const node = graph.nodes.find((n) => n.id === "12D3KooWPeerWithSuffixABCD");
+    expect(node?.label).toBe("Alice …ABCD");
+  });
 });
