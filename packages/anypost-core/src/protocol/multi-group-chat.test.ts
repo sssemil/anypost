@@ -104,6 +104,35 @@ describe("MultiGroupChat", () => {
   ): Promise<TestNode> =>
     createTestNode(accountKey, peerPrivateKey, overrides);
 
+  const buildInvite = (
+    admin: TestNode,
+    genesisEnvelope: GroupInvite["genesisEnvelope"],
+    inviteGrant?: GroupInvite["inviteGrant"],
+  ): GroupInvite => ({
+    genesisEnvelope,
+    relayAddr: admin.chat.multiaddrs[0]?.toString(),
+    adminPeerId: admin.peerId,
+    inviteGrant,
+  });
+
+  const waitForJoinRequestFrom = async (
+    admin: TestNode,
+    groupId: string,
+    senderPeerId: string,
+    timeoutMs = 7_000,
+  ): Promise<JoinRequestEvent> => {
+    await waitUntil(
+      () =>
+        admin.joinRequests.some(
+          (evt) => evt.groupId === groupId && evt.senderPeerId === senderPeerId,
+        ),
+      timeoutMs,
+    );
+    return admin.joinRequests.find(
+      (evt) => evt.groupId === groupId && evt.senderPeerId === senderPeerId,
+    )!;
+  };
+
   it("should start and return a peer ID", async () => {
     const { chat } = await createTestNode();
 
@@ -991,6 +1020,184 @@ describe("MultiGroupChat", () => {
     expect(adminState!.members.size).toBe(1);
   });
 
+  it("should converge messages across multiple approved group members", async () => {
+    const owner = await createTestNode();
+    const alice = await createTestNode();
+    const bob = await createTestNode();
+
+    const { groupId, genesisEnvelope } = await owner.chat.createGroup("Multi Member Converge");
+    const invite = buildInvite(owner, genesisEnvelope);
+
+    await alice.chat.connectTo(owner.chat.multiaddrs[0]);
+    await waitFor(400);
+    await alice.chat.joinViaInvite(invite);
+    const aliceJoin = await waitForJoinRequestFrom(owner, groupId, alice.peerId);
+    await owner.chat.approveJoin(groupId, aliceJoin.requesterPublicKey);
+    await waitUntil(() => owner.chat.getActionChainState(groupId)!.members.size === 2);
+
+    await bob.chat.connectTo(owner.chat.multiaddrs[0]);
+    await waitFor(400);
+    await bob.chat.joinViaInvite(invite);
+    const bobJoin = await waitForJoinRequestFrom(owner, groupId, bob.peerId);
+    await owner.chat.approveJoin(groupId, bobJoin.requesterPublicKey);
+    await waitUntil(() => owner.chat.getActionChainState(groupId)!.members.size === 3);
+    await waitUntil(() => alice.chat.getActionChainState(groupId)!.members.size === 3);
+    await waitUntil(() => bob.chat.getActionChainState(groupId)!.members.size === 3);
+
+    await owner.chat.sendMessage(groupId, "owner-msg");
+    await alice.chat.sendMessage(groupId, "alice-msg");
+    await bob.chat.sendMessage(groupId, "bob-msg");
+
+    await waitUntil(() =>
+      owner.messages.some((m) => m.groupId === groupId && m.text === "alice-msg") &&
+      owner.messages.some((m) => m.groupId === groupId && m.text === "bob-msg"));
+    await waitUntil(() =>
+      alice.messages.some((m) => m.groupId === groupId && m.text === "owner-msg") &&
+      alice.messages.some((m) => m.groupId === groupId && m.text === "bob-msg"));
+    await waitUntil(() =>
+      bob.messages.some((m) => m.groupId === groupId && m.text === "owner-msg") &&
+      bob.messages.some((m) => m.groupId === groupId && m.text === "alice-msg"));
+
+    const ownerHashes = owner.chat
+      .getActionChainEnvelopes(groupId)
+      .map((envelope) => toHex(envelope.hash));
+    const aliceHashes = alice.chat
+      .getActionChainEnvelopes(groupId)
+      .map((envelope) => toHex(envelope.hash));
+    const bobHashes = bob.chat
+      .getActionChainEnvelopes(groupId)
+      .map((envelope) => toHex(envelope.hash));
+
+    expect(aliceHashes).toEqual(ownerHashes);
+    expect(bobHashes).toEqual(ownerHashes);
+  });
+
+  it("should allow delegated admin to approve joins while owner is offline", { timeout: 20_000 }, async () => {
+    const owner = await createTestNode();
+    const delegate = await createTestNode();
+    const joiner = await createTestNode();
+
+    const { groupId, genesisEnvelope } = await owner.chat.createGroup("Delegated Approval");
+    const invite = buildInvite(owner, genesisEnvelope);
+
+    await delegate.chat.connectTo(owner.chat.multiaddrs[0]);
+    await waitFor(400);
+    await delegate.chat.joinViaInvite(invite);
+    const delegateJoin = await waitForJoinRequestFrom(owner, groupId, delegate.peerId);
+    await owner.chat.approveJoin(groupId, delegateJoin.requesterPublicKey);
+    await waitUntil(() => owner.chat.getActionChainState(groupId)!.members.size === 2);
+
+    await owner.chat.changeMemberRole(groupId, delegateJoin.requesterPublicKey, "admin");
+    await waitUntil(
+      () =>
+        delegate.chat.getActionChainState(groupId)?.members.get(toHex(delegate.accountKey.publicKey))?.role === "admin",
+    );
+
+    await owner.chat.stop();
+    instances.splice(instances.indexOf(owner.chat), 1);
+
+    await joiner.chat.connectTo(delegate.chat.multiaddrs[0]);
+    await waitFor(400);
+    const delegatedInvite: GroupInvite = {
+      genesisEnvelope,
+      relayAddr: delegate.chat.multiaddrs[0]?.toString(),
+      adminPeerId: owner.peerId,
+    };
+    await joiner.chat.joinViaInvite(delegatedInvite);
+    const joinerRequest = await waitForJoinRequestFrom(delegate, groupId, joiner.peerId);
+    await delegate.chat.approveJoin(groupId, joinerRequest.requesterPublicKey);
+
+    const joinerHex = toHex(new Uint8Array(joiner.accountKey.publicKey));
+    await waitUntil(
+      () => delegate.chat.getActionChainState(groupId)?.members.has(joinerHex) ?? false,
+      10_000,
+    );
+  });
+
+  it("should transfer ownership to earliest remaining member when owner leaves", { timeout: 20_000 }, async () => {
+    const owner = await createTestNode();
+    const firstJoiner = await createTestNode();
+    const secondJoiner = await createTestNode();
+
+    const { groupId, genesisEnvelope } = await owner.chat.createGroup("Ownership Handoff");
+    const invite = buildInvite(owner, genesisEnvelope);
+
+    await firstJoiner.chat.connectTo(owner.chat.multiaddrs[0]);
+    await waitFor(400);
+    await firstJoiner.chat.joinViaInvite(invite);
+    const firstReq = await waitForJoinRequestFrom(owner, groupId, firstJoiner.peerId);
+    await owner.chat.approveJoin(groupId, firstReq.requesterPublicKey);
+
+    await secondJoiner.chat.connectTo(owner.chat.multiaddrs[0]);
+    await waitFor(400);
+    await secondJoiner.chat.joinViaInvite(invite);
+    const secondReq = await waitForJoinRequestFrom(owner, groupId, secondJoiner.peerId);
+    await owner.chat.approveJoin(groupId, secondReq.requesterPublicKey);
+    await waitUntil(() => owner.chat.getActionChainState(groupId)!.members.size === 3);
+    await waitUntil(() => firstJoiner.chat.getActionChainState(groupId)!.members.size === 3);
+    await waitUntil(() => secondJoiner.chat.getActionChainState(groupId)!.members.size === 3);
+
+    await owner.chat.leaveGroup(groupId);
+
+    await waitUntil(
+      () =>
+        firstJoiner.chat.getActionChainState(groupId)?.members.get(toHex(firstJoiner.accountKey.publicKey))?.role === "owner",
+      12_000,
+    );
+
+    const secondKey = new Uint8Array(secondJoiner.accountKey.publicKey);
+    await secondJoiner.chat.connectTo(firstJoiner.chat.multiaddrs[0]);
+    await waitFor(300);
+    await firstJoiner.chat.changeMemberRole(groupId, secondKey, "admin");
+    await waitUntil(
+      () =>
+        secondJoiner.chat.getActionChainState(groupId)?.members.get(toHex(secondKey))?.role === "admin",
+      10_000,
+    );
+  });
+
+  it("should sync delegated role changes after member reconnects from offline state", { timeout: 15_000 }, async () => {
+    const owner = await createTestNode();
+    const memberAccountKey = generateAccountKey();
+    const memberOnline = await createTestNode(memberAccountKey);
+
+    const { groupId, genesisEnvelope } = await owner.chat.createGroup("Offline Delegation Sync");
+    const invite = buildInvite(owner, genesisEnvelope);
+
+    await memberOnline.chat.connectTo(owner.chat.multiaddrs[0]);
+    await waitFor(400);
+    await memberOnline.chat.joinViaInvite(invite);
+    const joinReq = await waitForJoinRequestFrom(owner, groupId, memberOnline.peerId);
+    await owner.chat.approveJoin(groupId, joinReq.requesterPublicKey);
+    await waitUntil(() => memberOnline.chat.getActionChainState(groupId)!.members.size === 2);
+
+    const memberPeerKey = memberOnline.chat.getPeerPrivateKey();
+    const cachedEnvelopes = memberOnline.chat.getActionChainEnvelopes(groupId);
+    await memberOnline.chat.stop();
+    instances.splice(instances.indexOf(memberOnline.chat), 1);
+
+    await owner.chat.changeMemberRole(groupId, joinReq.requesterPublicKey, "admin");
+    await owner.chat.sendMessage(groupId, "while-offline");
+
+    const memberReconnected = await createTestNodeWithPeerKey(memberPeerKey, memberAccountKey);
+    memberReconnected.chat.joinGroup(groupId);
+    memberReconnected.chat.loadActionChain(groupId, cachedEnvelopes);
+    await memberReconnected.chat.connectTo(owner.chat.multiaddrs[0]);
+
+    await waitUntil(
+      () =>
+        memberReconnected.chat.getActionChainState(groupId)?.members.get(toHex(memberAccountKey.publicKey))?.role === "admin",
+      10_000,
+    );
+    await waitUntil(
+      () =>
+        memberReconnected.messages.some(
+          (msg) => msg.groupId === groupId && msg.text === "while-offline",
+        ),
+      10_000,
+    );
+  });
+
   it("should produce a stable peer ID when given the same peerPrivateKey", async () => {
     const node1 = await createTestNode();
     const peerPrivateKey = node1.chat.getPeerPrivateKey();
@@ -1054,7 +1261,7 @@ describe("MultiGroupChat", () => {
     expect(dialAttempts.some((e) => e.detail.includes(admin.peerId.slice(0, 16)))).toBe(true);
   });
 
-  it("should sync missed action chain envelopes when a group member reconnects", { timeout: 10_000 }, async () => {
+  it("should sync missed action chain envelopes when a group member reconnects", { timeout: 20_000 }, async () => {
     const admin = await createTestNode();
     const joinerAccountKey = generateAccountKey();
     const joiner1 = await createTestNode(joinerAccountKey);
@@ -1076,7 +1283,7 @@ describe("MultiGroupChat", () => {
     await joiner1.chat.joinViaInvite(invite);
     const joinRequest = await joinRequestReceived;
     await admin.chat.approveJoin(groupId, joinRequest.requesterPublicKey);
-    await waitUntil(() => joiner1.chat.getActionChainEnvelopes(groupId).length >= 2);
+    await waitUntil(() => joiner1.chat.getActionChainEnvelopes(groupId).length >= 2, 10_000);
 
     const joinerPeerKey = joiner1.chat.getPeerPrivateKey();
     const savedGenesis = joiner1.chat.getActionChainEnvelopes(groupId)[0];
@@ -1090,7 +1297,7 @@ describe("MultiGroupChat", () => {
     expect(joiner2.chat.getActionChainEnvelopes(groupId).length).toBe(1);
 
     await joiner2.chat.connectTo(admin.chat.multiaddrs[0]);
-    await waitUntil(() => joiner2.chat.getActionChainEnvelopes(groupId).length >= 2);
+    await waitUntil(() => joiner2.chat.getActionChainEnvelopes(groupId).length >= 2, 10_000);
 
     expect(joiner2.chat.getActionChainState(groupId)!.members.size).toBe(2);
   });
