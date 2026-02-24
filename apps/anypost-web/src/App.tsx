@@ -1343,24 +1343,30 @@ export const App = () => {
       upsertContact(trimmedTarget, { groupId: dmGroupId });
 
       const existingGroup = groupState().groups.get(dmGroupId);
-      if (existingGroup) {
-        dispatchGroupEvent({ type: "group-selected", groupId: dmGroupId });
-        dispatchMobileView({ type: "group-selected" });
-        return null;
-      }
-
-      const chainState = currentChat.getActionChainState(dmGroupId);
+      let chainState = currentChat.getActionChainState(dmGroupId);
       if (!chainState || chainState.createdAt <= 0) {
         await currentChat.createDirectMessageGroupWithId(dmGroupId, [currentChat.peerId, trimmedTarget]);
-        dispatchGroupEvent({ type: "group-created", groupId: dmGroupId, groupName: "Direct Message" });
+        chainState = currentChat.getActionChainState(dmGroupId);
+        if (existingGroup) {
+          dispatchGroupEvent({
+            type: "group-joined",
+            groupId: dmGroupId,
+            groupName: "Direct Message",
+            hasActionChain: true,
+          });
+        } else {
+          dispatchGroupEvent({ type: "group-created", groupId: dmGroupId, groupName: "Direct Message" });
+        }
       } else {
         currentChat.joinGroup(dmGroupId);
-        dispatchGroupEvent({
-          type: "group-joined",
-          groupId: dmGroupId,
-          groupName: chainState.groupName || `DM ${trimmedTarget.slice(0, 8)}...`,
-          hasActionChain: true,
-        });
+        if (!existingGroup) {
+          dispatchGroupEvent({
+            type: "group-joined",
+            groupId: dmGroupId,
+            groupName: chainState.groupName || "Direct Message",
+            hasActionChain: true,
+          });
+        }
       }
 
       dispatchGroupEvent({ type: "group-selected", groupId: dmGroupId });
