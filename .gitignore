@@ -15,3 +15,6 @@ apps/anypost-electron/release-debug/
 apps/anypost-android/android/.gradle/
 apps/anypost-android/android/build/
 apps/anypost-android/android/app/build/
+
+.android-sdk/
+.android-user/
