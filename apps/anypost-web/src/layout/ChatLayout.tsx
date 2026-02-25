@@ -15,6 +15,8 @@ type ChatLayoutProps = {
   readonly mobileView: "group-list" | "chat";
   readonly rightPanel: RightPanel;
   readonly onRightPanelClose: () => void;
+  readonly viewportHeightPx?: number | null;
+  readonly messageInputInsetPx?: number;
 };
 
 const PANEL_TITLES: Record<Exclude<RightPanel, "none">, string> = {
@@ -26,8 +28,16 @@ const PANEL_TITLES: Record<Exclude<RightPanel, "none">, string> = {
 };
 
 export const ChatLayout = (props: ChatLayoutProps) => {
+  const rootHeight = () => {
+    const height = props.viewportHeightPx;
+    if (typeof height !== "number" || !Number.isFinite(height) || height <= 0) {
+      return "100dvh";
+    }
+    return `${Math.round(height)}px`;
+  };
+
   return (
-    <div class="flex flex-col h-dvh font-sans bg-tg-chat text-tg-text">
+    <div class="flex flex-col font-sans bg-tg-chat text-tg-text" style={{ height: rootHeight() }}>
       {props.header}
 
       <div class="flex flex-1 min-h-0">
@@ -52,7 +62,12 @@ export const ChatLayout = (props: ChatLayoutProps) => {
             {props.messageList}
           </div>
 
-          <div class="p-3">
+          <div
+            class="px-3 pt-3"
+            style={{
+              "padding-bottom": `calc(env(safe-area-inset-bottom, 0px) + ${Math.max(0, Math.round(props.messageInputInsetPx ?? 0))}px)`,
+            }}
+          >
             {props.messageInput}
           </div>
         </div>

@@ -2,6 +2,7 @@ package io.anypost.app;
 
 import android.content.Intent;
 import android.os.Bundle;
+import androidx.core.view.WindowCompat;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -9,6 +10,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(AnypostBridgePlugin.class);
         super.onCreate(savedInstanceState);
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), true);
         AnypostBridgePlugin.handleIntent(getIntent());
     }
 

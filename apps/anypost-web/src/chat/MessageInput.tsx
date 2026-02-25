@@ -1,4 +1,10 @@
-import { Show, createEffect } from "solid-js";
+import { Show, createEffect, onCleanup, onMount } from "solid-js";
+
+export type MessageInputControl = {
+  readonly focus: () => void;
+  readonly blur: () => void;
+  readonly isFocused: () => boolean;
+};
 
 type MessageInputProps = {
   readonly onSend: (text: string) => void;
@@ -9,10 +15,25 @@ type MessageInputProps = {
   readonly modeLabel?: string | null;
   readonly modePreview?: string | null;
   readonly onCancelMode?: (() => void) | null;
+  readonly onControlReady?: ((control: MessageInputControl | null) => void) | null;
 };
 
 export const MessageInput = (props: MessageInputProps) => {
   let textareaRef: HTMLTextAreaElement | undefined;
+
+  const focusComposer = () => {
+    if (!textareaRef || props.disabled) return;
+    textareaRef.focus();
+    const len = textareaRef.value.length;
+    textareaRef.setSelectionRange(len, len);
+  };
+
+  const blurComposer = () => {
+    textareaRef?.blur();
+  };
+
+  const composerIsFocused = () =>
+    !!textareaRef && document.activeElement === textareaRef;
 
   const resetHeight = () => {
     if (textareaRef) {
@@ -38,6 +59,18 @@ export const MessageInput = (props: MessageInputProps) => {
       send();
     }
   };
+
+  onMount(() => {
+    props.onControlReady?.({
+      focus: focusComposer,
+      blur: blurComposer,
+      isFocused: composerIsFocused,
+    });
+  });
+
+  onCleanup(() => {
+    props.onControlReady?.(null);
+  });
 
   return (
     <div class="space-y-2">

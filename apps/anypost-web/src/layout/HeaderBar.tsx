@@ -34,6 +34,8 @@ type HeaderBarProps = {
   readonly onAboutToggle: () => void;
   readonly onContactsToggle: () => void;
   readonly onGroupInfoToggle: () => void;
+  readonly onFocusComposer: () => void;
+  readonly onToggleComposerKeyboard: () => void;
 };
 
 const statusLabel = (status: HeaderBarProps["connectionStatus"]): string => {
@@ -154,6 +156,24 @@ export const HeaderBar = (props: HeaderBarProps) => {
               }}
             >
               Contacts
+            </button>
+            <button
+              class="w-full text-left px-3 py-2 text-xs text-tg-text hover:bg-tg-hover cursor-pointer"
+              onClick={() => {
+                setMenuOpen(false);
+                props.onFocusComposer();
+              }}
+            >
+              Focus Composer
+            </button>
+            <button
+              class="w-full text-left px-3 py-2 text-xs text-tg-text hover:bg-tg-hover cursor-pointer"
+              onClick={() => {
+                setMenuOpen(false);
+                props.onToggleComposerKeyboard();
+              }}
+            >
+              Toggle Keyboard
             </button>
             <button
               class="w-full text-left px-3 py-2 text-xs text-tg-text hover:bg-tg-hover cursor-pointer"

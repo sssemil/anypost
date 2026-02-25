@@ -72,6 +72,7 @@ import { HeaderBar } from "./layout/HeaderBar.js";
 import { GroupSidebar } from "./sidebar/GroupSidebar.js";
 import { MessageList } from "./chat/MessageList.js";
 import { MessageInput } from "./chat/MessageInput.js";
+import type { MessageInputControl } from "./chat/MessageInput.js";
 import { NetworkPanel } from "./network/NetworkPanel.js";
 import { EventLog } from "./network/EventLog.js";
 import { GroupInfoPanel } from "./chat/GroupInfoPanel.js";
@@ -155,6 +156,10 @@ type HostBridge = {
   readonly onRelayState?: (listener: (state: DesktopRelayState) => void) => () => void;
   readonly onDeepLink?: (listener: (url: string) => void) => () => void;
   readonly getPendingDeepLinks?: () => Promise<readonly string[]>;
+  readonly getBackgroundNodeState?: () => Promise<{ readonly running: boolean }>;
+  readonly startBackgroundNode?: () => Promise<{ readonly running: boolean } | void> | { readonly running: boolean } | void;
+  readonly stopBackgroundNode?: () => Promise<{ readonly running: boolean } | void> | { readonly running: boolean } | void;
+  readonly onBackgroundNodeState?: (listener: (state: { readonly running: boolean }) => void) => () => void;
   readonly notifyMessage?: (payload: {
     readonly title: string;
     readonly body: string;
@@ -174,6 +179,10 @@ type CapacitorPendingDeepLinksPayload = {
   readonly urls?: readonly string[];
 };
 
+type CapacitorBackgroundNodeStatePayload = {
+  readonly running?: boolean;
+};
+
 type CapacitorBridgeListenerHandle = {
   readonly remove: () => void | Promise<void>;
 };
@@ -181,6 +190,9 @@ type CapacitorBridgeListenerHandle = {
 type CapacitorBridgePlugin = {
   readonly getRelayState?: () => Promise<CapacitorRelayStatePayload>;
   readonly getPendingDeepLinks?: () => Promise<CapacitorPendingDeepLinksPayload | readonly string[]>;
+  readonly getBackgroundNodeState?: () => Promise<CapacitorBackgroundNodeStatePayload>;
+  readonly startBackgroundNode?: () => Promise<CapacitorBackgroundNodeStatePayload | void>;
+  readonly stopBackgroundNode?: () => Promise<CapacitorBackgroundNodeStatePayload | void>;
   readonly notifyMessage?: (payload: {
     readonly title: string;
     readonly body: string;
@@ -531,6 +543,10 @@ export const App = () => {
   const [callClockMs, setCallClockMs] = createSignal(Date.now());
   const [pendingDesktopInviteCodes, setPendingDesktopInviteCodes] = createSignal<readonly string[]>([]);
   const [messageDraft, setMessageDraft] = createSignal("");
+  const [viewportHeightPx, setViewportHeightPx] = createSignal<number | null>(null);
+  const [keyboardInsetPx, setKeyboardInsetPx] = createSignal(0);
+  const [backgroundNodeRunning, setBackgroundNodeRunning] = createSignal(false);
+  const [backgroundNodeBusy, setBackgroundNodeBusy] = createSignal(false);
   const [replyTargetMessage, setReplyTargetMessage] = createSignal<ChatMessageEvent | null>(null);
   const [editTargetMessage, setEditTargetMessage] = createSignal<ChatMessageEvent | null>(null);
   const [profileSyncDebugTick, setProfileSyncDebugTick] = createSignal(0);
@@ -566,6 +582,7 @@ export const App = () => {
   let diagnosticsRejectionRestore: (() => void) | undefined;
   const groupCallMedia = new Map<string, GroupCallMediaState>();
   const callSessionByGroup = new Map<string, { readonly startedAt: number }>();
+  let messageInputControl: MessageInputControl | null = null;
 
   let cachedCapacitorBridge: HostBridge | null | undefined;
 
@@ -590,6 +607,12 @@ export const App = () => {
     }
     return [];
   };
+
+  const normalizeBackgroundNodeState = (
+    payload: CapacitorBackgroundNodeStatePayload | null | undefined,
+  ): { readonly running: boolean } => ({
+    running: payload?.running === true,
+  });
 
   const loadCapacitorBridge = (): HostBridge | null => {
     if (cachedCapacitorBridge !== undefined) return cachedCapacitorBridge;
@@ -646,6 +669,38 @@ export const App = () => {
       getPendingDeepLinks: plugin.getPendingDeepLinks
         ? async () => normalizePendingDeepLinks(await plugin.getPendingDeepLinks!())
         : undefined,
+      getBackgroundNodeState: plugin.getBackgroundNodeState
+        ? async () => normalizeBackgroundNodeState(await plugin.getBackgroundNodeState!())
+        : undefined,
+      startBackgroundNode: plugin.startBackgroundNode
+        ? async () => {
+            const payload = await plugin.startBackgroundNode!();
+            if (!payload || typeof payload !== "object") return { running: true };
+            return normalizeBackgroundNodeState(payload);
+          }
+        : undefined,
+      stopBackgroundNode: plugin.stopBackgroundNode
+        ? async () => {
+            const payload = await plugin.stopBackgroundNode!();
+            if (!payload || typeof payload !== "object") return { running: false };
+            return normalizeBackgroundNodeState(payload);
+          }
+        : undefined,
+      onBackgroundNodeState: plugin.addListener
+        ? (listener) => {
+            let handle: CapacitorBridgeListenerHandle | null = null;
+            Promise.resolve(plugin.addListener!("backgroundNodeState", (payload) => {
+              listener(normalizeBackgroundNodeState({
+                running: payload.running === true,
+              }));
+            })).then((value) => {
+              handle = value;
+            }).catch(() => {});
+            return () => {
+              void handle?.remove();
+            };
+          }
+        : undefined,
       notifyMessage: plugin.notifyMessage
         ? (payload) => plugin.notifyMessage!(payload)
         : undefined,
@@ -665,6 +720,54 @@ export const App = () => {
   const hostBridge = (): HostBridge | null => {
     if (typeof window === "undefined") return null;
     return window.anypostDesktop ?? window.anypostAndroid ?? loadCapacitorBridge();
+  };
+
+  const setMessageInputControl = (control: MessageInputControl | null) => {
+    messageInputControl = control;
+  };
+
+  const focusComposerFromMenu = () => {
+    messageInputControl?.focus();
+  };
+
+  const toggleComposerKeyboardFromMenu = () => {
+    if (!messageInputControl) return;
+    if (messageInputControl.isFocused()) {
+      messageInputControl.blur();
+      return;
+    }
+    messageInputControl.focus();
+  };
+
+  const setBackgroundNodeRunningState = (running: boolean) => {
+    setBackgroundNodeRunning(running);
+    appendDiagnosticsEntry("background-node-state", { running });
+  };
+
+  const toggleBackgroundNodeMode = async () => {
+    const bridge = hostBridge();
+    if (!bridge || !bridge.startBackgroundNode || !bridge.stopBackgroundNode || backgroundNodeBusy()) {
+      return;
+    }
+    setBackgroundNodeBusy(true);
+    try {
+      const nextRunning = !backgroundNodeRunning();
+      const payload = nextRunning
+        ? await bridge.startBackgroundNode()
+        : await bridge.stopBackgroundNode();
+      if (payload && typeof payload === "object" && "running" in payload) {
+        const running = (payload as { readonly running?: unknown }).running === true;
+        setBackgroundNodeRunningState(running);
+      } else {
+        setBackgroundNodeRunningState(nextRunning);
+      }
+    } catch {
+      appendDiagnosticsEntry("background-node-toggle-failed", {
+        attemptedRunning: !backgroundNodeRunning(),
+      });
+    } finally {
+      setBackgroundNodeBusy(false);
+    }
   };
 
   const dispatchMobileView = (event: Parameters<typeof transitionMobileView>[1]) => {
@@ -2856,6 +2959,28 @@ export const App = () => {
     chat?.stop();
   });
 
+  onMount(() => {
+    if (typeof window === "undefined") return;
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const syncViewportInsets = () => {
+      const layoutHeight = window.innerHeight;
+      const visibleHeight = viewport.height + viewport.offsetTop;
+      const keyboardInset = Math.max(0, layoutHeight - visibleHeight);
+      setViewportHeightPx(Math.max(0, visibleHeight));
+      setKeyboardInsetPx(keyboardInset > 60 ? keyboardInset : 0);
+    };
+    syncViewportInsets();
+    viewport.addEventListener("resize", syncViewportInsets);
+    viewport.addEventListener("scroll", syncViewportInsets);
+    onCleanup(() => {
+      viewport.removeEventListener("resize", syncViewportInsets);
+      viewport.removeEventListener("scroll", syncViewportInsets);
+      setViewportHeightPx(null);
+      setKeyboardInsetPx(0);
+    });
+  });
+
   let autoConnectFired = false;
 
   createEffect(() => {
@@ -3125,6 +3250,9 @@ export const App = () => {
     const offDeepLink = bridge.onDeepLink?.((url) => {
       void handleDesktopDeepLink(url);
     }) ?? (() => {});
+    const offBackgroundNodeState = bridge.onBackgroundNodeState?.((state) => {
+      setBackgroundNodeRunningState(state.running);
+    }) ?? (() => {});
     if (bridge.getRelayState) {
       void bridge.getRelayState().then(setDesktopRelayState).catch(() => {});
     }
@@ -3135,9 +3263,15 @@ export const App = () => {
         }
       }).catch(() => {});
     }
+    if (bridge.getBackgroundNodeState) {
+      void bridge.getBackgroundNodeState().then((state) => {
+        setBackgroundNodeRunningState(state.running);
+      }).catch(() => {});
+    }
     onCleanup(() => {
       offRelayState();
       offDeepLink();
+      offBackgroundNodeState();
     });
   });
 
@@ -4551,6 +4685,8 @@ export const App = () => {
 
         <Show when={chatStatus() === "connected" && chat}>
           <ChatLayout
+            viewportHeightPx={viewportHeightPx()}
+            messageInputInsetPx={keyboardInsetPx()}
             header={
               <HeaderBar
                 peerId={chat!.peerId}
@@ -4597,6 +4733,8 @@ export const App = () => {
                 onAboutToggle={() => dispatchMobileView({ type: "about-toggled" })}
                 onContactsToggle={() => dispatchMobileView({ type: "contacts-toggled" })}
                 onGroupInfoToggle={() => dispatchMobileView({ type: "group-info-toggled" })}
+                onFocusComposer={focusComposerFromMenu}
+                onToggleComposerKeyboard={toggleComposerKeyboardFromMenu}
               />
             }
             sidebar={
@@ -4765,6 +4903,7 @@ export const App = () => {
                       ? "Waiting for approval..."
                       : undefined
                 }
+                onControlReady={setMessageInputControl}
               />
             }
             devDrawerContent={
@@ -4813,6 +4952,30 @@ export const App = () => {
                     </button>
                   </Show>
                 </div>
+                <Show when={hasAndroidBridge()}>
+                  <div class="rounded-xl border border-tg-border bg-tg-chat p-4 mb-4">
+                    <div class="flex items-center justify-between gap-2 mb-1.5">
+                      <strong class="text-sm text-tg-text">Background Node Mode</strong>
+                      <button
+                        onClick={() => void toggleBackgroundNodeMode()}
+                        disabled={backgroundNodeBusy()}
+                        class="border border-tg-border rounded px-2 py-0.5 text-tg-text text-xs cursor-pointer disabled:opacity-40"
+                      >
+                        {backgroundNodeBusy()
+                          ? "Applying..."
+                          : backgroundNodeRunning()
+                            ? "Stop"
+                            : "Start"}
+                      </button>
+                    </div>
+                    <p class="text-[10px] text-tg-text-dim mb-2">
+                      Keeps Anypost networking active in the background with a persistent Android notification.
+                    </p>
+                    <div class="text-[10px] font-mono text-tg-text">
+                      State: {backgroundNodeRunning() ? "running" : "stopped"}
+                    </div>
+                  </div>
+                </Show>
                 <NetworkPanel
                   networkStatus={networkStatus()}
                   relayPoolState={relayPoolState()}
