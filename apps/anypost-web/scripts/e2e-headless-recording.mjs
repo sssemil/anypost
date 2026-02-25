@@ -158,14 +158,27 @@ const ensureAccountReady = async (page, displayName) => {
 };
 
 const openMenu = async (page) => {
-  await page.getByTitle("Menu").click();
+  await page.getByTitle("Menu").first().click();
 };
 
 const openDevTools = async (page) => {
-  if (await isVisible(page.getByText("Developer Tools", { exact: true }), 800)) return;
-  await openMenu(page);
-  await page.getByRole("button", { name: "Developer Tools" }).click();
-  await page.getByText("Developer Tools", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+  const recorderHeader = page.getByText("Diagnostics Recorder", { exact: true }).first();
+  if (await isVisible(recorderHeader, 800)) return;
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await openMenu(page);
+      await page.getByRole("button", { name: "Developer Tools" }).first().click();
+      await recorderHeader.waitFor({ state: "visible", timeout: 10_000 });
+      return;
+    } catch (error) {
+      lastError = error;
+      await page.keyboard.press("Escape").catch(() => {});
+      await sleep(300);
+    }
+  }
+  throw lastError ?? new Error("Unable to open Developer Tools");
 };
 
 const startRecorder = async (page, label) => {
@@ -256,8 +269,15 @@ const createGroupAndCopyInvite = async (page, groupName) => {
 };
 
 const joinViaInvite = async (page, inviteCode) => {
-  await page.getByRole("button", { name: "Join" }).first().click();
-  const joinInput = page.getByPlaceholder("Paste invite code...");
+  const joinInput = page.getByPlaceholder("Paste invite code...").first();
+  if (!(await isVisible(joinInput, 700))) {
+    const joinButton = page
+      .locator("button:not(:disabled)")
+      .filter({ hasText: /^Join$/ })
+      .first();
+    await joinButton.waitFor({ state: "visible", timeout: 15_000 });
+    await joinButton.click();
+  }
   await joinInput.fill(inviteCode);
   await joinInput.press("Enter");
 };
