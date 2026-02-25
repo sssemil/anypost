@@ -13,6 +13,7 @@
     "e2e:dm-no-relay-ipfs": "node ./scripts/e2e-dm-no-relay-ipfs.mjs",
     "e2e:dm-call-convergence-ipfs": "node ./scripts/e2e-dm-call-convergence-ipfs.mjs",
     "e2e:dm-refresh-ipfs": "node ./scripts/e2e-dm-refresh-ipfs.mjs",
+    "e2e:dm-three-node-relay-topology": "node ./scripts/e2e-dm-three-node-relay-topology.mjs",
     "e2e:soak": "node ./scripts/e2e-soak.mjs"
   },
   "dependencies": {

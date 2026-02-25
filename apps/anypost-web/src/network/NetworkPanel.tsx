@@ -251,6 +251,8 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                     contact.nickname ?? contact.selfName ?? "",
                   ]),
                 )}
+                appPeerIds={appPeerIds()}
+                contactPeerIds={new Set([...props.contactsBook.values()].map((contact) => contact.peerId))}
                 visiblePeerIds={appPeersOnly() ? appPeerIds() : undefined}
               />
             </div>

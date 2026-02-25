@@ -2,11 +2,13 @@ import type { NetworkStatus } from "anypost-core/protocol";
 
 export type NodeType = "self" | "relay" | "peer" | "bootstrap";
 export type TransportType = "webrtc" | "circuit-relay" | "websocket" | "unknown";
+export type PeerCategory = "app" | "contact" | "unknown";
 
 export type GraphNode = {
   readonly id: string;
   readonly label: string;
   readonly nodeType: NodeType;
+  readonly peerCategory?: PeerCategory;
 };
 
 export type GraphEdge = {
@@ -24,6 +26,8 @@ export type TopologyGraph = {
 
 export type BuildTopologyGraphOptions = {
   readonly visiblePeerIds?: ReadonlySet<string>;
+  readonly appPeerIds?: ReadonlySet<string>;
+  readonly contactPeerIds?: ReadonlySet<string>;
 };
 
 const SHORT_ID_LENGTH = 16;
@@ -129,10 +133,17 @@ export const buildTopologyGraph = (
       ? `${contactLabel} …${suffix}`
       : `${peer.peerId.slice(0, SHORT_ID_LENGTH)}...`;
 
+    const peerCategory = nodeType === "peer"
+      ? (options?.appPeerIds?.has(peer.peerId)
+        ? (options?.contactPeerIds?.has(peer.peerId) ? "contact" : "app")
+        : "unknown")
+      : undefined;
+
     peerNodes.push({
       id: peer.peerId,
       label,
       nodeType,
+      peerCategory,
     });
 
     const primaryAddr = peer.addrs[0] ?? "";

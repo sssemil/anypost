@@ -8,7 +8,15 @@ import {
 } from "d3-force";
 import type { SimulationNodeDatum, SimulationLinkDatum, Simulation } from "d3-force";
 import type { NetworkStatus } from "anypost-core/protocol";
-import { buildTopologyGraph, latencyToDistance, type GraphNode, type GraphEdge, type NodeType, type TransportType } from "./topology-graph.js";
+import {
+  buildTopologyGraph,
+  latencyToDistance,
+  type GraphNode,
+  type GraphEdge,
+  type NodeType,
+  type TransportType,
+  type PeerCategory,
+} from "./topology-graph.js";
 
 export type TopologyGraphProps = {
   readonly networkStatus: NetworkStatus;
@@ -16,6 +24,8 @@ export type TopologyGraphProps = {
   readonly latencyMap: ReadonlyMap<string, number>;
   readonly contactLabelByPeerId?: ReadonlyMap<string, string>;
   readonly visiblePeerIds?: ReadonlySet<string>;
+  readonly appPeerIds?: ReadonlySet<string>;
+  readonly contactPeerIds?: ReadonlySet<string>;
 };
 
 type SimNode = SimulationNodeDatum & GraphNode;
@@ -42,12 +52,15 @@ const SELF_RADIUS = 20;
 const PEER_RADIUS = 12;
 const DRAG_ALPHA_TARGET = 0.3;
 
-const nodeColor = (nodeType: NodeType): string => {
-  switch (nodeType) {
+const nodeColor = (node: GraphNode): string => {
+  switch (node.nodeType) {
     case "self": return "#2196F3";
     case "relay": return "#FF9800";
-    case "peer": return "#4CAF50";
     case "bootstrap": return "#9E9E9E";
+    case "peer":
+      if (node.peerCategory === "contact") return "#A855F7";
+      if (node.peerCategory === "app") return "#3B82F6";
+      return "#9CA3AF";
   }
 };
 
@@ -100,6 +113,14 @@ const nodeTypeLabel = (nodeType: NodeType): string => {
   }
 };
 
+const peerCategoryLabel = (category: PeerCategory): string => {
+  switch (category) {
+    case "app": return "App";
+    case "contact": return "Contact";
+    case "unknown": return "Unknown";
+  }
+};
+
 const formatLatency = (ms: number): string => {
   if (ms < 1) return "<1ms";
   return `${Math.round(ms)}ms`;
@@ -134,7 +155,11 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
       props.bootstrapAddrs,
       props.latencyMap,
       props.contactLabelByPeerId,
-      { visiblePeerIds: props.visiblePeerIds },
+      {
+        visiblePeerIds: props.visiblePeerIds,
+        appPeerIds: props.appPeerIds,
+        contactPeerIds: props.contactPeerIds,
+      },
     );
 
     const prevPositions = new Map<string, { x: number; y: number; vx: number; vy: number }>();
@@ -179,6 +204,8 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
     props.latencyMap;
     props.contactLabelByPeerId;
     props.visiblePeerIds;
+    props.appPeerIds;
+    props.contactPeerIds;
     rebuildSimulation();
   });
 
@@ -387,7 +414,7 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
                   cx={node.x}
                   cy={node.y}
                   r={r + (isSelected() ? 3 : 0)}
-                  fill={nodeColor(node.nodeType)}
+                  fill={nodeColor(node)}
                   stroke={isSelected() ? "#f5f5f5" : "#1d2b3a"}
                   stroke-width={isSelected() ? 3 : 2}
                   opacity={0.9}
@@ -409,12 +436,22 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
       </svg>
 
       <div class="flex gap-3 flex-wrap mt-1.5 text-[11px] text-tg-text-dim items-center">
-        {(["self", "relay", "peer", "bootstrap"] as const).map((type) => {
+        {(["self", "relay", "bootstrap"] as const).map((type) => {
           const count = () => layout().nodes.filter((n) => n.nodeType === type).length;
           return (
             <span>
-              <span style={{ color: nodeColor(type) }}>●</span>{" "}
+              <span style={{ color: nodeColor({ id: "", label: "", nodeType: type }) }}>●</span>{" "}
               {nodeTypeLabel(type)}{" "}
+              <span class="text-tg-text-dim/60">{count()}</span>
+            </span>
+          );
+        })}
+        {(["app", "contact", "unknown"] as const).map((category) => {
+          const count = () => layout().nodes.filter((n) => n.nodeType === "peer" && n.peerCategory === category).length;
+          return (
+            <span>
+              <span style={{ color: nodeColor({ id: "", label: "", nodeType: "peer", peerCategory: category }) }}>●</span>{" "}
+              {peerCategoryLabel(category)}{" "}
               <span class="text-tg-text-dim/60">{count()}</span>
             </span>
           );
@@ -459,6 +496,13 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
                 copy
               </button>
             </div>
+
+            <Show when={info().node.nodeType === "peer" && info().node.peerCategory}>
+              <div class="mb-1">
+                <span class="text-tg-text-dim">Peer class </span>
+                <span class="text-tg-text">{peerCategoryLabel(info().node.peerCategory!)}</span>
+              </div>
+            </Show>
 
             <Show when={info().latency !== undefined}>
               <div class="mb-1">
