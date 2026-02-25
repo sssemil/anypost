@@ -5,6 +5,7 @@ Guidance for coding agents working in this repository.
 ## Project Layout
 - `packages/anypost-core`: protocol, crypto, persistence, and libp2p logic.
 - `apps/anypost-web`: SolidJS frontend and headless browser integration scripts.
+- `apps/anypost-android`: Capacitor Android wrapper target for the web app.
 - `apps/anypost-relay`: optional relay service.
 - `run`: convenience entrypoint for common local tasks.
 
@@ -14,6 +15,9 @@ Guidance for coding agents working in this repository.
 - Dev electron: `./run electron`
   - Profiled instance: `./run electron alice`
   - If Linux sandbox blocks launch locally: `./run electron alice --no-sandbox`
+- Android sync: `./run android-sync`
+- Android open: `./run android-open`
+- Android debug APK: `./run android-build-apk`
 - Build all: `./run build`
 - Test all: `./run test`
 - Typecheck all: `./run typecheck`

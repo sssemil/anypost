@@ -12,6 +12,9 @@ Commands:
   relay          Build and start the relay node
   web            Start the web app dev server
   electron       Start the Electron desktop app in dev mode (optional profile name)
+  android-sync   Build web assets and sync into Capacitor Android project
+  android-open   Open Android Studio for the Capacitor Android project
+  android-build-apk Build debug APK via Gradle
   electron-appimage Build Linux x86_64 Electron AppImage (incremental)
   electron-appimage-fresh Build a fresh Linux x86_64 Electron AppImage
   dev            Start both relay and web app (Ctrl+C stops both)
@@ -56,6 +59,18 @@ cmd_electron() {
   else
     pnpm --filter anypost-electron run dev -- "$@"
   fi
+}
+
+cmd_android_sync() {
+  pnpm --filter anypost-android run sync
+}
+
+cmd_android_open() {
+  pnpm --filter anypost-android run open
+}
+
+cmd_android_build_apk() {
+  pnpm --filter anypost-android run build:apk
 }
 
 clear_dir_if_exists() {
@@ -166,6 +181,9 @@ case "$1" in
   relay)     cmd_relay ;;
   web)       cmd_web ;;
   electron)  cmd_electron "$@" ;;
+  android-sync) cmd_android_sync ;;
+  android-open) cmd_android_open ;;
+  android-build-apk) cmd_android_build_apk ;;
   electron-appimage) cmd_electron_appimage ;;
   electron-appimage-fresh) cmd_electron_appimage_fresh ;;
   dev)       cmd_dev ;;

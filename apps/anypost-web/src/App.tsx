@@ -104,6 +104,7 @@ const ENV_TRANSPORT_PROFILE = import.meta.env.VITE_ANYPOST_TRANSPORTS as
   | "websocket"
   | "tcp"
   | "desktop"
+  | "android"
   | undefined;
 const GROUPS_STORAGE_KEY = "anypost:groups";
 const ACTION_CHAINS_STORAGE_KEY = "anypost:action-chains";
@@ -138,22 +139,60 @@ type DesktopRelayState = {
   readonly lastError?: string;
 };
 
-type DesktopBridge = {
-  readonly getRelayState: () => Promise<DesktopRelayState>;
-  readonly onRelayState: (listener: (state: DesktopRelayState) => void) => () => void;
-  readonly onDeepLink: (listener: (url: string) => void) => () => void;
-  readonly getPendingDeepLinks: () => Promise<readonly string[]>;
-  readonly notifyMessage: (payload: {
+type HostBridge = {
+  readonly getRelayState?: () => Promise<DesktopRelayState>;
+  readonly onRelayState?: (listener: (state: DesktopRelayState) => void) => () => void;
+  readonly onDeepLink?: (listener: (url: string) => void) => () => void;
+  readonly getPendingDeepLinks?: () => Promise<readonly string[]>;
+  readonly notifyMessage?: (payload: {
     readonly title: string;
     readonly body: string;
     readonly groupId: string;
     readonly senderPeerId: string;
-  }) => void;
+  }) => void | Promise<void>;
+};
+
+type CapacitorRelayStatePayload = {
+  readonly running?: boolean;
+  readonly peerId?: string;
+  readonly listenAddrs?: readonly string[];
+  readonly lastError?: string;
+};
+
+type CapacitorPendingDeepLinksPayload = {
+  readonly urls?: readonly string[];
+};
+
+type CapacitorBridgeListenerHandle = {
+  readonly remove: () => void | Promise<void>;
+};
+
+type CapacitorBridgePlugin = {
+  readonly getRelayState?: () => Promise<CapacitorRelayStatePayload>;
+  readonly getPendingDeepLinks?: () => Promise<CapacitorPendingDeepLinksPayload | readonly string[]>;
+  readonly notifyMessage?: (payload: {
+    readonly title: string;
+    readonly body: string;
+    readonly groupId: string;
+    readonly senderPeerId: string;
+  }) => Promise<void> | void;
+  readonly addListener?: (
+    eventName: string,
+    listener: (payload: Record<string, unknown>) => void,
+  ) => CapacitorBridgeListenerHandle | Promise<CapacitorBridgeListenerHandle>;
+};
+
+type CapacitorRuntime = {
+  readonly Plugins?: {
+    readonly AnypostBridge?: CapacitorBridgePlugin;
+  };
 };
 
 declare global {
   interface Window {
-    anypostDesktop?: DesktopBridge;
+    anypostDesktop?: HostBridge;
+    anypostAndroid?: HostBridge;
+    Capacitor?: CapacitorRuntime;
   }
 }
 
@@ -476,8 +515,105 @@ export const App = () => {
   let diagnosticsErrorRestore: (() => void) | undefined;
   let diagnosticsRejectionRestore: (() => void) | undefined;
 
-  const desktopBridge = (): DesktopBridge | null =>
-    typeof window !== "undefined" ? window.anypostDesktop ?? null : null;
+  let cachedCapacitorBridge: HostBridge | null | undefined;
+
+  const normalizeRelayState = (payload: CapacitorRelayStatePayload): DesktopRelayState => ({
+    running: payload.running === true,
+    peerId: typeof payload.peerId === "string" ? payload.peerId : undefined,
+    listenAddrs: Array.isArray(payload.listenAddrs)
+      ? payload.listenAddrs.filter((value): value is string => typeof value === "string")
+      : [],
+    lastError: typeof payload.lastError === "string" ? payload.lastError : undefined,
+  });
+
+  const normalizePendingDeepLinks = (payload: unknown): readonly string[] => {
+    if (Array.isArray(payload)) {
+      return payload.filter((value): value is string => typeof value === "string");
+    }
+    if (typeof payload === "object" && payload !== null && "urls" in payload) {
+      const urls = (payload as { readonly urls?: unknown }).urls;
+      if (Array.isArray(urls)) {
+        return urls.filter((value): value is string => typeof value === "string");
+      }
+    }
+    return [];
+  };
+
+  const loadCapacitorBridge = (): HostBridge | null => {
+    if (cachedCapacitorBridge !== undefined) return cachedCapacitorBridge;
+    if (typeof window === "undefined") {
+      cachedCapacitorBridge = null;
+      return cachedCapacitorBridge;
+    }
+    const plugin = window.Capacitor?.Plugins?.AnypostBridge;
+    if (!plugin) {
+      cachedCapacitorBridge = null;
+      return cachedCapacitorBridge;
+    }
+
+    cachedCapacitorBridge = {
+      getRelayState: plugin.getRelayState
+        ? async () => normalizeRelayState(await plugin.getRelayState!())
+        : undefined,
+      onRelayState: plugin.addListener
+        ? (listener) => {
+            let handle: CapacitorBridgeListenerHandle | null = null;
+            Promise.resolve(plugin.addListener!("relayState", (payload) => {
+              listener(
+                normalizeRelayState({
+                  running: payload.running === true,
+                  peerId: typeof payload.peerId === "string" ? payload.peerId : undefined,
+                  listenAddrs: Array.isArray(payload.listenAddrs)
+                    ? payload.listenAddrs.filter((value): value is string => typeof value === "string")
+                    : [],
+                  lastError: typeof payload.lastError === "string" ? payload.lastError : undefined,
+                }),
+              );
+            })).then((value) => {
+              handle = value;
+            }).catch(() => {});
+            return () => {
+              void handle?.remove();
+            };
+          }
+        : undefined,
+      onDeepLink: plugin.addListener
+        ? (listener) => {
+            let handle: CapacitorBridgeListenerHandle | null = null;
+            Promise.resolve(plugin.addListener!("deepLink", (payload) => {
+              const url = payload.url;
+              if (typeof url === "string" && url.length > 0) listener(url);
+            })).then((value) => {
+              handle = value;
+            }).catch(() => {});
+            return () => {
+              void handle?.remove();
+            };
+          }
+        : undefined,
+      getPendingDeepLinks: plugin.getPendingDeepLinks
+        ? async () => normalizePendingDeepLinks(await plugin.getPendingDeepLinks!())
+        : undefined,
+      notifyMessage: plugin.notifyMessage
+        ? (payload) => plugin.notifyMessage!(payload)
+        : undefined,
+    };
+
+    return cachedCapacitorBridge;
+  };
+
+  const hasDesktopBridge = (): boolean =>
+    typeof window !== "undefined" && window.anypostDesktop !== undefined;
+
+  const hasAndroidBridge = (): boolean => {
+    if (typeof window === "undefined") return false;
+    return window.anypostAndroid !== undefined || loadCapacitorBridge() !== null;
+  };
+
+  const hostBridge = (): HostBridge | null => {
+    if (typeof window === "undefined") return null;
+    return window.anypostDesktop ?? window.anypostAndroid ?? loadCapacitorBridge();
+  };
 
   const dispatchMobileView = (event: Parameters<typeof transitionMobileView>[1]) => {
     setMobileView((s) => {
@@ -1621,15 +1757,19 @@ export const App = () => {
   const startChat = async (accountKey: AccountKey) => {
     try {
       setChatError(null);
-      const desktop = desktopBridge();
-      const selectedTransportProfile = ENV_TRANSPORT_PROFILE ?? "websocket";
+      const bridge = hostBridge();
+      const selectedTransportProfile = ENV_TRANSPORT_PROFILE
+        ?? (hasDesktopBridge() ? "desktop" : hasAndroidBridge() ? "android" : "websocket");
       const bootstrapPeers = ENV_RELAY_MULTIADDR ? [ENV_RELAY_MULTIADDR] : [];
-      if (desktop) {
-        const relayState = await desktop.getRelayState().catch(() => null);
+      if (bridge?.getRelayState) {
+        const relayState = await bridge.getRelayState().catch(() => null);
         if (relayState?.running) {
           setDesktopRelayState(relayState);
           for (const addr of relayState.listenAddrs) {
-            if (selectedTransportProfile === "websocket" && !isWebSocketCompatibleBootstrapAddr(addr)) {
+            if (
+              (selectedTransportProfile === "websocket" || selectedTransportProfile === "android")
+              && !isWebSocketCompatibleBootstrapAddr(addr)
+            ) {
               continue;
             }
             if (!bootstrapPeers.includes(addr)) bootstrapPeers.push(addr);
@@ -1911,12 +2051,12 @@ export const App = () => {
           message: msg,
         });
 
-        const bridge = desktopBridge();
-        if (bridge && msg.senderPeerId !== liveChat?.peerId) {
+        const bridge = hostBridge();
+        if (bridge?.notifyMessage && msg.senderPeerId !== liveChat?.peerId) {
             const focused = typeof document !== "undefined" && !document.hidden && document.hasFocus();
             if (!focused && msg.groupId !== groupState().activeGroupId) {
               const groupName = groupState().groups.get(msg.groupId)?.groupName ?? "Anypost";
-              bridge.notifyMessage({
+              void bridge.notifyMessage({
                 title: msg.senderDisplayName || "New message",
                 body: `${groupName}: ${parseQuotedMessage(msg.text).body}`,
                 groupId: msg.groupId,
@@ -2272,18 +2412,22 @@ export const App = () => {
   });
 
   onMount(() => {
-    const bridge = desktopBridge();
+    const bridge = hostBridge();
     if (!bridge) return;
-    const offRelayState = bridge.onRelayState((state) => setDesktopRelayState(state));
-    const offDeepLink = bridge.onDeepLink((url) => {
+    const offRelayState = bridge.onRelayState?.((state) => setDesktopRelayState(state)) ?? (() => {});
+    const offDeepLink = bridge.onDeepLink?.((url) => {
       void handleDesktopDeepLink(url);
-    });
-    void bridge.getRelayState().then(setDesktopRelayState).catch(() => {});
-    void bridge.getPendingDeepLinks().then((urls) => {
-      for (const url of urls) {
-        void handleDesktopDeepLink(url);
-      }
-    }).catch(() => {});
+    }) ?? (() => {});
+    if (bridge.getRelayState) {
+      void bridge.getRelayState().then(setDesktopRelayState).catch(() => {});
+    }
+    if (bridge.getPendingDeepLinks) {
+      void bridge.getPendingDeepLinks().then((urls) => {
+        for (const url of urls) {
+          void handleDesktopDeepLink(url);
+        }
+      }).catch(() => {});
+    }
     onCleanup(() => {
       offRelayState();
       offDeepLink();

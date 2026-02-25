@@ -237,3 +237,11 @@ export {
 export type {
   JoinRetryStatus,
 } from "./join-retry-queue.js";
+export {
+  createDefaultRuntimeAdapter,
+  isBrowserRuntimeProfile,
+} from "./runtime-adapter.js";
+export type {
+  MultiGroupTransportProfile,
+  MultiGroupRuntimeAdapter,
+} from "./runtime-adapter.js";

@@ -1,0 +1,18 @@
+{
+  "name": "anypost-android",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "init:android": "pnpm exec cap add android",
+    "sync": "pnpm --filter anypost-core build && pnpm --filter anypost-web build && pnpm exec cap sync android",
+    "open": "pnpm exec cap open android",
+    "build:apk": "mkdir -p ../../.android-user ../../.android-sdk && export ANDROID_USER_HOME=\"$(cd ../.. && pwd)/.android-user\" ANDROID_HOME=\"${ANDROID_HOME:-$(cd ../.. && pwd)/.android-sdk}\" ANDROID_SDK_ROOT=\"${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$(cd ../.. && pwd)/.android-sdk}}\" && pnpm run sync && cd android && ./gradlew assembleDebug",
+    "doctor": "pnpm exec cap doctor"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/cli": "^7.4.3",
+    "@capacitor/core": "^7.4.3"
+  }
+}

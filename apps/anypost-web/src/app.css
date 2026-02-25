@@ -19,3 +19,8 @@
   --color-tg-warning: #ff9800;
   --color-tg-unread: #3390ec;
 }
+
+:root {
+  --anypost-safe-top: env(safe-area-inset-top, 0px);
+  --anypost-safe-bottom: env(safe-area-inset-bottom, 0px);
+}

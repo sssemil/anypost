@@ -59,7 +59,10 @@ export const ChatLayout = (props: ChatLayoutProps) => {
 
         <Show when={props.rightPanel !== "none"}>
           <div class="fixed inset-0 z-20 w-full flex flex-col bg-tg-sidebar sm:static sm:z-auto sm:w-[420px] sm:min-w-[420px] sm:border-l sm:border-tg-border">
-            <div class="flex items-center justify-between px-4 py-3 border-b border-tg-border shrink-0">
+            <div
+              class="flex items-center justify-between px-4 py-3 border-b border-tg-border shrink-0"
+              style={{ "padding-top": "calc(env(safe-area-inset-top, 0px) + 0.75rem)" }}
+            >
               <span class="font-semibold text-tg-text">
                 {PANEL_TITLES[props.rightPanel as Exclude<RightPanel, "none">]}
               </span>

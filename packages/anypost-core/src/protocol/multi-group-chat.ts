@@ -31,7 +31,6 @@ import { createGroupDiscoveryManager } from "./group-discovery.js";
 import type { GroupDiscoveryManager } from "./group-discovery.js";
 import type { GroupDiscoveryState } from "./group-discovery-state.js";
 import type { WireMessage } from "../shared/schemas.js";
-import { IPFS_BOOTSTRAP_TCP_PEERS, IPFS_BOOTSTRAP_WSS_PEERS } from "../libp2p/bootstrap-peers.js";
 import type { ChatMessageEvent, PeerInfo, NetworkStatus, NetworkEvent } from "./plaintext-chat.js";
 import type { AccountKey } from "../crypto/identity.js";
 import { GENESIS_HASH, toHex } from "./action-chain.js";
@@ -68,6 +67,12 @@ import {
   markJoinRetryCancelled,
 } from "./join-retry-queue.js";
 import type { JoinRetryState } from "./join-retry-queue.js";
+import {
+  createDefaultRuntimeAdapter,
+  isBrowserRuntimeProfile,
+  type MultiGroupRuntimeAdapter,
+  type MultiGroupTransportProfile,
+} from "./runtime-adapter.js";
 
 export type MultiGroupChatMessageEvent = ChatMessageEvent & {
   readonly groupId: string;
@@ -278,7 +283,8 @@ type CreateMultiGroupChatOptions = {
   readonly initialSyncProgressState?: SyncProgressState;
   readonly listenAddresses?: readonly string[];
   readonly bootstrapPeers?: readonly string[];
-  readonly useTransports?: "tcp" | "websocket" | "desktop";
+  readonly useTransports?: MultiGroupTransportProfile;
+  readonly runtimeAdapter?: MultiGroupRuntimeAdapter;
   readonly onRelayPoolStateChange?: (state: RelayPoolState) => void;
   readonly onGroupDiscoveryStateChange?: (state: GroupDiscoveryState) => void;
   readonly onRelayCandidateStateChange?: (state: RelayCandidateState) => void;
@@ -317,8 +323,6 @@ const RELAY_RESERVATION_DIAL_TIMEOUT_MS = 4_000;
 const RELAY_RESERVATION_BACKOFF_BASE_MS = 750;
 const RELAY_RESERVATION_BACKOFF_MAX_MS = 15_000;
 const RELAY_RESERVATION_DIAL_ATTEMPT_TIMEOUT_MS = 3_500;
-const RELAY_TARGET_ACTIVE_WEB = 5;
-const RELAY_TARGET_ACTIVE_DESKTOP = 6;
 const MEMBER_RECONNECT_FAST_INTERVAL_MS = 5_000;
 const MEMBER_RECONNECT_IDLE_INTERVAL_MS = 30_000;
 const PINNED_RECONNECT_BURST_SCHEDULE_MS = [0, 1_000, 2_000, 4_000, 8_000, 15_000] as const;
@@ -369,6 +373,7 @@ export const createMultiGroupChat = async (
     listenAddresses = [],
     bootstrapPeers: initialBootstrapPeers = [],
     useTransports = "websocket",
+    runtimeAdapter: providedRuntimeAdapter,
     onRelayPoolStateChange,
     onGroupDiscoveryStateChange,
     onRelayCandidateStateChange,
@@ -396,16 +401,13 @@ export const createMultiGroupChat = async (
     : await generateKeyPair("Ed25519");
 
   const relayPeers = [...initialBootstrapPeers];
-
-  const isWebRuntime = useTransports === "websocket";
-  const isDesktopRuntime = useTransports === "desktop";
-  const isRelayCapableRuntime = isWebRuntime || isDesktopRuntime;
-
-  const allBootstrapPeers = isWebRuntime
-    ? [...relayPeers, ...IPFS_BOOTSTRAP_WSS_PEERS]
-    : isDesktopRuntime
-      ? [...relayPeers, ...IPFS_BOOTSTRAP_WSS_PEERS, ...IPFS_BOOTSTRAP_TCP_PEERS]
-      : [...relayPeers, ...IPFS_BOOTSTRAP_TCP_PEERS];
+  const runtimeAdapter = providedRuntimeAdapter
+    ?? createDefaultRuntimeAdapter(useTransports);
+  const runtimeProfile = runtimeAdapter.profile;
+  const isWebRuntime = isBrowserRuntimeProfile(runtimeProfile);
+  const isDesktopRuntime = runtimeProfile === "desktop";
+  const isRelayCapableRuntime = runtimeAdapter.relayCapable;
+  const allBootstrapPeers = [...runtimeAdapter.resolveBootstrapPeers(relayPeers)];
 
   const pubsubDiscovery = isRelayCapableRuntime
     ? [
@@ -1222,9 +1224,7 @@ export const createMultiGroupChat = async (
   notifyPublicKeyToPeerIdChange();
 
   let relayCandidateState = createRelayCandidateState();
-  const relayTargetActive = isDesktopRuntime
-    ? RELAY_TARGET_ACTIVE_DESKTOP
-    : RELAY_TARGET_ACTIVE_WEB;
+  const relayTargetActive = runtimeAdapter.targetActiveRelays;
   const relayReservationManager = createRelayReservationManager({
     targetActive: relayTargetActive,
     baseBackoffMs: RELAY_RESERVATION_BACKOFF_BASE_MS,

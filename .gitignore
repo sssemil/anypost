@@ -12,3 +12,6 @@ anypost-devtools-recording-*.json
 apps/anypost-electron/*.bdic
 apps/anypost-electron/release/
 apps/anypost-electron/release-debug/
+apps/anypost-android/android/.gradle/
+apps/anypost-android/android/build/
+apps/anypost-android/android/app/build/

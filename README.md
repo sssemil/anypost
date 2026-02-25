@@ -8,7 +8,7 @@ Anypost is a P2P group messaging platform that runs entirely in the browser — 
 
 The app supports multi-group chat, direct messages, and an invite system with targeted or open invite tokens. Peers discover each other through a multi-layer system combining DHT provider advertisements, pubsub announcements, and relay pooling. When peers reconnect after going offline, the action chain syncs automatically — no messages are lost.
 
-Anypost runs as a web app (SolidJS), a desktop app (Electron, Linux-first), or both simultaneously. A built-in network observability panel shows relay health, peer topology, and per-group discovery status in real time.
+Anypost runs as a web app (SolidJS), a desktop app (Electron, Linux-first), or an Android app (Capacitor wrapper + native bridge contract). A built-in network observability panel shows relay health, peer topology, and per-group discovery status in real time.
 
 ## Features
 
@@ -51,6 +51,9 @@ Run `./run` with no arguments to see all available commands:
 ./run relay          Build and start the relay node
 ./run web            Start the web app dev server
 ./run electron       Start the Electron desktop app (optional profile name)
+./run android-sync   Build web assets and sync Capacitor Android project
+./run android-open   Open Android Studio for the Android target
+./run android-build-apk Build Android debug APK
 ./run dev            Start both relay and web app
 ./run build          Build all packages
 ./run test           Run all tests
@@ -65,6 +68,7 @@ anypost/
     anypost-core/        Protocol, cryptography, state machines, libp2p networking
   apps/
     anypost-web/         SolidJS web frontend (Vite + Tailwind v4)
+    anypost-android/     Android wrapper target (Capacitor)
     anypost-relay/       Optional relay server for NAT traversal
     anypost-electron/    Linux-first Electron desktop app
   spikes/                Early prototypes and experiments
@@ -74,6 +78,7 @@ anypost/
 |---------|-------------|
 | `anypost-core` | Signed action chains, wire protocol (CBOR + Zod), multi-group state machines, peer discovery, relay health tracking |
 | `anypost-web` | Telegram-style chat UI, onboarding flow, network observability panel, QR invite scanning |
+| `anypost-android` | Android wrapper + bridge contract for deep links/notifications/native runtime hooks |
 | `anypost-relay` | libp2p relay node with circuit relay v2, DHT server mode, WebSocket + TCP listeners |
 | `anypost-electron` | Desktop wrapper with embedded relay, multi-profile support, native transport runtime |
 
@@ -95,6 +100,7 @@ The core library uses **pure state machines** — all state transitions are immu
 | Serialization | CBOR (`cbor-x`), Zod schemas at trust boundaries |
 | Frontend | SolidJS, Tailwind CSS v4, D3.js (topology graph) |
 | Desktop | Electron 32 |
+| Mobile | Capacitor 7 (Android target) |
 | Build | pnpm workspaces, Turborepo, Vite |
 | Testing | Vitest, Playwright (integration) |
 

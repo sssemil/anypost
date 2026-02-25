@@ -58,7 +58,10 @@ export const HeaderBar = (props: HeaderBarProps) => {
   };
 
   return (
-    <div class="relative flex items-center gap-3 px-4 py-2.5 bg-tg-header border-b border-tg-border">
+    <div
+      class="relative flex items-center gap-3 px-4 py-2.5 bg-tg-header border-b border-tg-border"
+      style={{ "padding-top": "calc(env(safe-area-inset-top, 0px) + 0.625rem)" }}
+    >
       <Show when={props.showBackButton}>
         <button
           class="sm:hidden text-tg-accent text-lg p-1 -ml-1"
