@@ -31,7 +31,7 @@ jobs:
 
       - name: Package Linux x64 AppImage
         run: >
-          pnpm dlx electron-builder@24.13.3
+          pnpm --filter anypost-electron exec electron-builder
           --projectDir apps/anypost-electron
           --config electron-builder.yml
           --linux AppImage

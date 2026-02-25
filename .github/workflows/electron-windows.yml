@@ -32,7 +32,7 @@ jobs:
       - name: Package Windows x64 Portable EXE
         shell: bash
         run: >
-          pnpm dlx electron-builder@24.13.3
+          pnpm --filter anypost-electron exec electron-builder
           --projectDir apps/anypost-electron
           --config electron-builder.yml
           --win portable

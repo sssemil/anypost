@@ -33,7 +33,7 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: >
-          pnpm dlx electron-builder@24.13.3
+          pnpm --filter anypost-electron exec electron-builder
           --projectDir apps/anypost-electron
           --config electron-builder.yml
           --mac dmg zip

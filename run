@@ -106,7 +106,7 @@ package_electron_appimage() {
   find "$SCRIPT_DIR/apps/anypost-electron/release" -maxdepth 1 -type f -name '*.AppImage' -delete
 
   echo "Packaging Linux x86_64 AppImage..."
-  pnpm dlx electron-builder@24.13.3 \
+  pnpm --filter anypost-electron exec electron-builder \
     --projectDir apps/anypost-electron \
     --config electron-builder.yml \
     --linux AppImage \
@@ -146,7 +146,7 @@ package_electron_windows() {
   find "$SCRIPT_DIR/apps/anypost-electron/release" -maxdepth 1 -type f -name 'latest*.yml' -delete
 
   echo "Packaging Windows x86_64 Portable EXE..."
-  pnpm dlx electron-builder@24.13.3 \
+  pnpm --filter anypost-electron exec electron-builder \
     --projectDir apps/anypost-electron \
     --config electron-builder.yml \
     --win portable \
@@ -186,7 +186,7 @@ package_electron_macos() {
   find "$SCRIPT_DIR/apps/anypost-electron/release" -maxdepth 1 -type f -name 'latest*.yml' -delete
 
   echo "Packaging macOS x64 DMG + ZIP..."
-  CSC_IDENTITY_AUTO_DISCOVERY=false pnpm dlx electron-builder@24.13.3 \
+  CSC_IDENTITY_AUTO_DISCOVERY=false pnpm --filter anypost-electron exec electron-builder \
     --projectDir apps/anypost-electron \
     --config electron-builder.yml \
     --mac dmg zip \
