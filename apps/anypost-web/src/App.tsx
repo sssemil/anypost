@@ -1,4 +1,4 @@
-import { createSignal, createEffect, Match, onCleanup, onMount, Show, Switch } from "solid-js";
+import { createSignal, createEffect, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import {
   createMultiGroupChat,
   createMultiGroupState,
@@ -38,8 +38,12 @@ import type {
   PinnedPeerWatchdogState,
   ChatMessageEvent,
   SignedAction,
+  CallState,
+  MediaSignalEvent,
 } from "anypost-core/protocol";
 import { getCandidatesByRtt } from "anypost-core/protocol";
+import { SPEAKING_THRESHOLD, isSpeaking } from "anypost-core/media";
+import type { SignalMessage } from "anypost-core/media";
 import {
   generateAccountKey,
   exportAccountKey,
@@ -128,6 +132,13 @@ const DEVTOOLS_RECORD_SNAPSHOT_MS = 1_000;
 const DEVTOOLS_RECORD_MAX_ENTRIES = 25_000;
 const PROJECT_GITHUB_URL = "https://github.com/sssemil/anypost";
 const DEFAULT_DIRECT_MESSAGE_GROUP_NAME = "Direct Message";
+const WEBRTC_ICE_SERVERS: RTCIceServer[] = [
+  { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+];
+const CALL_SPEAKING_SAMPLE_INTERVAL_MS = 180;
+const CALL_SPEAKING_MIN_LEVEL = SPEAKING_THRESHOLD * 0.15;
+const CALL_SPEAKING_RISE_ALPHA = 0.5;
+const CALL_SPEAKING_FALL_ALPHA = 0.2;
 
 const isWebSocketCompatibleBootstrapAddr = (addr: string): boolean =>
   addr.includes("/ws") || addr.includes("/wss") || addr.includes("/webrtc") || addr.includes("/p2p-circuit");
@@ -260,6 +271,35 @@ type DiagnosticsRecorderState = {
   readonly remainingMs: number;
   readonly entryCount: number;
   readonly artifact: DiagnosticsRecordingArtifact | null;
+};
+
+type IncomingCallPrompt = {
+  readonly senderPeerId: string;
+  readonly sentAt: number;
+  readonly targeted: boolean;
+};
+
+type PeerConnectionEntry = {
+  readonly pc: RTCPeerConnection;
+  readonly remoteStream: MediaStream;
+  readonly audioElement: HTMLAudioElement;
+  makingOffer: boolean;
+  readonly polite: boolean;
+  speakingAudioContext: AudioContext | null;
+  speakingAnalyser: AnalyserNode | null;
+  speakingSource: MediaStreamAudioSourceNode | null;
+  speakingData: Uint8Array | null;
+  speakingTimer: ReturnType<typeof setInterval> | null;
+};
+
+type GroupCallMediaState = {
+  localStream: MediaStream | null;
+  readonly peers: Map<string, PeerConnectionEntry>;
+  localSpeakingAudioContext: AudioContext | null;
+  localSpeakingAnalyser: AnalyserNode | null;
+  localSpeakingSource: MediaStreamAudioSourceNode | null;
+  localSpeakingData: Uint8Array | null;
+  localSpeakingTimer: ReturnType<typeof setInterval> | null;
 };
 type DiagnosticsConsoleMethod = "debug" | "info" | "log" | "warn" | "error";
 
@@ -482,6 +522,13 @@ export const App = () => {
   const [outgoingDirectMessageRequests, setOutgoingDirectMessageRequests] = createSignal<readonly OutgoingDirectMessageRequest[]>(
     loadOutgoingDirectMessageRequests(),
   );
+  const [callStatesByGroup, setCallStatesByGroup] = createSignal<ReadonlyMap<string, CallState>>(new Map());
+  const [incomingCallsByGroup, setIncomingCallsByGroup] = createSignal<ReadonlyMap<string, IncomingCallPrompt>>(new Map());
+  const [callMutedByGroup, setCallMutedByGroup] = createSignal<ReadonlyMap<string, boolean>>(new Map());
+  const [callSpeakingByGroup, setCallSpeakingByGroup] = createSignal<ReadonlyMap<string, ReadonlyMap<string, number>>>(new Map());
+  const [callLocallyMutedPeersByGroup, setCallLocallyMutedPeersByGroup] = createSignal<ReadonlyMap<string, ReadonlySet<string>>>(new Map());
+  const [callErrorByGroup, setCallErrorByGroup] = createSignal<ReadonlyMap<string, string>>(new Map());
+  const [callClockMs, setCallClockMs] = createSignal(Date.now());
   const [pendingDesktopInviteCodes, setPendingDesktopInviteCodes] = createSignal<readonly string[]>([]);
   const [messageDraft, setMessageDraft] = createSignal("");
   const [replyTargetMessage, setReplyTargetMessage] = createSignal<ChatMessageEvent | null>(null);
@@ -501,8 +548,11 @@ export const App = () => {
   let unsubscribeEvents: (() => void) | undefined;
   let unsubscribeJoinRequests: (() => void) | undefined;
   let unsubscribeDirectMessageRequests: (() => void) | undefined;
+  let unsubscribeCallEvents: (() => void) | undefined;
+  let unsubscribeMediaSignals: (() => void) | undefined;
   let statusInterval: ReturnType<typeof setInterval> | undefined;
   let pingInterval: ReturnType<typeof setInterval> | undefined;
+  let callClockInterval: ReturnType<typeof setInterval> | undefined;
   let outgoingDmRetrySweepInFlight = false;
   const profileSyncLastRequestAtByPeer = new Map<string, number>();
   const readReceiptLastSentByGroup = new Map<string, string>();
@@ -514,6 +564,8 @@ export const App = () => {
   let diagnosticsConsoleRestore: (() => void) | undefined;
   let diagnosticsErrorRestore: (() => void) | undefined;
   let diagnosticsRejectionRestore: (() => void) | undefined;
+  const groupCallMedia = new Map<string, GroupCallMediaState>();
+  const callSessionByGroup = new Map<string, { readonly startedAt: number }>();
 
   let cachedCapacitorBridge: HostBridge | null | undefined;
 
@@ -1536,7 +1588,539 @@ export const App = () => {
     });
   };
 
+  const setCallErrorForGroup = (groupId: string, error: string | null) => {
+    setCallErrorByGroup((prev) => {
+      const next = new Map(prev);
+      if (error && error.trim().length > 0) {
+        next.set(groupId, error);
+      } else {
+        next.delete(groupId);
+      }
+      return next;
+    });
+  };
+
+  const refreshCallStateForGroup = (groupId: string) => {
+    const currentChat = chat;
+    setCallStatesByGroup((prev) => {
+      const next = new Map(prev);
+      const state = currentChat?.getCallState(groupId) ?? null;
+      if (state) next.set(groupId, state);
+      else next.delete(groupId);
+      return next;
+    });
+  };
+
+  const formatCallDurationCompact = (durationMs: number): string => {
+    const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 0) {
+      return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+    }
+    return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+  };
+
+  const formatCallDurationSummary = (durationMs: number): string => {
+    const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+    if (minutes > 0) return `${minutes}m ${seconds}s`;
+    return `${seconds}s`;
+  };
+
+  const appendCallTimelineEvent = (
+    groupId: string,
+    id: string,
+    text: string,
+    timestamp: number,
+    source: "local" | "remote",
+  ) => {
+    const group = groupState().groups.get(groupId);
+    if (!group) return;
+    if (group.messages.some((message) => message.id === id)) return;
+    dispatchGroupEvent({
+      type: source === "local" ? "message-sent" : "message-received",
+      groupId,
+      message: {
+        id,
+        senderPeerId: SYSTEM_SENDER_ID,
+        senderDisplayName: "system",
+        text,
+        timestamp,
+      },
+    });
+  };
+
+  const resolveCallParticipantLabel = (peerId: string): string => {
+    const currentChat = chat;
+    if (currentChat && peerId === currentChat.peerId) return "You";
+    return directMessagePeerLabel(peerId)
+      ?? contactsBook().get(peerId)?.nickname
+      ?? contactsBook().get(peerId)?.selfName
+      ?? `${peerId.slice(0, 12)}...`;
+  };
+
+  const getOrCreateCallMediaState = (groupId: string): GroupCallMediaState => {
+    const existing = groupCallMedia.get(groupId);
+    if (existing) return existing;
+    const created: GroupCallMediaState = {
+      localStream: null,
+      peers: new Map(),
+      localSpeakingAudioContext: null,
+      localSpeakingAnalyser: null,
+      localSpeakingSource: null,
+      localSpeakingData: null,
+      localSpeakingTimer: null,
+    };
+    groupCallMedia.set(groupId, created);
+    return created;
+  };
+
+  const setParticipantSpeakingLevel = (groupId: string, peerId: string, level: number) => {
+    const bounded = Number.isFinite(level)
+      ? Math.max(0, Math.min(1, level))
+      : 0;
+    setCallSpeakingByGroup((prev) => {
+      const next = new Map(prev);
+      const perGroup = new Map(next.get(groupId) ?? []);
+      const previousLevel = perGroup.get(peerId) ?? 0;
+      const alpha = bounded >= previousLevel ? CALL_SPEAKING_RISE_ALPHA : CALL_SPEAKING_FALL_ALPHA;
+      const smoothed = previousLevel + (bounded - previousLevel) * alpha;
+      if (smoothed <= CALL_SPEAKING_MIN_LEVEL) perGroup.delete(peerId);
+      else perGroup.set(peerId, smoothed);
+      if (perGroup.size === 0) next.delete(groupId);
+      else next.set(groupId, perGroup);
+      return next;
+    });
+  };
+
+  const clearSpeakingForGroup = (groupId: string) => {
+    setCallSpeakingByGroup((prev) => {
+      const next = new Map(prev);
+      next.delete(groupId);
+      return next;
+    });
+  };
+
+  const isParticipantLocallyMuted = (groupId: string, peerId: string): boolean =>
+    callLocallyMutedPeersByGroup().get(groupId)?.has(peerId) ?? false;
+
+  const setParticipantLocallyMuted = (groupId: string, peerId: string, muted: boolean) => {
+    setCallLocallyMutedPeersByGroup((prev) => {
+      const next = new Map(prev);
+      const perGroup = new Set(next.get(groupId) ?? []);
+      if (muted) perGroup.add(peerId);
+      else perGroup.delete(peerId);
+      if (perGroup.size === 0) next.delete(groupId);
+      else next.set(groupId, perGroup);
+      return next;
+    });
+    const audioEl = groupCallMedia.get(groupId)?.peers.get(peerId)?.audioElement;
+    if (audioEl) {
+      audioEl.muted = muted;
+    }
+  };
+
+  const readAnalyserLevel = (analyser: AnalyserNode, scratch: Uint8Array<ArrayBuffer>): number => {
+    analyser.getByteTimeDomainData(scratch);
+    let sum = 0;
+    for (let idx = 0; idx < scratch.length; idx += 1) {
+      const centered = (scratch[idx] - 128) / 128;
+      sum += centered * centered;
+    }
+    return Math.sqrt(sum / scratch.length);
+  };
+
+  const normalizeSpeakingIndicatorLevel = (level: number): number => {
+    if (!Number.isFinite(level) || level <= 0) return 0;
+    const floor = SPEAKING_THRESHOLD * 0.4;
+    const ceiling = SPEAKING_THRESHOLD * 3.8;
+    const normalized = (level - floor) / Math.max(0.0001, ceiling - floor);
+    return Math.max(0, Math.min(1, normalized));
+  };
+
+  const destroyPeerConnection = (
+    groupId: string,
+    peerId: string,
+    entry: PeerConnectionEntry,
+  ) => {
+    if (entry.speakingTimer) {
+      clearInterval(entry.speakingTimer);
+      entry.speakingTimer = null;
+    }
+    try {
+      entry.speakingSource?.disconnect();
+    } catch {
+      // noop
+    }
+    entry.speakingSource = null;
+    try {
+      entry.speakingAnalyser?.disconnect();
+    } catch {
+      // noop
+    }
+    entry.speakingAnalyser = null;
+    entry.speakingData = null;
+    if (entry.speakingAudioContext) {
+      void entry.speakingAudioContext.close().catch(() => {});
+    }
+    entry.speakingAudioContext = null;
+    setParticipantSpeakingLevel(groupId, peerId, 0);
+    try {
+      entry.pc.onicecandidate = null;
+      entry.pc.ontrack = null;
+      entry.pc.onnegotiationneeded = null;
+      entry.pc.onconnectionstatechange = null;
+      entry.pc.close();
+    } catch {
+      // noop
+    }
+    try {
+      entry.audioElement.pause();
+      entry.audioElement.srcObject = null;
+      entry.audioElement.remove();
+    } catch {
+      // noop
+    }
+  };
+
+  const teardownCallMediaForGroup = (groupId: string) => {
+    const mediaState = groupCallMedia.get(groupId);
+    if (!mediaState) return;
+    for (const [peerId, entry] of mediaState.peers.entries()) {
+      destroyPeerConnection(groupId, peerId, entry);
+    }
+    mediaState.peers.clear();
+    if (mediaState.localSpeakingTimer) {
+      clearInterval(mediaState.localSpeakingTimer);
+      mediaState.localSpeakingTimer = null;
+    }
+    try {
+      mediaState.localSpeakingSource?.disconnect();
+    } catch {
+      // noop
+    }
+    mediaState.localSpeakingSource = null;
+    try {
+      mediaState.localSpeakingAnalyser?.disconnect();
+    } catch {
+      // noop
+    }
+    mediaState.localSpeakingAnalyser = null;
+    mediaState.localSpeakingData = null;
+    if (mediaState.localSpeakingAudioContext) {
+      void mediaState.localSpeakingAudioContext.close().catch(() => {});
+    }
+    mediaState.localSpeakingAudioContext = null;
+    if (mediaState.localStream) {
+      for (const track of mediaState.localStream.getTracks()) {
+        track.stop();
+      }
+      mediaState.localStream = null;
+    }
+    groupCallMedia.delete(groupId);
+    clearSpeakingForGroup(groupId);
+    setCallLocallyMutedPeersByGroup((prev) => {
+      const next = new Map(prev);
+      next.delete(groupId);
+      return next;
+    });
+  };
+
+  const teardownAllCallMedia = () => {
+    for (const groupId of [...groupCallMedia.keys()]) {
+      teardownCallMediaForGroup(groupId);
+    }
+  };
+
+  const setGroupMuted = (groupId: string, muted: boolean) => {
+    setCallMutedByGroup((prev) => {
+      const next = new Map(prev);
+      next.set(groupId, muted);
+      return next;
+    });
+  };
+
+  const ensureLocalSpeakingDetection = (
+    groupId: string,
+    stream: MediaStream,
+  ) => {
+    const currentChat = chat;
+    if (!currentChat) return;
+    const mediaState = getOrCreateCallMediaState(groupId);
+    if (mediaState.localSpeakingTimer) return;
+    if (typeof AudioContext === "undefined") return;
+    try {
+      const audioContext = new AudioContext();
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+      const scratch = new Uint8Array(new ArrayBuffer(analyser.fftSize));
+      mediaState.localSpeakingAudioContext = audioContext;
+      mediaState.localSpeakingSource = source;
+      mediaState.localSpeakingAnalyser = analyser;
+      mediaState.localSpeakingData = scratch;
+      mediaState.localSpeakingTimer = setInterval(() => {
+        const level = readAnalyserLevel(analyser, scratch);
+        if (audioContext.state === "suspended") {
+          void audioContext.resume().catch(() => {});
+        }
+        setParticipantSpeakingLevel(groupId, currentChat.peerId, level);
+      }, CALL_SPEAKING_SAMPLE_INTERVAL_MS);
+    } catch {
+      // noop
+    }
+  };
+
+  const ensureRemoteSpeakingDetection = (
+    groupId: string,
+    peerId: string,
+    entry: PeerConnectionEntry,
+  ) => {
+    if (entry.speakingTimer) return;
+    if (typeof AudioContext === "undefined") return;
+    try {
+      const audioContext = new AudioContext();
+      const source = audioContext.createMediaStreamSource(entry.remoteStream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+      const scratch = new Uint8Array(new ArrayBuffer(analyser.fftSize));
+      entry.speakingAudioContext = audioContext;
+      entry.speakingSource = source;
+      entry.speakingAnalyser = analyser;
+      entry.speakingData = scratch;
+      entry.speakingTimer = setInterval(() => {
+        const level = readAnalyserLevel(analyser, scratch);
+        if (audioContext.state === "suspended") {
+          void audioContext.resume().catch(() => {});
+        }
+        setParticipantSpeakingLevel(groupId, peerId, level);
+      }, CALL_SPEAKING_SAMPLE_INTERVAL_MS);
+    } catch {
+      // noop
+    }
+  };
+
+  const ensureLocalCallStream = async (groupId: string): Promise<MediaStream> => {
+    const mediaState = getOrCreateCallMediaState(groupId);
+    if (mediaState.localStream) {
+      ensureLocalSpeakingDetection(groupId, mediaState.localStream);
+      return mediaState.localStream;
+    }
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      throw new Error("Media devices are unavailable in this runtime");
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    const muted = callMutedByGroup().get(groupId) ?? false;
+    for (const track of stream.getAudioTracks()) {
+      track.enabled = !muted;
+    }
+    mediaState.localStream = stream;
+    ensureLocalSpeakingDetection(groupId, stream);
+    setCallErrorForGroup(groupId, null);
+    return stream;
+  };
+
+  const attachLocalTracks = (pc: RTCPeerConnection, stream: MediaStream) => {
+    for (const track of stream.getTracks()) {
+      const alreadyAdded = pc.getSenders().some((sender) => sender.track?.id === track.id);
+      if (!alreadyAdded) {
+        pc.addTrack(track, stream);
+      }
+    }
+  };
+
+  const maybeSendOffer = async (
+    groupId: string,
+    remotePeerId: string,
+    entry: PeerConnectionEntry,
+  ) => {
+    const currentChat = chat;
+    if (!currentChat) return;
+    if (currentChat.peerId.localeCompare(remotePeerId) >= 0) return;
+    if (entry.pc.signalingState !== "stable") return;
+    entry.makingOffer = true;
+    try {
+      const offer = await entry.pc.createOffer();
+      await entry.pc.setLocalDescription(offer);
+      const local = entry.pc.localDescription;
+      if (!local?.sdp) return;
+      await currentChat.sendMediaSignal(groupId, remotePeerId, {
+        type: "offer",
+        sdp: local.sdp,
+      });
+    } catch {
+      // noop
+    } finally {
+      entry.makingOffer = false;
+    }
+  };
+
+  const ensurePeerConnection = async (
+    groupId: string,
+    remotePeerId: string,
+  ): Promise<PeerConnectionEntry> => {
+    const mediaState = getOrCreateCallMediaState(groupId);
+    const existing = mediaState.peers.get(remotePeerId);
+    if (existing) return existing;
+
+    const currentChat = chat;
+    if (!currentChat) throw new Error("Chat not initialized");
+    const localStream = await ensureLocalCallStream(groupId);
+    const pc = new RTCPeerConnection({ iceServers: WEBRTC_ICE_SERVERS });
+    const remoteStream = new MediaStream();
+    const audioElement = document.createElement("audio");
+    audioElement.autoplay = true;
+    audioElement.style.display = "none";
+    audioElement.muted = isParticipantLocallyMuted(groupId, remotePeerId);
+    audioElement.srcObject = remoteStream;
+    document.body.appendChild(audioElement);
+
+    const entry: PeerConnectionEntry = {
+      pc,
+      remoteStream,
+      audioElement,
+      makingOffer: false,
+      polite: currentChat.peerId.localeCompare(remotePeerId) > 0,
+      speakingAudioContext: null,
+      speakingAnalyser: null,
+      speakingSource: null,
+      speakingData: null,
+      speakingTimer: null,
+    };
+    mediaState.peers.set(remotePeerId, entry);
+
+    attachLocalTracks(pc, localStream);
+    pc.ontrack = (event) => {
+      const incomingTracks = event.streams[0]?.getTracks();
+      const tracksToAdd = incomingTracks && incomingTracks.length > 0
+        ? incomingTracks
+        : [event.track];
+      for (const track of tracksToAdd) {
+        const exists = remoteStream.getTracks().some((existing) => existing.id === track.id);
+        if (!exists) remoteStream.addTrack(track);
+      }
+      void audioElement.play().catch(() => {});
+      ensureRemoteSpeakingDetection(groupId, remotePeerId, entry);
+    };
+    pc.onicecandidate = (event) => {
+      if (!event.candidate) return;
+      const candidate = event.candidate;
+      void currentChat.sendMediaSignal(groupId, remotePeerId, {
+        type: "ice-candidate",
+        candidate: candidate.candidate,
+        sdpMLineIndex: candidate.sdpMLineIndex ?? null,
+        sdpMid: candidate.sdpMid ?? null,
+      }).catch(() => {});
+    };
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+        const current = groupCallMedia.get(groupId)?.peers.get(remotePeerId);
+        if (!current) return;
+        destroyPeerConnection(groupId, remotePeerId, current);
+        groupCallMedia.get(groupId)?.peers.delete(remotePeerId);
+      }
+    };
+
+    await maybeSendOffer(groupId, remotePeerId, entry);
+    return entry;
+  };
+
+  const reconcileCallMediaForGroup = async (groupId: string) => {
+    const currentChat = chat;
+    if (!currentChat) return;
+    const state = currentChat.getCallState(groupId);
+    if (!state || !state.participants.has(currentChat.peerId)) {
+      teardownCallMediaForGroup(groupId);
+      return;
+    }
+    try {
+      const localStream = await ensureLocalCallStream(groupId);
+      const muted = callMutedByGroup().get(groupId) ?? false;
+      for (const track of localStream.getAudioTracks()) {
+        track.enabled = !muted;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setCallErrorForGroup(groupId, message);
+      return;
+    }
+
+    const remotePeerIds = [...state.participants.keys()].filter((peerId) => peerId !== currentChat.peerId);
+    const mediaState = getOrCreateCallMediaState(groupId);
+    for (const peerId of remotePeerIds) {
+      await ensurePeerConnection(groupId, peerId);
+    }
+    for (const [peerId, entry] of [...mediaState.peers.entries()]) {
+      if (remotePeerIds.includes(peerId)) continue;
+      destroyPeerConnection(groupId, peerId, entry);
+      mediaState.peers.delete(peerId);
+    }
+  };
+
+  const handleMediaSignal = async (event: MediaSignalEvent) => {
+    const currentChat = chat;
+    if (!currentChat) return;
+    if (event.senderPeerId === currentChat.peerId) return;
+    const mediaState = getOrCreateCallMediaState(event.groupId);
+    const entry = await ensurePeerConnection(event.groupId, event.senderPeerId);
+    const pc = entry.pc;
+    const message: SignalMessage = event.message;
+
+    try {
+      if (message.type === "offer") {
+        const offerCollision = entry.makingOffer || pc.signalingState !== "stable";
+        if (offerCollision && !entry.polite) return;
+        await pc.setRemoteDescription({ type: "offer", sdp: message.sdp });
+        const stream = await ensureLocalCallStream(event.groupId);
+        attachLocalTracks(pc, stream);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        const local = pc.localDescription;
+        if (!local?.sdp) return;
+        await currentChat.sendMediaSignal(event.groupId, event.senderPeerId, {
+          type: "answer",
+          sdp: local.sdp,
+        });
+        return;
+      }
+
+      if (message.type === "answer") {
+        if (pc.signalingState !== "have-local-offer") return;
+        await pc.setRemoteDescription({ type: "answer", sdp: message.sdp });
+        return;
+      }
+
+      if (message.type === "ice-candidate") {
+        await pc.addIceCandidate({
+          candidate: message.candidate,
+          sdpMLineIndex: message.sdpMLineIndex,
+          sdpMid: message.sdpMid,
+        });
+        return;
+      }
+
+      if (message.type === "hangup") {
+        const existing = mediaState.peers.get(event.senderPeerId);
+        if (!existing) return;
+        destroyPeerConnection(event.groupId, event.senderPeerId, existing);
+        mediaState.peers.delete(event.senderPeerId);
+      }
+    } catch {
+      // noop
+    }
+  };
+
   onMount(async () => {
+    callClockInterval = setInterval(() => {
+      setCallClockMs(Date.now());
+    }, 1_000);
     try {
       const store = await openAccountStore();
       try {
@@ -2152,6 +2736,95 @@ export const App = () => {
 
         upsertPendingDirectMessageRequest(evt);
       });
+
+      unsubscribeCallEvents = chat.onCallEvent((evt) => {
+        appendDiagnosticsEntry("call-event", evt);
+        const previousState = callStatesByGroup().get(evt.groupId) ?? null;
+        const previousParticipantCount = previousState?.participants.size ?? 0;
+        refreshCallStateForGroup(evt.groupId);
+        const currentCallState = chat?.getCallState(evt.groupId) ?? null;
+        const currentParticipantCount = currentCallState?.participants.size ?? 0;
+        if (currentCallState) {
+          const tracked = callSessionByGroup.get(evt.groupId);
+          if (!tracked || tracked.startedAt !== currentCallState.startedAt) {
+            callSessionByGroup.set(evt.groupId, {
+              startedAt: currentCallState.startedAt,
+            });
+          }
+        }
+
+        if (previousParticipantCount === 0 && currentParticipantCount > 0) {
+          const startedAt = currentCallState?.startedAt ?? evt.sentAt;
+          callSessionByGroup.set(evt.groupId, { startedAt });
+          appendCallTimelineEvent(
+            evt.groupId,
+            `call-started:${evt.groupId}:${startedAt}`,
+            `${resolveCallParticipantLabel(evt.senderPeerId)} started a call`,
+            startedAt,
+            evt.source,
+          );
+        }
+
+        if (previousParticipantCount > 0 && currentParticipantCount === 0) {
+          const trackedSession = callSessionByGroup.get(evt.groupId);
+          const startedAt = trackedSession?.startedAt
+            ?? previousState?.startedAt
+            ?? evt.sentAt;
+          const durationMs = Math.max(0, evt.sentAt - startedAt);
+          appendCallTimelineEvent(
+            evt.groupId,
+            `call-ended:${evt.groupId}:${startedAt}`,
+            `Call ended after ${formatCallDurationSummary(durationMs)}`,
+            evt.sentAt,
+            evt.source,
+          );
+          callSessionByGroup.delete(evt.groupId);
+        }
+
+        if (!currentCallState) {
+          callSessionByGroup.delete(evt.groupId);
+        }
+
+        if (
+          evt.source === "remote" &&
+          evt.action === "call-ring" &&
+          (evt.targetPeerId === chat?.peerId || evt.targetPeerId === undefined)
+        ) {
+          setIncomingCallsByGroup((prev) => {
+            const next = new Map(prev);
+            next.set(evt.groupId, {
+              senderPeerId: evt.senderPeerId,
+              sentAt: evt.sentAt,
+              targeted: evt.targetPeerId === chat?.peerId,
+            });
+            return next;
+          });
+        }
+        if (evt.action === "call-end" || evt.action === "call-decline") {
+          setIncomingCallsByGroup((prev) => {
+            const next = new Map(prev);
+            next.delete(evt.groupId);
+            return next;
+          });
+        }
+        if (evt.action === "call-join" && evt.senderPeerId === chat?.peerId) {
+          setIncomingCallsByGroup((prev) => {
+            const next = new Map(prev);
+            next.delete(evt.groupId);
+            return next;
+          });
+        }
+        void reconcileCallMediaForGroup(evt.groupId);
+      });
+
+      unsubscribeMediaSignals = chat.onMediaSignal((evt) => {
+        appendDiagnosticsEntry("call-media-signal", {
+          groupId: evt.groupId,
+          senderPeerId: evt.senderPeerId,
+          type: evt.message.type,
+        });
+        void handleMediaSignal(evt);
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       appendDiagnosticsEntry("start-chat-failed", {
@@ -2168,14 +2841,18 @@ export const App = () => {
     unsubscribeEvents?.();
     unsubscribeJoinRequests?.();
     unsubscribeDirectMessageRequests?.();
+    unsubscribeCallEvents?.();
+    unsubscribeMediaSignals?.();
     if (statusInterval) clearInterval(statusInterval);
     if (pingInterval) clearInterval(pingInterval);
+    if (callClockInterval) clearInterval(callClockInterval);
     clearDiagnosticsTimers();
     uninstallDiagnosticsRuntimeCapture();
     const artifact = diagnosticsRecorder().artifact;
     if (artifact?.url) {
       URL.revokeObjectURL(artifact.url);
     }
+    teardownAllCallMedia();
     chat?.stop();
   });
 
@@ -2208,6 +2885,36 @@ export const App = () => {
     setReplyTargetMessage(null);
     setEditTargetMessage(null);
     setMessageDraft("");
+  });
+
+  createEffect(() => {
+    const activeId = groupState().activeGroupId;
+    if (!activeId || !chat) return;
+    refreshCallStateForGroup(activeId);
+    void reconcileCallMediaForGroup(activeId);
+  });
+
+  createEffect(() => {
+    const mutedByGroup = callMutedByGroup();
+    for (const [groupId, mediaState] of groupCallMedia.entries()) {
+      const muted = mutedByGroup.get(groupId) ?? false;
+      for (const track of mediaState.localStream?.getAudioTracks() ?? []) {
+        track.enabled = !muted;
+      }
+    }
+  });
+
+  createEffect(() => {
+    const joined = new Set(groupState().joinOrder);
+    for (const groupId of [...groupCallMedia.keys()]) {
+      if (joined.has(groupId)) continue;
+      teardownCallMediaForGroup(groupId);
+      setIncomingCallsByGroup((prev) => {
+        const next = new Map(prev);
+        next.delete(groupId);
+        return next;
+      });
+    }
   });
 
   const handleSendMessage = (text: string) => {
@@ -2902,6 +3609,116 @@ export const App = () => {
     dispatchMobileView({ type: "group-selected" });
   };
 
+  const handleJoinOrStartCall = async (): Promise<void> => {
+    const currentChat = chat;
+    const activeGroupId = groupState().activeGroupId;
+    if (!currentChat || !activeGroupId) return;
+    const currentState = currentChat.getCallState(activeGroupId);
+    try {
+      if (currentState) {
+        await currentChat.joinCall(activeGroupId);
+      } else {
+        await currentChat.startCall(activeGroupId);
+      }
+      refreshCallStateForGroup(activeGroupId);
+      await reconcileCallMediaForGroup(activeGroupId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to join call";
+      setCallErrorForGroup(activeGroupId, message);
+      appendDiagnosticsEntry("call-join-failed", {
+        groupId: activeGroupId,
+        error: message,
+      });
+    }
+  };
+
+  const handleRingOrNudgeCall = async (): Promise<void> => {
+    const currentChat = chat;
+    const activeGroupId = groupState().activeGroupId;
+    if (!currentChat || !activeGroupId) return;
+    const targetPeerId = directMessagePeersByGroup().get(activeGroupId);
+    try {
+      await currentChat.ringCall(
+        activeGroupId,
+        targetPeerId ? { targetPeerId } : undefined,
+      );
+      refreshCallStateForGroup(activeGroupId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to ring";
+      setCallErrorForGroup(activeGroupId, message);
+      appendDiagnosticsEntry("call-ring-failed", {
+        groupId: activeGroupId,
+        targetPeerId: targetPeerId ?? null,
+        error: message,
+      });
+    }
+  };
+
+  const handleLeaveCall = async (): Promise<void> => {
+    const currentChat = chat;
+    const activeGroupId = groupState().activeGroupId;
+    if (!currentChat || !activeGroupId) return;
+    const currentState = currentChat.getCallState(activeGroupId);
+    if (!currentState) return;
+    const muted = callMutedByGroup().get(activeGroupId) ?? false;
+    try {
+      const remotePeerIds = [...currentState.participants.keys()].filter((peerId) => peerId !== currentChat.peerId);
+      await Promise.allSettled(
+        remotePeerIds.map((peerId) =>
+          currentChat.sendMediaSignal(activeGroupId, peerId, { type: "hangup" })),
+      );
+      await currentChat.leaveCall(activeGroupId, { muted });
+    } catch {
+      // noop
+    } finally {
+      teardownCallMediaForGroup(activeGroupId);
+      refreshCallStateForGroup(activeGroupId);
+    }
+  };
+
+  const handleToggleCallMute = () => {
+    const activeGroupId = groupState().activeGroupId;
+    if (!activeGroupId) return;
+    const nextMuted = !(callMutedByGroup().get(activeGroupId) ?? false);
+    setGroupMuted(activeGroupId, nextMuted);
+  };
+
+  const handleAcceptIncomingCall = async () => {
+    const currentChat = chat;
+    const activeGroupId = groupState().activeGroupId;
+    if (!currentChat || !activeGroupId) return;
+    const prompt = incomingCallsByGroup().get(activeGroupId);
+    if (!prompt) return;
+    try {
+      await currentChat.acceptCall(activeGroupId, { targetPeerId: prompt.senderPeerId });
+      await currentChat.joinCall(activeGroupId);
+      setIncomingCallsByGroup((prev) => {
+        const next = new Map(prev);
+        next.delete(activeGroupId);
+        return next;
+      });
+      refreshCallStateForGroup(activeGroupId);
+      await reconcileCallMediaForGroup(activeGroupId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to accept call";
+      setCallErrorForGroup(activeGroupId, message);
+    }
+  };
+
+  const handleDeclineIncomingCall = async () => {
+    const currentChat = chat;
+    const activeGroupId = groupState().activeGroupId;
+    if (!currentChat || !activeGroupId) return;
+    const prompt = incomingCallsByGroup().get(activeGroupId);
+    if (!prompt) return;
+    await currentChat.declineCall(activeGroupId, { targetPeerId: prompt.senderPeerId }).catch(() => {});
+    setIncomingCallsByGroup((prev) => {
+      const next = new Map(prev);
+      next.delete(activeGroupId);
+      return next;
+    });
+  };
+
   const getCurrentAccountKey = (): AccountKey | null => {
     const state = onboardingState();
     if (state.status === "ready" || state.status === "display-name-prompt") {
@@ -3234,6 +4051,92 @@ export const App = () => {
     });
 
     return null;
+  };
+
+  const activeCallState = (): CallState | null => {
+    const activeId = groupState().activeGroupId;
+    if (!activeId) return null;
+    const cached = callStatesByGroup().get(activeId);
+    if (cached) return cached;
+    return chat?.getCallState(activeId) ?? null;
+  };
+
+  const activeIncomingCallPrompt = (): IncomingCallPrompt | null => {
+    const activeId = groupState().activeGroupId;
+    if (!activeId) return null;
+    return incomingCallsByGroup().get(activeId) ?? null;
+  };
+
+  const activeCallInProgress = (): boolean => {
+    const currentChat = chat;
+    const state = activeCallState();
+    if (!currentChat || !state) return false;
+    return state.participants.has(currentChat.peerId);
+  };
+
+  const activeCallParticipantCount = (): number =>
+    activeCallState()?.participants.size ?? 0;
+
+  const activeCallDurationLabel = (): string | null => {
+    const state = activeCallState();
+    if (!state) return null;
+    const now = callClockMs();
+    return formatCallDurationCompact(Math.max(0, now - state.startedAt));
+  };
+
+  const activeCallMuted = (): boolean => {
+    const activeId = groupState().activeGroupId;
+    if (!activeId) return false;
+    return callMutedByGroup().get(activeId) ?? false;
+  };
+
+  const activeCallError = (): string | null => {
+    const activeId = groupState().activeGroupId;
+    if (!activeId) return null;
+    return callErrorByGroup().get(activeId) ?? null;
+  };
+
+  const toggleParticipantOutputMute = (peerId: string) => {
+    const activeId = groupState().activeGroupId;
+    if (!activeId) return;
+    const nextMuted = !isParticipantLocallyMuted(activeId, peerId);
+    setParticipantLocallyMuted(activeId, peerId, nextMuted);
+  };
+
+  const activeCallParticipants = () => {
+    const activeId = groupState().activeGroupId;
+    const currentChat = chat;
+    const state = activeCallState();
+    if (!activeId || !currentChat || !state) return [];
+    const speakingByPeer = callSpeakingByGroup().get(activeId) ?? new Map<string, number>();
+    return [...state.participants.values()]
+      .sort((left, right) => {
+        const leftIsSelf = left.peerId === currentChat.peerId;
+        const rightIsSelf = right.peerId === currentChat.peerId;
+        if (leftIsSelf && !rightIsSelf) return -1;
+        if (!leftIsSelf && rightIsSelf) return 1;
+        if (left.joinedAt !== right.joinedAt) return left.joinedAt - right.joinedAt;
+        return left.peerId.localeCompare(right.peerId);
+      })
+      .map((participant) => {
+        const isSelf = participant.peerId === currentChat.peerId;
+        const speakingLevelRaw = speakingByPeer.get(participant.peerId) ?? 0;
+        const label = isSelf
+          ? "You"
+          : directMessagePeerLabel(participant.peerId)
+            ?? contactsBook().get(participant.peerId)?.nickname
+            ?? contactsBook().get(participant.peerId)?.selfName
+            ?? `${participant.peerId.slice(0, 12)}...`;
+        return {
+          peerId: participant.peerId,
+          label,
+          isSelf,
+          speakingLevel: normalizeSpeakingIndicatorLevel(speakingLevelRaw),
+          speaking: isSpeaking(speakingLevelRaw),
+          micMuted: isSelf ? activeCallMuted() : participant.muted,
+          outputMuted: !isSelf && isParticipantLocallyMuted(activeId, participant.peerId),
+        };
+      });
   };
 
   const activeGroupName = () => {
@@ -3664,6 +4567,29 @@ export const App = () => {
                 activeDirectMessageStatusLabel={activeDirectMessagePresence()?.label}
                 activeDirectMessageStatusTone={activeDirectMessagePresence()?.tone}
                 memberCount={actionChainState()?.members.size ?? 0}
+                callInProgress={activeCallInProgress()}
+                callParticipantCount={activeCallParticipantCount()}
+                callMuted={activeCallMuted()}
+                callError={activeCallError()}
+                incomingCallPrompt={activeIncomingCallPrompt() ? {
+                  senderLabel: directMessagePeerLabel(activeIncomingCallPrompt()!.senderPeerId),
+                  targeted: activeIncomingCallPrompt()!.targeted,
+                } : null}
+                canJoinCall={
+                  !!groupState().activeGroupId &&
+                  (
+                    activeCallInProgress() ||
+                    (activeCallParticipantCount() < 8)
+                  )
+                }
+                canRingCall={!!groupState().activeGroupId}
+                ringButtonLabel={actionChainState()?.isDirectMessage ? "Ring" : "Nudge"}
+                onJoinCall={() => void handleJoinOrStartCall()}
+                onRingCall={() => void handleRingOrNudgeCall()}
+                onLeaveCall={() => void handleLeaveCall()}
+                onToggleMute={() => handleToggleCallMute()}
+                onAcceptIncomingCall={() => void handleAcceptIncomingCall()}
+                onDeclineIncomingCall={() => void handleDeclineIncomingCall()}
                 showBackButton={mobileView().currentView === "chat"}
                 onBackPress={() => dispatchMobileView({ type: "back-pressed" })}
                 onProfileToggle={() => dispatchMobileView({ type: "profile-toggled" })}
@@ -3703,17 +4629,95 @@ export const App = () => {
               />
             }
             messageList={
-              <MessageList
-                messages={getActiveMessages(groupState())}
-                ownPeerId={chat!.peerId}
-                resolveSenderLabel={resolveMessageSenderLabel}
-                readByMessageId={activeMessageReadersByMessageId()}
-                editedAtByMessageId={activeEditedAtByMessageId()}
-                isDirectMessage={actionChainState()?.isDirectMessage ?? false}
-                onReplyMessage={handleReplyMessage}
-                onEditMessage={handleEditMessage}
-                onDeleteMessage={handleDeleteMessage}
-              />
+              <div class="h-full flex flex-col min-h-0">
+                <Show when={activeCallState()}>
+                  <div class="border-b border-tg-border bg-tg-header/60 px-3 py-2">
+                    <div class="flex items-center justify-between mb-1">
+                      <div class="text-[10px] uppercase tracking-wider text-tg-text-dim">
+                        Call Participants
+                      </div>
+                      <Show when={activeCallDurationLabel()}>
+                        {(duration) => (
+                          <div class="text-[10px] uppercase tracking-wider text-tg-success">
+                            Live {duration()}
+                          </div>
+                        )}
+                      </Show>
+                    </div>
+                    <div class="flex gap-2 overflow-x-auto pb-1">
+                      <For each={activeCallParticipants()}>
+                        {(participant) => (
+                          <div
+                            class="min-w-[170px] max-w-[220px] rounded-lg border border-tg-border bg-tg-sidebar px-2.5 py-2 transition-[box-shadow,border-color] duration-150"
+                            style={{
+                              "box-shadow": participant.speakingLevel > 0
+                                ? `0 0 ${8 + Math.round(participant.speakingLevel * 14)}px rgba(34, 197, 94, ${(participant.speakingLevel * 0.38).toFixed(3)})`
+                                : "none",
+                              "border-color": participant.speakingLevel > 0
+                                ? `rgba(34, 197, 94, ${(0.18 + participant.speakingLevel * 0.45).toFixed(3)})`
+                                : "",
+                            }}
+                          >
+                            <div class="flex items-center justify-between gap-2">
+                              <div class="text-xs text-tg-text truncate">
+                                {participant.label}
+                              </div>
+                              <div
+                                class="flex items-end gap-[2px] h-3 shrink-0"
+                                title={participant.speaking ? "Speaking" : "Quiet"}
+                                aria-label={participant.speaking ? "Speaking" : "Quiet"}
+                              >
+                                <For each={[0, 1, 2]}>
+                                  {(barIndex) => {
+                                    const barLevel = Math.max(0, Math.min(1, participant.speakingLevel * 1.5 - (barIndex * 0.24)));
+                                    return (
+                                      <span
+                                        class="inline-block w-1 rounded-full bg-tg-success transition-all duration-150"
+                                        style={{
+                                          height: `${3 + Math.round(barLevel * 9)}px`,
+                                          opacity: `${0.3 + (barLevel * 0.7)}`,
+                                        }}
+                                      />
+                                    );
+                                  }}
+                                </For>
+                              </div>
+                            </div>
+                            <div class="text-[10px] text-tg-text-dim mt-1">
+                              {participant.micMuted
+                                ? "Mic muted"
+                                : participant.speaking
+                                  ? "Speaking"
+                                  : "Mic live"}
+                            </div>
+                            <Show when={!participant.isSelf}>
+                              <button
+                                class="mt-1.5 text-[10px] px-2 py-1 rounded border border-tg-border text-tg-text hover:bg-tg-hover cursor-pointer"
+                                onClick={() => toggleParticipantOutputMute(participant.peerId)}
+                              >
+                                {participant.outputMuted ? "Unmute output" : "Mute output"}
+                              </button>
+                            </Show>
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                  </div>
+                </Show>
+                <div class="flex-1 min-h-0">
+                  <MessageList
+                    messages={getActiveMessages(groupState())}
+                    ownPeerId={chat!.peerId}
+                    resolveSenderLabel={resolveMessageSenderLabel}
+                    readByMessageId={activeMessageReadersByMessageId()}
+                    editedAtByMessageId={activeEditedAtByMessageId()}
+                    isDirectMessage={actionChainState()?.isDirectMessage ?? false}
+                    onReplyMessage={handleReplyMessage}
+                    onEditMessage={handleEditMessage}
+                    onDeleteMessage={handleDeleteMessage}
+                  />
+                </div>
+              </div>
             }
             messageInput={
               <MessageInput

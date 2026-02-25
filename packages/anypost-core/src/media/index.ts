@@ -1,11 +1,14 @@
 export {
   MEDIA_SIGNAL_PROTOCOL,
   SignalMessageSchema,
+  MediaSignalEnvelopeSchema,
   encodeSignalMessage,
   decodeSignalMessage,
+  encodeMediaSignalEnvelope,
+  decodeMediaSignalEnvelope,
 } from "./signaling.js";
 
-export type { SignalMessage } from "./signaling.js";
+export type { SignalMessage, MediaSignalEnvelope } from "./signaling.js";
 
 export {
   MAX_VOICE_PEERS,

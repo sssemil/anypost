@@ -2,11 +2,14 @@ import { describe, it, expect } from "vitest";
 import { encode } from "cbor-x";
 import {
   SignalMessageSchema,
+  MediaSignalEnvelopeSchema,
   encodeSignalMessage,
   decodeSignalMessage,
+  encodeMediaSignalEnvelope,
+  decodeMediaSignalEnvelope,
   MEDIA_SIGNAL_PROTOCOL,
 } from "./signaling.js";
-import type { SignalMessage } from "./signaling.js";
+import type { SignalMessage, MediaSignalEnvelope } from "./signaling.js";
 
 const createOfferMessage = (
   overrides?: Partial<Extract<SignalMessage, { type: "offer" }>>,
@@ -40,6 +43,15 @@ const createIceCandidateMessage = (
 
 const createHangupMessage = (): SignalMessage =>
   SignalMessageSchema.parse({ type: "hangup" });
+
+const createSignalEnvelope = (
+  overrides?: Partial<MediaSignalEnvelope>,
+): MediaSignalEnvelope =>
+  MediaSignalEnvelopeSchema.parse({
+    groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+    message: createOfferMessage(),
+    ...overrides,
+  });
 
 describe("SDP Signaling", () => {
   describe("SignalMessageSchema", () => {
@@ -207,6 +219,25 @@ describe("SDP Signaling", () => {
   describe("MEDIA_SIGNAL_PROTOCOL", () => {
     it("should be the correct protocol string", () => {
       expect(MEDIA_SIGNAL_PROTOCOL).toBe("/anypost/media-signal/1.0.0");
+    });
+  });
+
+  describe("MediaSignalEnvelope", () => {
+    it("should encode and decode envelope payloads", () => {
+      const envelope = createSignalEnvelope();
+      const encoded = encodeMediaSignalEnvelope(envelope);
+      const decoded = decodeMediaSignalEnvelope(encoded);
+
+      expect(decoded.success).toBe(true);
+      if (!decoded.success) throw new Error("Expected success");
+      expect(decoded.data).toEqual(envelope);
+    });
+
+    it("should reject malformed envelope payloads", () => {
+      const invalid = new Uint8Array(encode({ foo: "bar" }));
+      const decoded = decodeMediaSignalEnvelope(invalid);
+
+      expect(decoded.success).toBe(false);
     });
   });
 });

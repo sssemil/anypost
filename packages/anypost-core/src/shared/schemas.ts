@@ -115,6 +115,32 @@ const ProfileAnnouncePayloadSchema = z.object({
   signature: Uint8ArraySchema,
 });
 
+const CallControlActionSchema = z.enum([
+  "call-started",
+  "call-ring",
+  "call-accept",
+  "call-decline",
+  "call-join",
+  "call-leave",
+  "call-heartbeat",
+  "call-end",
+  "call-nudge",
+]);
+
+const CallControlPayloadSchema = z.object({
+  action: CallControlActionSchema,
+  groupId: GroupIdSchema,
+  senderPeerId: PeerIdSchema,
+  senderPublicKey: Uint8ArraySchema,
+  targetPeerId: PeerIdSchema.optional(),
+  muted: z.boolean().optional(),
+  sentAt: z.number(),
+  signature: Uint8ArraySchema,
+});
+
+export type CallControlAction = z.infer<typeof CallControlActionSchema>;
+export type CallControlPayload = z.infer<typeof CallControlPayloadSchema>;
+
 const InviteGrantClaimsSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("targeted-peer"),
@@ -183,6 +209,10 @@ export const WireMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("profile_announce"),
     payload: ProfileAnnouncePayloadSchema,
+  }),
+  z.object({
+    type: z.literal("call_control"),
+    payload: CallControlPayloadSchema,
   }),
   z.object({
     type: z.literal("signed_action"),

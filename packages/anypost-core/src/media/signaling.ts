@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { encode, decode } from "cbor-x";
 import { Result } from "../shared/result.js";
+import { GroupIdSchema } from "../shared/schemas.js";
 
 export const MEDIA_SIGNAL_PROTOCOL = "/anypost/media-signal/1.0.0";
 
@@ -34,6 +35,13 @@ export const SignalMessageSchema = z.discriminatedUnion("type", [
 
 export type SignalMessage = z.infer<typeof SignalMessageSchema>;
 
+export const MediaSignalEnvelopeSchema = z.object({
+  groupId: GroupIdSchema,
+  message: SignalMessageSchema,
+});
+
+export type MediaSignalEnvelope = z.infer<typeof MediaSignalEnvelopeSchema>;
+
 export const encodeSignalMessage = (message: SignalMessage): Uint8Array =>
   new Uint8Array(encode(message));
 
@@ -43,6 +51,24 @@ export const decodeSignalMessage = (
   try {
     const raw: unknown = decode(bytes);
     const parsed = SignalMessageSchema.parse(raw);
+    return Result.success(parsed);
+  } catch (error) {
+    return Result.failure(
+      error instanceof Error ? error : new Error(String(error)),
+    );
+  }
+};
+
+export const encodeMediaSignalEnvelope = (
+  envelope: MediaSignalEnvelope,
+): Uint8Array => new Uint8Array(encode(envelope));
+
+export const decodeMediaSignalEnvelope = (
+  bytes: Uint8Array,
+): Result<MediaSignalEnvelope, Error> => {
+  try {
+    const raw: unknown = decode(bytes);
+    const parsed = MediaSignalEnvelopeSchema.parse(raw);
     return Result.success(parsed);
   } catch (error) {
     return Result.failure(

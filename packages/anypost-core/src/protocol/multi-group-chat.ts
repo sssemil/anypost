@@ -30,7 +30,11 @@ import { pubsubPeerDiscovery } from "@libp2p/pubsub-peer-discovery";
 import { createGroupDiscoveryManager } from "./group-discovery.js";
 import type { GroupDiscoveryManager } from "./group-discovery.js";
 import type { GroupDiscoveryState } from "./group-discovery-state.js";
-import type { WireMessage } from "../shared/schemas.js";
+import type {
+  WireMessage,
+  CallControlAction,
+  CallControlPayload,
+} from "../shared/schemas.js";
 import type { ChatMessageEvent, PeerInfo, NetworkStatus, NetworkEvent } from "./plaintext-chat.js";
 import type { AccountKey } from "../crypto/identity.js";
 import { GENESIS_HASH, toHex } from "./action-chain.js";
@@ -73,6 +77,12 @@ import {
   type MultiGroupRuntimeAdapter,
   type MultiGroupTransportProfile,
 } from "./runtime-adapter.js";
+import {
+  MEDIA_SIGNAL_PROTOCOL,
+  encodeMediaSignalEnvelope,
+  decodeMediaSignalEnvelope,
+} from "../media/signaling.js";
+import type { SignalMessage } from "../media/signaling.js";
 
 export type MultiGroupChatMessageEvent = ChatMessageEvent & {
   readonly groupId: string;
@@ -111,6 +121,40 @@ export type DirectMessageHandshakeState = {
   readonly contributorPublicKeyHexes: readonly string[];
   readonly missingPeerIds: readonly string[];
 };
+
+export type CallParticipantState = {
+  readonly peerId: string;
+  readonly joinedAt: number;
+  readonly lastHeartbeatAt: number;
+  readonly muted: boolean;
+};
+
+export type CallState = {
+  readonly groupId: string;
+  readonly startedAt: number;
+  readonly ringingPeerIds: readonly string[];
+  readonly participants: ReadonlyMap<string, CallParticipantState>;
+};
+
+export type CallEvent = {
+  readonly action: CallControlAction;
+  readonly groupId: string;
+  readonly senderPeerId: string;
+  readonly targetPeerId?: string;
+  readonly muted?: boolean;
+  readonly sentAt: number;
+  readonly source: "local" | "remote";
+};
+
+type CallEventListener = (event: CallEvent) => void;
+
+export type MediaSignalEvent = {
+  readonly groupId: string;
+  readonly senderPeerId: string;
+  readonly message: SignalMessage;
+};
+
+type MediaSignalListener = (event: MediaSignalEvent) => void;
 
 export type RelayContactSource =
   | "bootstrap"
@@ -229,6 +273,28 @@ export type MultiGroupChat = {
     readonly groupName: string;
     readonly inviteCode: string;
   }) => Promise<void>;
+  readonly startCall: (groupId: string) => Promise<void>;
+  readonly ringCall: (
+    groupId: string,
+    options?: { readonly targetPeerId?: string },
+  ) => Promise<void>;
+  readonly acceptCall: (
+    groupId: string,
+    options?: { readonly targetPeerId?: string },
+  ) => Promise<void>;
+  readonly declineCall: (
+    groupId: string,
+    options?: { readonly targetPeerId?: string },
+  ) => Promise<void>;
+  readonly joinCall: (groupId: string) => Promise<void>;
+  readonly leaveCall: (groupId: string, options?: { readonly muted?: boolean }) => Promise<void>;
+  readonly endCall: (groupId: string) => Promise<void>;
+  readonly getCallState: (groupId: string) => CallState | null;
+  readonly sendMediaSignal: (
+    groupId: string,
+    targetPeerId: string,
+    message: SignalMessage,
+  ) => Promise<void>;
   readonly getDirectMessageHandshakeState: (groupId: string) => DirectMessageHandshakeState | null;
   readonly getRelayContactBook: () => RelayContactBook;
   readonly clearRelayContactBook: () => void;
@@ -261,6 +327,8 @@ export type MultiGroupChat = {
   readonly onMessage: (listener: MessageListener) => () => void;
   readonly onJoinRequest: (listener: JoinRequestListener) => () => void;
   readonly onDirectMessageRequest: (listener: DirectMessageRequestListener) => () => void;
+  readonly onCallEvent: (listener: CallEventListener) => () => void;
+  readonly onMediaSignal: (listener: MediaSignalListener) => () => void;
   readonly onPeerChange: (listener: (count: number) => void) => () => void;
   readonly onEvent: (listener: EventListener) => () => void;
   readonly getNetworkStatus: () => NetworkStatus;
@@ -350,6 +418,9 @@ const SYNC_REQUEST_TRACK_TTL_MS = 60_000;
 const MAX_SYNC_REQUEST_TRACKED = 4_096;
 const MAX_SYNC_PROGRESS_PEERS_PER_GROUP = 128;
 const SYNC_PROGRESS_STALE_MS = 24 * 60 * 60 * 1_000;
+const MAX_CALL_PARTICIPANTS = 8;
+const CALL_HEARTBEAT_INTERVAL_MS = 2_500;
+const CALL_PARTICIPANT_STALE_MS = 12_000;
 const DEFAULT_SYNC_RECONCILE_INTERVAL_MS = 20_000;
 const DEFAULT_SYNC_RECONCILE_STALE_MS = 45_000;
 const FULL_SYNC_FALLBACK_COOLDOWN_MS = 30_000;
@@ -359,6 +430,7 @@ const PROFILE_SYNC_TOPIC = "anypost/system/profile/v1";
 const DIRECT_SIGNED_ACTION_PROTOCOL = "/anypost/direct-signed-action/1.0.0";
 const DIRECT_DM_REQUEST_PROTOCOL = "/anypost/direct-dm-request/1.0.0";
 const DIRECT_JOIN_REQUEST_PROTOCOL = "/anypost/direct-join-request/1.0.0";
+const DIRECT_CALL_CONTROL_PROTOCOL = "/anypost/direct-call-control/1.0.0";
 
 export const createMultiGroupChat = async (
   options: CreateMultiGroupChatOptions,
@@ -518,6 +590,8 @@ export const createMultiGroupChat = async (
   const messageListeners: MessageListener[] = [];
   const joinRequestListeners: JoinRequestListener[] = [];
   const directMessageRequestListeners: DirectMessageRequestListener[] = [];
+  const callEventListeners: CallEventListener[] = [];
+  const mediaSignalListeners: MediaSignalListener[] = [];
   const pendingDirectMessageRequestsById = new Map<string, DirectMessageRequestEvent>();
   const peerChangeListeners: Array<(count: number) => void> = [];
   const eventListeners: EventListener[] = [];
@@ -531,6 +605,13 @@ export const createMultiGroupChat = async (
   const peerDiscoveryHints = new Map<string, string[]>();
   const joinInviteGrantByGroup = new Map<string, InviteGrantProof>();
   const pendingJoinInviteGrantsByGroup = new Map<string, Map<string, InviteGrantProof>>();
+  type MutableCallState = {
+    groupId: string;
+    startedAt: number;
+    ringingPeerIds: Set<string>;
+    participants: Map<string, CallParticipantState>;
+  };
+  const activeCallsByGroup = new Map<string, MutableCallState>();
 
   type MutablePeerDiscoveryMetrics = {
     groupId: string;
@@ -1892,6 +1973,286 @@ export const createMultiGroupChat = async (
       payload.senderPublicKey,
     );
 
+  const encodeCallControlSigningPayload = (
+    payload: {
+      readonly action: CallControlAction;
+      readonly groupId: string;
+      readonly senderPeerId: string;
+      readonly senderPublicKey: Uint8Array;
+      readonly targetPeerId?: string;
+      readonly muted?: boolean;
+      readonly sentAt: number;
+    },
+  ): Uint8Array =>
+    new Uint8Array(
+      encode({
+        type: "call_control",
+        action: payload.action,
+        groupId: payload.groupId,
+        senderPeerId: payload.senderPeerId,
+        senderPublicKey: payload.senderPublicKey,
+        targetPeerId: payload.targetPeerId,
+        muted: payload.muted,
+        sentAt: payload.sentAt,
+      }),
+    );
+
+  const signCallControl = (
+    payload: {
+      readonly action: CallControlAction;
+      readonly groupId: string;
+      readonly senderPeerId: string;
+      readonly senderPublicKey: Uint8Array;
+      readonly targetPeerId?: string;
+      readonly muted?: boolean;
+      readonly sentAt: number;
+    },
+  ): Uint8Array =>
+    new Uint8Array([...ed25519.sign(
+      encodeCallControlSigningPayload(payload),
+      accountKey.privateKey,
+    )]);
+
+  const verifyCallControl = (payload: CallControlPayload): boolean =>
+    ed25519.verify(
+      payload.signature,
+    encodeCallControlSigningPayload({
+        action: payload.action,
+        groupId: payload.groupId,
+        senderPeerId: payload.senderPeerId,
+        senderPublicKey: payload.senderPublicKey,
+        targetPeerId: payload.targetPeerId,
+        muted: payload.muted,
+        sentAt: payload.sentAt,
+      }),
+      payload.senderPublicKey,
+    );
+
+  const cloneCallState = (state: MutableCallState): CallState => ({
+    groupId: state.groupId,
+    startedAt: state.startedAt,
+    ringingPeerIds: [...state.ringingPeerIds],
+    participants: new Map(state.participants),
+  });
+
+  const emitCallEvent = (event: CallEvent) => {
+    callEventListeners.forEach((listener) => listener(event));
+  };
+
+  const dropCallForGroup = (groupId: string) => {
+    activeCallsByGroup.delete(groupId);
+  };
+
+  const canSenderControlCall = (
+    groupId: string,
+    senderPeerId: string,
+  ): boolean => {
+    if (!isMembershipEnforcedGroup(groupId)) return true;
+    return isPeerMemberOfGroup(groupId, senderPeerId);
+  };
+
+  const applyCallControlPayload = (
+    payload: {
+      readonly action: CallControlAction;
+      readonly groupId: string;
+      readonly senderPeerId: string;
+      readonly targetPeerId?: string;
+      readonly muted?: boolean;
+      readonly sentAt: number;
+    },
+    source: "local" | "remote",
+  ) => {
+    let shouldEmitEvent = true;
+    if (!canSenderControlCall(payload.groupId, payload.senderPeerId)) {
+      emit(
+        "info",
+        `Rejected call control from non-member ${payload.senderPeerId.slice(0, 12)}... in ${payload.groupId.slice(0, 8)}...`,
+      );
+      return;
+    }
+
+    const dmPeers = actionChainStates.get(payload.groupId)?.directMessagePeerIds;
+    if (dmPeers && !dmPeers.includes(payload.senderPeerId)) {
+      emit(
+        "info",
+        `Rejected call control from non-DM peer ${payload.senderPeerId.slice(0, 12)}...`,
+      );
+      return;
+    }
+
+    if (
+      payload.targetPeerId &&
+      payload.targetPeerId !== ownPeerId &&
+      payload.action !== "call-ring" &&
+      payload.action !== "call-nudge"
+    ) {
+      return;
+    }
+
+    const existing = activeCallsByGroup.get(payload.groupId);
+    const state: MutableCallState = existing ?? {
+      groupId: payload.groupId,
+      startedAt: payload.sentAt,
+      ringingPeerIds: new Set<string>(),
+      participants: new Map<string, CallParticipantState>(),
+    };
+    activeCallsByGroup.set(payload.groupId, state);
+
+    switch (payload.action) {
+      case "call-started":
+        state.startedAt = payload.sentAt;
+        if (!state.participants.has(payload.senderPeerId)) {
+          state.participants.set(payload.senderPeerId, {
+            peerId: payload.senderPeerId,
+            joinedAt: payload.sentAt,
+            lastHeartbeatAt: payload.sentAt,
+            muted: payload.muted ?? false,
+          });
+        }
+        break;
+      case "call-ring":
+      case "call-nudge":
+        if (payload.targetPeerId) state.ringingPeerIds.add(payload.targetPeerId);
+        break;
+      case "call-accept":
+      case "call-decline":
+        if (payload.targetPeerId) state.ringingPeerIds.delete(payload.targetPeerId);
+        break;
+      case "call-join": {
+        if (
+          !state.participants.has(payload.senderPeerId) &&
+          state.participants.size >= MAX_CALL_PARTICIPANTS
+        ) {
+          emit(
+            "info",
+            `Rejected call join in ${payload.groupId.slice(0, 8)}...: room full`,
+          );
+          return;
+        }
+        state.ringingPeerIds.delete(payload.senderPeerId);
+        const existingParticipant = state.participants.get(payload.senderPeerId);
+        state.participants.set(payload.senderPeerId, {
+          peerId: payload.senderPeerId,
+          joinedAt: existingParticipant?.joinedAt ?? payload.sentAt,
+          lastHeartbeatAt: payload.sentAt,
+          muted: payload.muted ?? existingParticipant?.muted ?? false,
+        });
+        break;
+      }
+      case "call-heartbeat": {
+        const existingParticipant = state.participants.get(payload.senderPeerId);
+        if (
+          !existingParticipant &&
+          state.participants.size >= MAX_CALL_PARTICIPANTS
+        ) {
+          emit(
+            "info",
+            `Rejected call heartbeat in ${payload.groupId.slice(0, 8)}...: room full`,
+          );
+          return;
+        }
+        state.ringingPeerIds.delete(payload.senderPeerId);
+        const nextMuted = payload.muted ?? existingParticipant?.muted ?? false;
+        state.participants.set(payload.senderPeerId, {
+          peerId: payload.senderPeerId,
+          joinedAt: existingParticipant?.joinedAt ?? payload.sentAt,
+          lastHeartbeatAt: payload.sentAt,
+          muted: nextMuted,
+        });
+        shouldEmitEvent = !existingParticipant || nextMuted !== existingParticipant.muted;
+        break;
+      }
+      case "call-leave":
+        state.participants.delete(payload.senderPeerId);
+        if (state.participants.size === 0) dropCallForGroup(payload.groupId);
+        break;
+      case "call-end":
+        dropCallForGroup(payload.groupId);
+        break;
+    }
+
+    if (!shouldEmitEvent) return;
+
+    emitCallEvent({
+      action: payload.action,
+      groupId: payload.groupId,
+      senderPeerId: payload.senderPeerId,
+      targetPeerId: payload.targetPeerId,
+      muted: payload.muted,
+      sentAt: payload.sentAt,
+      source,
+    });
+  };
+
+  const publishCallControl = async (
+    input: {
+      readonly groupId: string;
+      readonly action: CallControlAction;
+      readonly targetPeerId?: string;
+      readonly muted?: boolean;
+    },
+  ): Promise<void> => {
+    const topic = groupTopic(input.groupId);
+    if (!topicToGroupId.has(topic)) {
+      throw new Error(`Not joined to group ${input.groupId}`);
+    }
+    const senderPublicKey = new Uint8Array(accountKey.publicKey);
+    const sentAt = Date.now();
+    const signature = signCallControl({
+      action: input.action,
+      groupId: input.groupId,
+      senderPeerId: ownPeerId,
+      senderPublicKey,
+      targetPeerId: input.targetPeerId,
+      muted: input.muted,
+      sentAt,
+    });
+    const wireMessage: WireMessage = {
+      type: "call_control",
+      payload: {
+        action: input.action,
+        groupId: input.groupId,
+        senderPeerId: ownPeerId,
+        senderPublicKey,
+        targetPeerId: input.targetPeerId,
+        muted: input.muted,
+        sentAt,
+        signature: new Uint8Array(signature),
+      },
+    };
+
+    applyCallControlPayload(
+      {
+        action: wireMessage.payload.action,
+        groupId: wireMessage.payload.groupId,
+        senderPeerId: wireMessage.payload.senderPeerId,
+        targetPeerId: wireMessage.payload.targetPeerId,
+        muted: wireMessage.payload.muted,
+        sentAt: wireMessage.payload.sentAt,
+      },
+      "local",
+    );
+
+    await pubsub.publish(topic, encodeWireMessage(wireMessage));
+    const directTargets = new Set<string>();
+    if (input.targetPeerId && input.targetPeerId !== ownPeerId) {
+      directTargets.add(input.targetPeerId);
+    }
+    const dmPeers = actionChainStates.get(input.groupId)?.directMessagePeerIds;
+    if (!input.targetPeerId && dmPeers) {
+      for (const peerId of dmPeers) {
+        if (peerId !== ownPeerId) directTargets.add(peerId);
+      }
+    }
+    for (const peerId of directTargets) {
+      void sendWireMessageDirect(
+        peerId,
+        DIRECT_CALL_CONTROL_PROTOCOL,
+        wireMessage,
+      ).catch(() => {});
+    }
+  };
+
   const currentDisplayName = (): string | null => {
     const name = getDisplayName?.()?.trim();
     return name && name.length > 0 ? name : null;
@@ -3172,6 +3533,38 @@ export const createMultiGroupChat = async (
     const matchedGroupId = topicToGroupId.get(detail.topic);
     if (matchedGroupId === undefined) return;
 
+    if (wireMessage.type === "call_control") {
+      const payload = wireMessage.payload;
+      if (payload.groupId !== matchedGroupId) return;
+      if (!verifyCallControl(payload)) {
+        emit(
+          "info",
+          `Rejected call control with invalid signature from ${transportSenderPeerId.slice(0, 12)}...`,
+        );
+        return;
+      }
+
+      const senderPeerId = resolveSignedSenderPeerId(
+        payload.senderPeerId,
+        payload.senderPublicKey,
+        "call control",
+      );
+      if (!senderPeerId) return;
+
+      applyCallControlPayload(
+        {
+          action: payload.action,
+          groupId: payload.groupId,
+          senderPeerId,
+          targetPeerId: payload.targetPeerId,
+          muted: payload.muted,
+          sentAt: payload.sentAt,
+        },
+        "remote",
+      );
+      return;
+    }
+
     if (wireMessage.type === "sync_request") {
       const payload = wireMessage.payload;
       if (payload.targetPeerId && payload.targetPeerId !== ownPeerId) return;
@@ -3482,6 +3875,19 @@ export const createMultiGroupChat = async (
     }).catch(() => {});
   });
 
+  node.handle(DIRECT_CALL_CONTROL_PROTOCOL, ({ stream, connection }) => {
+    void readDirectSignalPayload(stream as { source: AsyncIterable<unknown> }).then((data) => {
+      if (data.length === 0) return;
+      const decoded = decodeWireMessage(data);
+      if (!decoded.success || decoded.data.type !== "call_control") return;
+      dispatchDirectSignal(
+        groupTopic(decoded.data.payload.groupId),
+        data,
+        connection.remotePeer.toString(),
+      );
+    }).catch(() => {});
+  });
+
   node.handle(DIRECT_SIGNED_ACTION_PROTOCOL, ({ stream, connection }) => {
     void readDirectSignalPayload(stream as { source: AsyncIterable<unknown> }).then((data) => {
       if (data.length === 0) return;
@@ -3499,6 +3905,23 @@ export const createMultiGroupChat = async (
         data,
         connection.remotePeer.toString(),
       );
+    }).catch(() => {});
+  });
+
+  node.handle(MEDIA_SIGNAL_PROTOCOL, ({ stream, connection }) => {
+    void readDirectSignalPayload(stream as { source: AsyncIterable<unknown> }).then((data) => {
+      if (data.length === 0) return;
+      const decoded = decodeMediaSignalEnvelope(data);
+      if (!decoded.success) return;
+      if (!joinedGroups.includes(decoded.data.groupId)) return;
+      const senderPeerId = connection.remotePeer.toString();
+      if (!canSenderControlCall(decoded.data.groupId, senderPeerId)) return;
+      mediaSignalListeners.forEach((listener) =>
+        listener({
+          groupId: decoded.data.groupId,
+          senderPeerId,
+          message: decoded.data.message,
+        }));
     }).catch(() => {});
   });
 
@@ -3676,6 +4099,50 @@ export const createMultiGroupChat = async (
   }, JOIN_RETRY_TICK_INTERVAL_MS);
   void runJoinRetryTick();
 
+  const pruneStaleCallParticipants = (now: number) => {
+    for (const [groupId, state] of [...activeCallsByGroup.entries()]) {
+      for (const [peerId, participant] of [...state.participants.entries()]) {
+        if (peerId === ownPeerId) continue;
+        if (now - participant.lastHeartbeatAt <= CALL_PARTICIPANT_STALE_MS) continue;
+        state.participants.delete(peerId);
+        emitCallEvent({
+          action: "call-leave",
+          groupId,
+          senderPeerId: peerId,
+          muted: participant.muted,
+          sentAt: now,
+          source: "remote",
+        });
+      }
+      if (state.participants.size === 0) {
+        dropCallForGroup(groupId);
+      }
+    }
+  };
+
+  const runCallMaintenanceTick = async () => {
+    const now = Date.now();
+    pruneStaleCallParticipants(now);
+    for (const [groupId, state] of [...activeCallsByGroup.entries()]) {
+      const localParticipant = state.participants.get(ownPeerId);
+      if (!localParticipant) continue;
+      try {
+        await publishCallControl({
+          groupId,
+          action: "call-heartbeat",
+          muted: localParticipant.muted,
+        });
+      } catch {
+        // Ignore heartbeat publish failures; next tick will retry.
+      }
+    }
+  };
+
+  const callMaintenanceInterval = setInterval(() => {
+    void runCallMaintenanceTick();
+  }, CALL_HEARTBEAT_INTERVAL_MS);
+  void runCallMaintenanceTick();
+
   const latestSyncReceiveAtMs = (groupId: string): number | null => {
     const byPeer = syncProgressByGroup.get(groupId);
     if (!byPeer || byPeer.size === 0) return null;
@@ -3785,6 +4252,7 @@ export const createMultiGroupChat = async (
     actionDags.delete(groupId);
     actionChainStates.delete(groupId);
     actionEnvelopes.delete(groupId);
+    dropCallForGroup(groupId);
     syncProgressByGroup.delete(groupId);
     emitSyncProgressState();
     peerDiscoveryMetrics.delete(groupId);
@@ -4402,6 +4870,116 @@ export const createMultiGroupChat = async (
       ).catch(() => {});
       emit("info", `Sent DM request to ${targetPeerId.slice(0, 12)}...`);
     },
+    startCall: async (groupId: string): Promise<void> => {
+      if (isMembershipEnforcedGroup(groupId) && !isOwnMemberOfGroup(groupId)) {
+        throw new Error("Not a member of this group");
+      }
+      await publishCallControl({
+        groupId,
+        action: "call-started",
+      });
+      await publishCallControl({
+        groupId,
+        action: "call-join",
+      });
+    },
+    ringCall: async (
+      groupId: string,
+      options?: { readonly targetPeerId?: string },
+    ): Promise<void> => {
+      if (isMembershipEnforcedGroup(groupId) && !isOwnMemberOfGroup(groupId)) {
+        throw new Error("Not a member of this group");
+      }
+      const active = activeCallsByGroup.get(groupId);
+      if (!active) {
+        await publishCallControl({
+          groupId,
+          action: "call-started",
+        });
+        await publishCallControl({
+          groupId,
+          action: "call-join",
+        });
+      }
+      await publishCallControl({
+        groupId,
+        action: "call-ring",
+        targetPeerId: options?.targetPeerId?.trim() || undefined,
+      });
+    },
+    acceptCall: async (
+      groupId: string,
+      options?: { readonly targetPeerId?: string },
+    ): Promise<void> => {
+      await publishCallControl({
+        groupId,
+        action: "call-accept",
+        targetPeerId: options?.targetPeerId?.trim() || undefined,
+      });
+    },
+    declineCall: async (
+      groupId: string,
+      options?: { readonly targetPeerId?: string },
+    ): Promise<void> => {
+      await publishCallControl({
+        groupId,
+        action: "call-decline",
+        targetPeerId: options?.targetPeerId?.trim() || undefined,
+      });
+    },
+    joinCall: async (groupId: string): Promise<void> => {
+      if (isMembershipEnforcedGroup(groupId) && !isOwnMemberOfGroup(groupId)) {
+        throw new Error("Not a member of this group");
+      }
+      const active = activeCallsByGroup.get(groupId);
+      if (active && !active.participants.has(ownPeerId) && active.participants.size >= MAX_CALL_PARTICIPANTS) {
+        throw new Error("Call is full");
+      }
+      await publishCallControl({
+        groupId,
+        action: "call-join",
+      });
+    },
+    leaveCall: async (
+      groupId: string,
+      options?: { readonly muted?: boolean },
+    ): Promise<void> => {
+      await publishCallControl({
+        groupId,
+        action: "call-leave",
+        muted: options?.muted,
+      });
+    },
+    endCall: async (groupId: string): Promise<void> => {
+      await publishCallControl({
+        groupId,
+        action: "call-end",
+      });
+    },
+    getCallState: (groupId: string): CallState | null => {
+      const state = activeCallsByGroup.get(groupId);
+      return state ? cloneCallState(state) : null;
+    },
+    sendMediaSignal: async (
+      groupId: string,
+      targetPeerId: string,
+      message: SignalMessage,
+    ): Promise<void> => {
+      const trimmedTarget = targetPeerId.trim();
+      if (trimmedTarget.length === 0) throw new Error("Target peer ID is required");
+      if (trimmedTarget === ownPeerId) return;
+      const stream = await node.dialProtocol(peerIdFromString(trimmedTarget), MEDIA_SIGNAL_PROTOCOL);
+      const payload = encodeMediaSignalEnvelope({
+        groupId,
+        message,
+      });
+      await stream.sink((async function* () {
+        yield payload;
+      })());
+      try {
+        await stream.close();
+      } catch {}
+    },
     renameGroup: async (groupId: string, newName: string): Promise<void> => {
       const trimmed = newName.trim();
       if (trimmed.length === 0) throw new Error("Group name cannot be empty");
@@ -4586,6 +5164,20 @@ export const createMultiGroupChat = async (
         if (index !== -1) directMessageRequestListeners.splice(index, 1);
       };
     },
+    onCallEvent: (listener: CallEventListener) => {
+      callEventListeners.push(listener);
+      return () => {
+        const index = callEventListeners.indexOf(listener);
+        if (index !== -1) callEventListeners.splice(index, 1);
+      };
+    },
+    onMediaSignal: (listener: MediaSignalListener) => {
+      mediaSignalListeners.push(listener);
+      return () => {
+        const index = mediaSignalListeners.indexOf(listener);
+        if (index !== -1) mediaSignalListeners.splice(index, 1);
+      };
+    },
     onPeerChange: (listener: (count: number) => void) => {
       peerChangeListeners.push(listener);
       return () => {
@@ -4666,6 +5258,7 @@ export const createMultiGroupChat = async (
       if (relayReservationInterval) clearInterval(relayReservationInterval);
       if (pinnedKeepAliveInterval) clearInterval(pinnedKeepAliveInterval);
       if (joinRetryInterval) clearInterval(joinRetryInterval);
+      if (callMaintenanceInterval) clearInterval(callMaintenanceInterval);
       clearInterval(syncReconcileInterval);
       for (const timers of pinnedReconnectBurstTimers.values()) {
         for (const timer of timers) clearTimeout(timer);
@@ -4704,8 +5297,11 @@ export const createMultiGroupChat = async (
       messageListeners.length = 0;
       joinRequestListeners.length = 0;
       directMessageRequestListeners.length = 0;
+      callEventListeners.length = 0;
+      mediaSignalListeners.length = 0;
       peerChangeListeners.length = 0;
       eventListeners.length = 0;
+      activeCallsByGroup.clear();
       actionDags.clear();
       actionChainStates.clear();
       actionEnvelopes.clear();

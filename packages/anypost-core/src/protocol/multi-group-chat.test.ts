@@ -5,6 +5,7 @@ import type {
   MultiGroupChatMessageEvent,
   JoinRequestEvent,
   DirectMessageRequestEvent,
+  CallEvent,
   SyncProgressState,
 } from "./multi-group-chat.js";
 import type { NetworkEvent } from "./plaintext-chat.js";
@@ -27,6 +28,9 @@ const waitUntil = async (condition: () => boolean, timeout = 5000): Promise<void
   if (!condition()) throw new Error(`waitUntil timed out after ${timeout}ms`);
 };
 
+const sameSortedPeerIds = (left: readonly string[], right: readonly string[]): boolean =>
+  left.length === right.length && left.every((peerId, idx) => peerId === right[idx]);
+
 type TestNode = {
   readonly chat: MultiGroupChat;
   readonly accountKey: AccountKey;
@@ -35,6 +39,7 @@ type TestNode = {
   readonly messages: MultiGroupChatMessageEvent[];
   readonly joinRequests: JoinRequestEvent[];
   readonly directMessageRequests: DirectMessageRequestEvent[];
+  readonly callEvents: CallEvent[];
   readonly approvedGroupIds: string[];
   publicKeyToPeerId: ReadonlyMap<string, string>;
 };
@@ -58,6 +63,7 @@ describe("MultiGroupChat", () => {
     const messages: MultiGroupChatMessageEvent[] = [];
     const joinRequests: JoinRequestEvent[] = [];
     const directMessageRequests: DirectMessageRequestEvent[] = [];
+    const callEvents: CallEvent[] = [];
     const approvedGroupIds: string[] = [];
     let publicKeyToPeerId: ReadonlyMap<string, string> = new Map();
 
@@ -79,6 +85,7 @@ describe("MultiGroupChat", () => {
     chat.onMessage((msg) => messages.push(msg));
     chat.onJoinRequest((evt) => joinRequests.push(evt));
     chat.onDirectMessageRequest((evt) => directMessageRequests.push(evt));
+    chat.onCallEvent((evt) => callEvents.push(evt));
 
     instances.push(chat);
 
@@ -90,6 +97,7 @@ describe("MultiGroupChat", () => {
       messages,
       joinRequests,
       directMessageRequests,
+      callEvents,
       approvedGroupIds,
       get publicKeyToPeerId() {
         return publicKeyToPeerId;
@@ -131,6 +139,68 @@ describe("MultiGroupChat", () => {
     return admin.joinRequests.find(
       (evt) => evt.groupId === groupId && evt.senderPeerId === senderPeerId,
     )!;
+  };
+
+  const waitForDmHandshakeComplete = async (
+    left: TestNode,
+    right: TestNode,
+    groupId: string,
+    timeoutMs = 12_000,
+  ): Promise<void> => {
+    const leftKeyHex = toHex(new Uint8Array(left.accountKey.publicKey));
+    const rightKeyHex = toHex(new Uint8Array(right.accountKey.publicKey));
+    await waitUntil(() => {
+      const leftState = left.chat.getActionChainState(groupId);
+      const rightState = right.chat.getActionChainState(groupId);
+      return !!leftState && !!rightState &&
+        leftState.dmHandshakeComplete &&
+        rightState.dmHandshakeComplete &&
+        leftState.members.has(leftKeyHex) &&
+        leftState.members.has(rightKeyHex) &&
+        rightState.members.has(leftKeyHex) &&
+        rightState.members.has(rightKeyHex);
+    }, timeoutMs);
+  };
+
+  const summarizeCallState = (state: ReturnType<MultiGroupChat["getCallState"]>): string => {
+    if (!state) return "null";
+    return JSON.stringify({
+      startedAt: state.startedAt,
+      participants: [...state.participants.keys()].sort(),
+      ringingPeerIds: [...state.ringingPeerIds].sort(),
+    });
+  };
+
+  const waitForSymmetricParticipants = async (
+    left: TestNode,
+    right: TestNode,
+    groupId: string,
+    expectedPeerIds: readonly string[],
+    timeoutMs = 10_000,
+  ): Promise<void> => {
+    const expected = [...expectedPeerIds].sort();
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const leftState = left.chat.getCallState(groupId);
+      const rightState = right.chat.getCallState(groupId);
+      const leftParticipants = leftState ? [...leftState.participants.keys()].sort() : [];
+      const rightParticipants = rightState ? [...rightState.participants.keys()].sort() : [];
+      if (
+        leftState &&
+        rightState &&
+        sameSortedPeerIds(leftParticipants, expected) &&
+        sameSortedPeerIds(rightParticipants, expected)
+      ) {
+        return;
+      }
+      await waitFor(50);
+    }
+
+    const leftState = left.chat.getCallState(groupId);
+    const rightState = right.chat.getCallState(groupId);
+    throw new Error(
+      `Call participants did not converge. expected=${JSON.stringify(expected)} left=${summarizeCallState(leftState)} right=${summarizeCallState(rightState)}`,
+    );
   };
 
   it("should start and return a peer ID", async () => {
@@ -209,6 +279,162 @@ describe("MultiGroupChat", () => {
     const groupBMsg = node2.messages.find((m) => m.groupId === groupB);
     expect(groupAMsg?.text).toBe("Message for A");
     expect(groupBMsg?.text).toBe("Message for B");
+  });
+
+  it("should synchronize call lifecycle events across peers", async () => {
+    const node1 = await createTestNode();
+    const node2 = await createTestNode();
+
+    const groupId = crypto.randomUUID();
+    node1.chat.joinGroup(groupId);
+    node2.chat.joinGroup(groupId);
+
+    await node1.chat.connectTo(node2.chat.multiaddrs[0]);
+    await waitFor(400);
+
+    await node1.chat.startCall(groupId);
+    await waitUntil(() => node2.chat.getCallState(groupId) !== null);
+    expect(node2.callEvents.some((evt) => evt.action === "call-started")).toBe(true);
+
+    await node2.chat.joinCall(groupId);
+    await waitUntil(() => node1.chat.getCallState(groupId)?.participants.has(node2.peerId) ?? false);
+
+    await node1.chat.endCall(groupId);
+    await waitUntil(() => node1.chat.getCallState(groupId) === null);
+  });
+
+  it("should converge active call state after peers connect late", { timeout: 25_000 }, async () => {
+    const node1 = await createTestNode();
+    const node2 = await createTestNode();
+
+    const groupId = crypto.randomUUID();
+    node1.chat.joinGroup(groupId);
+    node2.chat.joinGroup(groupId);
+
+    await node1.chat.startCall(groupId);
+    expect(node1.chat.getCallState(groupId)?.participants.has(node1.peerId)).toBe(true);
+    expect(node2.chat.getCallState(groupId)).toBeNull();
+
+    await node1.chat.connectTo(node2.chat.multiaddrs[0]);
+    await waitFor(400);
+
+    await waitUntil(
+      () => node2.chat.getCallState(groupId)?.participants.has(node1.peerId) ?? false,
+      12_000,
+    );
+    await node2.chat.joinCall(groupId);
+    await waitForSymmetricParticipants(node1, node2, groupId, [node1.peerId, node2.peerId], 12_000);
+  });
+
+  it("should converge DM call participants symmetrically after DM acceptance", { timeout: 35_000 }, async () => {
+    const alice = await createTestNode();
+    const bob = await createTestNode();
+
+    await alice.chat.connectTo(bob.chat.multiaddrs[0]);
+    await waitFor(400);
+
+    const groupId = crypto.randomUUID();
+    const { genesisEnvelope } = await alice.chat.createDirectMessageGroupWithId(groupId, [
+      alice.peerId,
+      bob.peerId,
+    ]);
+    const inviteCode = encodeGroupInvite({
+      genesisEnvelope,
+      adminPeerId: alice.peerId,
+      relayAddr: alice.chat.multiaddrs[0].toString(),
+    });
+    await alice.chat.sendDirectMessageRequest({
+      targetPeerId: bob.peerId,
+      groupId,
+      groupName: "DM call convergence",
+      inviteCode,
+    });
+    await waitUntil(() => bob.directMessageRequests.length >= 1, 8_000);
+    await bob.chat.acceptDirectMessageRequest(bob.directMessageRequests[0].requestId);
+    await waitForDmHandshakeComplete(alice, bob, groupId);
+
+    await alice.chat.startCall(groupId);
+    await waitUntil(
+      () => bob.callEvents.some((evt) => evt.groupId === groupId && evt.action === "call-started"),
+      8_000,
+    );
+    await bob.chat.joinCall(groupId);
+
+    await waitForSymmetricParticipants(alice, bob, groupId, [alice.peerId, bob.peerId]);
+
+    await bob.chat.leaveCall(groupId);
+    await waitForSymmetricParticipants(alice, bob, groupId, [alice.peerId]);
+
+    await alice.chat.leaveCall(groupId);
+    await waitUntil(
+      () => alice.chat.getCallState(groupId) === null && bob.chat.getCallState(groupId) === null,
+      10_000,
+    );
+  });
+
+  it("should keep DM call state symmetric across repeated start/join/leave cycles", { timeout: 45_000 }, async () => {
+    const alice = await createTestNode();
+    const bob = await createTestNode();
+
+    await alice.chat.connectTo(bob.chat.multiaddrs[0]);
+    await waitFor(400);
+
+    const groupId = crypto.randomUUID();
+    await alice.chat.createDirectMessageGroupWithId(groupId, [
+      alice.peerId,
+      bob.peerId,
+    ]);
+    await bob.chat.createDirectMessageGroupWithId(groupId, [
+      bob.peerId,
+      alice.peerId,
+    ]);
+    await waitForDmHandshakeComplete(alice, bob, groupId, 15_000);
+
+    for (let cycle = 0; cycle < 3; cycle += 1) {
+      await alice.chat.startCall(groupId);
+      await bob.chat.joinCall(groupId);
+      await waitForSymmetricParticipants(alice, bob, groupId, [alice.peerId, bob.peerId]);
+
+      await bob.chat.leaveCall(groupId);
+      await waitForSymmetricParticipants(alice, bob, groupId, [alice.peerId]);
+
+      await alice.chat.leaveCall(groupId);
+      await waitUntil(
+        () => alice.chat.getCallState(groupId) === null && bob.chat.getCallState(groupId) === null,
+        10_000,
+      );
+    }
+  });
+
+  it("should deliver direct media signaling payloads", async () => {
+    const node1 = await createTestNode();
+    const node2 = await createTestNode();
+
+    const groupId = crypto.randomUUID();
+    node1.chat.joinGroup(groupId);
+    node2.chat.joinGroup(groupId);
+
+    await node1.chat.connectTo(node2.chat.multiaddrs[0]);
+    await waitFor(400);
+
+    const received: Array<{ groupId: string; senderPeerId: string; type: string }> = [];
+    const unsubscribe = node2.chat.onMediaSignal((evt) => {
+      received.push({
+        groupId: evt.groupId,
+        senderPeerId: evt.senderPeerId,
+        type: evt.message.type,
+      });
+    });
+    await node1.chat.sendMediaSignal(groupId, node2.peerId, { type: "hangup" });
+
+    await waitUntil(() => received.length > 0);
+    unsubscribe();
+
+    expect(received[0]).toEqual({
+      groupId,
+      senderPeerId: node1.peerId,
+      type: "hangup",
+    });
   });
 
   it("should not receive messages after leaving a group", async () => {

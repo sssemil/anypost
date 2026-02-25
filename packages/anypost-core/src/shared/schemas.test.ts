@@ -363,6 +363,25 @@ describe("WireMessageSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("should validate call_control type", () => {
+    const groupId = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11";
+    const wireMsg = {
+      type: "call_control" as const,
+      payload: {
+        action: "call-started",
+        groupId,
+        senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
+        senderPublicKey: new Uint8Array(32).fill(7),
+        sentAt: Date.now(),
+        signature: new Uint8Array(64).fill(8),
+      },
+    };
+
+    const result = WireMessageSchema.safeParse(wireMsg);
+
+    expect(result.success).toBe(true);
+  });
+
   it("should reject join_request with non-UUID groupId", () => {
     const wireMsg = {
       type: "join_request" as const,
