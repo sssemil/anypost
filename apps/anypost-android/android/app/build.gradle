@@ -1,5 +1,7 @@
 apply plugin: 'com.android.application'
 
+def autoVersionCode = (int) (System.currentTimeMillis() / 1000L)
+
 android {
     namespace "io.anypost.app"
     compileSdk rootProject.ext.compileSdkVersion
@@ -8,8 +10,8 @@ android {
         applicationId "io.anypost.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode autoVersionCode
+        versionName "1.0." + autoVersionCode
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

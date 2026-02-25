@@ -1,23 +1,44 @@
 package io.anypost.app;
 
+import android.Manifest;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.os.Build;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.ContextCompat;
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 
-@CapacitorPlugin(name = "AnypostBridge")
+@CapacitorPlugin(
+    name = "AnypostBridge",
+    permissions = {
+        @Permission(
+            alias = "notifications",
+            strings = { Manifest.permission.POST_NOTIFICATIONS }
+        ),
+        @Permission(
+            alias = "microphone",
+            strings = { Manifest.permission.RECORD_AUDIO }
+        ),
+        @Permission(
+            alias = "camera",
+            strings = { Manifest.permission.CAMERA }
+        )
+    }
+)
 public class AnypostBridgePlugin extends Plugin {
     private static final String CHANNEL_ID = "anypost-messages";
     private static final String CHANNEL_NAME = "Anypost Messages";
@@ -123,6 +144,25 @@ public class AnypostBridgePlugin extends Plugin {
         call.resolve(payload);
     }
 
+    @PluginMethod
+    public void requestAppPermissions(PluginCall call) {
+        final PermissionState notifications = getPermissionState("notifications");
+        final PermissionState microphone = getPermissionState("microphone");
+        final PermissionState camera = getPermissionState("camera");
+        final boolean notificationsReady =
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || notifications == PermissionState.GRANTED;
+        if (notificationsReady && microphone == PermissionState.GRANTED && camera == PermissionState.GRANTED) {
+            resolvePermissionState(call);
+            return;
+        }
+        requestAllPermissions(call, "onPermissionsResult");
+    }
+
+    @PermissionCallback
+    private void onPermissionsResult(PluginCall call) {
+        resolvePermissionState(call);
+    }
+
     private static void enqueueDeepLink(String url) {
         while (PENDING_DEEP_LINKS.size() >= MAX_PENDING_DEEP_LINKS) {
             PENDING_DEEP_LINKS.poll();
@@ -172,6 +212,26 @@ public class AnypostBridgePlugin extends Plugin {
         if (trimmed.length() == 0) return fallback;
         if (trimmed.length() <= limit) return trimmed;
         return trimmed.substring(0, limit);
+    }
+
+    private void resolvePermissionState(PluginCall call) {
+        final Context context = getContext();
+        final boolean notificationsGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+            || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+                == PackageManager.PERMISSION_GRANTED;
+        final boolean microphoneGranted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED;
+        final boolean cameraGranted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED;
+        JSObject payload = new JSObject();
+        payload.put("notificationsGranted", notificationsGranted);
+        payload.put("microphoneGranted", microphoneGranted);
+        payload.put("cameraGranted", cameraGranted);
+        call.resolve(payload);
     }
 
     static boolean isBackgroundNodeRunning(Context context) {

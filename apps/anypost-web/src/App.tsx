@@ -137,9 +137,12 @@ const WEBRTC_ICE_SERVERS: RTCIceServer[] = [
   { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
 ];
 const CALL_SPEAKING_SAMPLE_INTERVAL_MS = 180;
-const CALL_SPEAKING_MIN_LEVEL = SPEAKING_THRESHOLD * 0.15;
+const CALL_SPEAKING_MIN_LEVEL = SPEAKING_THRESHOLD * 0.03;
 const CALL_SPEAKING_RISE_ALPHA = 0.5;
 const CALL_SPEAKING_FALL_ALPHA = 0.2;
+const CALL_SPEAKING_UI_ACTIVE_LEVEL = 0.08;
+
+type CallLinkQuality = "excellent" | "good" | "fair" | "poor" | "unknown";
 
 const isWebSocketCompatibleBootstrapAddr = (addr: string): boolean =>
   addr.includes("/ws") || addr.includes("/wss") || addr.includes("/webrtc") || addr.includes("/p2p-circuit");
@@ -156,6 +159,15 @@ type HostBridge = {
   readonly onRelayState?: (listener: (state: DesktopRelayState) => void) => () => void;
   readonly onDeepLink?: (listener: (url: string) => void) => () => void;
   readonly getPendingDeepLinks?: () => Promise<readonly string[]>;
+  readonly requestAppPermissions?: () => Promise<{
+    readonly notificationsGranted: boolean;
+    readonly microphoneGranted?: boolean;
+    readonly cameraGranted?: boolean;
+  } | void> | {
+    readonly notificationsGranted: boolean;
+    readonly microphoneGranted?: boolean;
+    readonly cameraGranted?: boolean;
+  } | void;
   readonly getBackgroundNodeState?: () => Promise<{ readonly running: boolean }>;
   readonly startBackgroundNode?: () => Promise<{ readonly running: boolean } | void> | { readonly running: boolean } | void;
   readonly stopBackgroundNode?: () => Promise<{ readonly running: boolean } | void> | { readonly running: boolean } | void;
@@ -183,6 +195,12 @@ type CapacitorBackgroundNodeStatePayload = {
   readonly running?: boolean;
 };
 
+type CapacitorAppPermissionsPayload = {
+  readonly notificationsGranted?: boolean;
+  readonly microphoneGranted?: boolean;
+  readonly cameraGranted?: boolean;
+};
+
 type CapacitorBridgeListenerHandle = {
   readonly remove: () => void | Promise<void>;
 };
@@ -190,6 +208,7 @@ type CapacitorBridgeListenerHandle = {
 type CapacitorBridgePlugin = {
   readonly getRelayState?: () => Promise<CapacitorRelayStatePayload>;
   readonly getPendingDeepLinks?: () => Promise<CapacitorPendingDeepLinksPayload | readonly string[]>;
+  readonly requestAppPermissions?: () => Promise<CapacitorAppPermissionsPayload | void>;
   readonly getBackgroundNodeState?: () => Promise<CapacitorBackgroundNodeStatePayload>;
   readonly startBackgroundNode?: () => Promise<CapacitorBackgroundNodeStatePayload | void>;
   readonly stopBackgroundNode?: () => Promise<CapacitorBackgroundNodeStatePayload | void>;
@@ -538,12 +557,12 @@ export const App = () => {
   const [incomingCallsByGroup, setIncomingCallsByGroup] = createSignal<ReadonlyMap<string, IncomingCallPrompt>>(new Map());
   const [callMutedByGroup, setCallMutedByGroup] = createSignal<ReadonlyMap<string, boolean>>(new Map());
   const [callSpeakingByGroup, setCallSpeakingByGroup] = createSignal<ReadonlyMap<string, ReadonlyMap<string, number>>>(new Map());
+  const [callAudioOutputBlockedByGroup, setCallAudioOutputBlockedByGroup] = createSignal<ReadonlyMap<string, boolean>>(new Map());
   const [callLocallyMutedPeersByGroup, setCallLocallyMutedPeersByGroup] = createSignal<ReadonlyMap<string, ReadonlySet<string>>>(new Map());
   const [callErrorByGroup, setCallErrorByGroup] = createSignal<ReadonlyMap<string, string>>(new Map());
   const [callClockMs, setCallClockMs] = createSignal(Date.now());
   const [pendingDesktopInviteCodes, setPendingDesktopInviteCodes] = createSignal<readonly string[]>([]);
   const [messageDraft, setMessageDraft] = createSignal("");
-  const [viewportHeightPx, setViewportHeightPx] = createSignal<number | null>(null);
   const [keyboardInsetPx, setKeyboardInsetPx] = createSignal(0);
   const [backgroundNodeRunning, setBackgroundNodeRunning] = createSignal(false);
   const [backgroundNodeBusy, setBackgroundNodeBusy] = createSignal(false);
@@ -615,15 +634,13 @@ export const App = () => {
   });
 
   const loadCapacitorBridge = (): HostBridge | null => {
-    if (cachedCapacitorBridge !== undefined) return cachedCapacitorBridge;
+    if (cachedCapacitorBridge) return cachedCapacitorBridge;
     if (typeof window === "undefined") {
-      cachedCapacitorBridge = null;
-      return cachedCapacitorBridge;
+      return null;
     }
     const plugin = window.Capacitor?.Plugins?.AnypostBridge;
     if (!plugin) {
-      cachedCapacitorBridge = null;
-      return cachedCapacitorBridge;
+      return null;
     }
 
     cachedCapacitorBridge = {
@@ -668,6 +685,16 @@ export const App = () => {
         : undefined,
       getPendingDeepLinks: plugin.getPendingDeepLinks
         ? async () => normalizePendingDeepLinks(await plugin.getPendingDeepLinks!())
+        : undefined,
+      requestAppPermissions: plugin.requestAppPermissions
+        ? async () => {
+            const payload = await plugin.requestAppPermissions!();
+            return {
+              notificationsGranted: payload?.notificationsGranted === true,
+              microphoneGranted: payload?.microphoneGranted === true,
+              cameraGranted: payload?.cameraGranted === true,
+            };
+          }
         : undefined,
       getBackgroundNodeState: plugin.getBackgroundNodeState
         ? async () => normalizeBackgroundNodeState(await plugin.getBackgroundNodeState!())
@@ -714,7 +741,8 @@ export const App = () => {
 
   const hasAndroidBridge = (): boolean => {
     if (typeof window === "undefined") return false;
-    return window.anypostAndroid !== undefined || loadCapacitorBridge() !== null;
+    if (window.anypostAndroid !== undefined || loadCapacitorBridge() !== null) return true;
+    return /Android/i.test(window.navigator.userAgent);
   };
 
   const hostBridge = (): HostBridge | null => {
@@ -1712,6 +1740,12 @@ export const App = () => {
       else next.delete(groupId);
       return next;
     });
+    if (currentChat) {
+      const state = currentChat.getCallState(groupId);
+      if (state?.participants.has(currentChat.peerId)) {
+        setCallErrorForGroup(groupId, null);
+      }
+    }
   };
 
   const formatCallDurationCompact = (durationMs: number): string => {
@@ -1809,6 +1843,15 @@ export const App = () => {
     });
   };
 
+  const setCallAudioOutputBlocked = (groupId: string, blocked: boolean) => {
+    setCallAudioOutputBlockedByGroup((prev) => {
+      const next = new Map(prev);
+      if (blocked) next.set(groupId, true);
+      else next.delete(groupId);
+      return next;
+    });
+  };
+
   const isParticipantLocallyMuted = (groupId: string, peerId: string): boolean =>
     callLocallyMutedPeersByGroup().get(groupId)?.has(peerId) ?? false;
 
@@ -1840,10 +1883,18 @@ export const App = () => {
 
   const normalizeSpeakingIndicatorLevel = (level: number): number => {
     if (!Number.isFinite(level) || level <= 0) return 0;
-    const floor = SPEAKING_THRESHOLD * 0.4;
-    const ceiling = SPEAKING_THRESHOLD * 3.8;
+    const floor = SPEAKING_THRESHOLD * 0.08;
+    const ceiling = SPEAKING_THRESHOLD * 1.4;
     const normalized = (level - floor) / Math.max(0.0001, ceiling - floor);
     return Math.max(0, Math.min(1, normalized));
+  };
+
+  const classifyCallLinkQuality = (pingMs: number | null): CallLinkQuality => {
+    if (pingMs === null || !Number.isFinite(pingMs)) return "unknown";
+    if (pingMs < 80) return "excellent";
+    if (pingMs < 140) return "good";
+    if (pingMs < 220) return "fair";
+    return "poor";
   };
 
   const destroyPeerConnection = (
@@ -1927,6 +1978,7 @@ export const App = () => {
     }
     groupCallMedia.delete(groupId);
     clearSpeakingForGroup(groupId);
+    setCallAudioOutputBlocked(groupId, false);
     setCallLocallyMutedPeersByGroup((prev) => {
       const next = new Map(prev);
       next.delete(groupId);
@@ -2019,7 +2071,17 @@ export const App = () => {
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
       throw new Error("Media devices are unavailable in this runtime");
     }
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    } catch (error) {
+      appendDiagnosticsEntry("call-getusermedia-failed", {
+        groupId,
+        name: error instanceof DOMException ? error.name : error instanceof Error ? error.name : "unknown",
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
     const muted = callMutedByGroup().get(groupId) ?? false;
     for (const track of stream.getAudioTracks()) {
       track.enabled = !muted;
@@ -2080,6 +2142,8 @@ export const App = () => {
     const remoteStream = new MediaStream();
     const audioElement = document.createElement("audio");
     audioElement.autoplay = true;
+    audioElement.preload = "auto";
+    audioElement.setAttribute("playsinline", "true");
     audioElement.style.display = "none";
     audioElement.muted = isParticipantLocallyMuted(groupId, remotePeerId);
     audioElement.srcObject = remoteStream;
@@ -2109,7 +2173,17 @@ export const App = () => {
         const exists = remoteStream.getTracks().some((existing) => existing.id === track.id);
         if (!exists) remoteStream.addTrack(track);
       }
-      void audioElement.play().catch(() => {});
+      void audioElement.play().then(() => {
+        setCallAudioOutputBlocked(groupId, false);
+      }).catch((error) => {
+        appendDiagnosticsEntry("call-audio-play-failed", {
+          groupId,
+          peerId: remotePeerId,
+          name: error instanceof DOMException ? error.name : error instanceof Error ? error.name : "unknown",
+          message: error instanceof Error ? error.message : String(error),
+        });
+        setCallAudioOutputBlocked(groupId, true);
+      });
       ensureRemoteSpeakingDetection(groupId, remotePeerId, entry);
     };
     pc.onicecandidate = (event) => {
@@ -2963,20 +3037,16 @@ export const App = () => {
     if (typeof window === "undefined") return;
     const viewport = window.visualViewport;
     if (!viewport) return;
-    const syncViewportInsets = () => {
-      const layoutHeight = window.innerHeight;
-      const visibleHeight = viewport.height + viewport.offsetTop;
-      const keyboardInset = Math.max(0, layoutHeight - visibleHeight);
-      setViewportHeightPx(Math.max(0, visibleHeight));
-      setKeyboardInsetPx(keyboardInset > 60 ? keyboardInset : 0);
+    const syncKeyboardInset = () => {
+      const inset = Math.max(0, window.innerHeight - (viewport.height + viewport.offsetTop));
+      setKeyboardInsetPx(inset > 50 ? Math.round(inset) : 0);
     };
-    syncViewportInsets();
-    viewport.addEventListener("resize", syncViewportInsets);
-    viewport.addEventListener("scroll", syncViewportInsets);
+    syncKeyboardInset();
+    viewport.addEventListener("resize", syncKeyboardInset);
+    viewport.addEventListener("scroll", syncKeyboardInset);
     onCleanup(() => {
-      viewport.removeEventListener("resize", syncViewportInsets);
-      viewport.removeEventListener("scroll", syncViewportInsets);
-      setViewportHeightPx(null);
+      viewport.removeEventListener("resize", syncKeyboardInset);
+      viewport.removeEventListener("scroll", syncKeyboardInset);
       setKeyboardInsetPx(0);
     });
   });
@@ -3246,6 +3316,17 @@ export const App = () => {
   onMount(() => {
     const bridge = hostBridge();
     if (!bridge) return;
+    if (bridge.requestAppPermissions) {
+      void bridge.requestAppPermissions().then((result) => {
+        appendDiagnosticsEntry("app-permissions-requested", {
+          notificationsGranted: result?.notificationsGranted === true,
+          microphoneGranted: result?.microphoneGranted === true,
+          cameraGranted: result?.cameraGranted === true,
+        });
+      }).catch(() => {
+        appendDiagnosticsEntry("app-permissions-request-failed", {});
+      });
+    }
     const offRelayState = bridge.onRelayState?.((state) => setDesktopRelayState(state)) ?? (() => {});
     const offDeepLink = bridge.onDeepLink?.((url) => {
       void handleDesktopDeepLink(url);
@@ -3748,6 +3829,7 @@ export const App = () => {
     const activeGroupId = groupState().activeGroupId;
     if (!currentChat || !activeGroupId) return;
     const currentState = currentChat.getCallState(activeGroupId);
+    setCallErrorForGroup(activeGroupId, null);
     try {
       if (currentState) {
         await currentChat.joinCall(activeGroupId);
@@ -3756,6 +3838,7 @@ export const App = () => {
       }
       refreshCallStateForGroup(activeGroupId);
       await reconcileCallMediaForGroup(activeGroupId);
+      setCallErrorForGroup(activeGroupId, null);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to join call";
       setCallErrorForGroup(activeGroupId, message);
@@ -3823,6 +3906,7 @@ export const App = () => {
     if (!currentChat || !activeGroupId) return;
     const prompt = incomingCallsByGroup().get(activeGroupId);
     if (!prompt) return;
+    setCallErrorForGroup(activeGroupId, null);
     try {
       await currentChat.acceptCall(activeGroupId, { targetPeerId: prompt.senderPeerId });
       await currentChat.joinCall(activeGroupId);
@@ -3833,6 +3917,7 @@ export const App = () => {
       });
       refreshCallStateForGroup(activeGroupId);
       await reconcileCallMediaForGroup(activeGroupId);
+      setCallErrorForGroup(activeGroupId, null);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to accept call";
       setCallErrorForGroup(activeGroupId, message);
@@ -4237,12 +4322,42 @@ export const App = () => {
     setParticipantLocallyMuted(activeId, peerId, nextMuted);
   };
 
+  const activeCallAudioOutputBlocked = (): boolean => {
+    const activeId = groupState().activeGroupId;
+    if (!activeId) return false;
+    return callAudioOutputBlockedByGroup().get(activeId) === true;
+  };
+
+  const handleResumeCallAudio = async (): Promise<void> => {
+    const activeId = groupState().activeGroupId;
+    if (!activeId) return;
+    const mediaState = groupCallMedia.get(activeId);
+    if (!mediaState) return;
+    const resumes: Promise<unknown>[] = [];
+    if (mediaState.localSpeakingAudioContext) {
+      resumes.push(mediaState.localSpeakingAudioContext.resume().catch(() => {}));
+    }
+    for (const entry of mediaState.peers.values()) {
+      if (entry.speakingAudioContext) {
+        resumes.push(entry.speakingAudioContext.resume().catch(() => {}));
+      }
+      resumes.push(entry.audioElement.play().catch(() => {}));
+    }
+    await Promise.allSettled(resumes);
+    setCallAudioOutputBlocked(activeId, false);
+    appendDiagnosticsEntry("call-audio-resume-attempted", {
+      groupId: activeId,
+      peers: mediaState.peers.size,
+    });
+  };
+
   const activeCallParticipants = () => {
     const activeId = groupState().activeGroupId;
     const currentChat = chat;
     const state = activeCallState();
     if (!activeId || !currentChat || !state) return [];
     const speakingByPeer = callSpeakingByGroup().get(activeId) ?? new Map<string, number>();
+    const latencies = latencyMap();
     return [...state.participants.values()]
       .sort((left, right) => {
         const leftIsSelf = left.peerId === currentChat.peerId;
@@ -4255,6 +4370,8 @@ export const App = () => {
       .map((participant) => {
         const isSelf = participant.peerId === currentChat.peerId;
         const speakingLevelRaw = speakingByPeer.get(participant.peerId) ?? 0;
+        const pingMs = isSelf ? null : (latencies.get(participant.peerId) ?? null);
+        const quality = classifyCallLinkQuality(pingMs);
         const label = isSelf
           ? "You"
           : directMessagePeerLabel(participant.peerId)
@@ -4266,8 +4383,10 @@ export const App = () => {
           label,
           isSelf,
           speakingLevel: normalizeSpeakingIndicatorLevel(speakingLevelRaw),
-          speaking: isSpeaking(speakingLevelRaw),
+          speaking: normalizeSpeakingIndicatorLevel(speakingLevelRaw) >= CALL_SPEAKING_UI_ACTIVE_LEVEL || isSpeaking(speakingLevelRaw),
           micMuted: isSelf ? activeCallMuted() : participant.muted,
+          pingMs,
+          quality,
           outputMuted: !isSelf && isParticipantLocallyMuted(activeId, participant.peerId),
         };
       });
@@ -4685,8 +4804,7 @@ export const App = () => {
 
         <Show when={chatStatus() === "connected" && chat}>
           <ChatLayout
-            viewportHeightPx={viewportHeightPx()}
-            messageInputInsetPx={keyboardInsetPx()}
+            messageInputInsetPx={(hasAndroidBridge() ? 14 : 8) + keyboardInsetPx()}
             header={
               <HeaderBar
                 peerId={chat!.peerId}
@@ -4774,13 +4892,23 @@ export const App = () => {
                       <div class="text-[10px] uppercase tracking-wider text-tg-text-dim">
                         Call Participants
                       </div>
-                      <Show when={activeCallDurationLabel()}>
-                        {(duration) => (
-                          <div class="text-[10px] uppercase tracking-wider text-tg-success">
-                            Live {duration()}
-                          </div>
-                        )}
-                      </Show>
+                      <div class="flex items-center gap-2">
+                        <Show when={activeCallAudioOutputBlocked()}>
+                          <button
+                            class="text-[10px] uppercase tracking-wider px-2 py-1 rounded border border-tg-border text-tg-text hover:bg-tg-hover cursor-pointer"
+                            onClick={() => void handleResumeCallAudio()}
+                          >
+                            Enable Audio
+                          </button>
+                        </Show>
+                        <Show when={activeCallDurationLabel()}>
+                          {(duration) => (
+                            <div class="text-[10px] uppercase tracking-wider text-tg-success">
+                              Live {duration()}
+                            </div>
+                          )}
+                        </Show>
+                      </div>
                     </div>
                     <div class="flex gap-2 overflow-x-auto pb-1">
                       <For each={activeCallParticipants()}>
@@ -4827,6 +4955,23 @@ export const App = () => {
                                 : participant.speaking
                                   ? "Speaking"
                                   : "Mic live"}
+                            </div>
+                            <div class="text-[10px] text-tg-text-dim mt-1 flex items-center gap-1.5">
+                              <span
+                                class="inline-block w-1.5 h-1.5 rounded-full"
+                                classList={{
+                                  "bg-tg-success": participant.quality === "excellent" || participant.quality === "good",
+                                  "bg-tg-warning": participant.quality === "fair",
+                                  "bg-tg-danger": participant.quality === "poor",
+                                  "bg-tg-text-dim": participant.quality === "unknown",
+                                }}
+                              />
+                              <span>
+                                {participant.pingMs === null
+                                  ? "Ping --"
+                                  : `Ping ${Math.round(participant.pingMs)}ms`}
+                              </span>
+                              <span class="uppercase tracking-wide">{participant.quality}</span>
                             </div>
                             <Show when={!participant.isSelf}>
                               <button

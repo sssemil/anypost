@@ -20,6 +20,7 @@ type MessageInputProps = {
 
 export const MessageInput = (props: MessageInputProps) => {
   let textareaRef: HTMLTextAreaElement | undefined;
+  const MIN_TEXTAREA_HEIGHT_PX = 40;
 
   const focusComposer = () => {
     if (!textareaRef || props.disabled) return;
@@ -38,7 +39,7 @@ export const MessageInput = (props: MessageInputProps) => {
   const resetHeight = () => {
     if (textareaRef) {
       textareaRef.style.height = "auto";
-      textareaRef.style.height = `${textareaRef.scrollHeight}px`;
+      textareaRef.style.height = `${Math.max(textareaRef.scrollHeight, MIN_TEXTAREA_HEIGHT_PX)}px`;
     }
   };
 
@@ -105,7 +106,7 @@ export const MessageInput = (props: MessageInputProps) => {
         onKeyDown={handleKeyDown}
         placeholder={props.placeholder ?? "Type a message..."}
         disabled={props.disabled}
-        class="flex-1 py-2.5 px-4 rounded-2xl bg-tg-input border border-tg-border text-tg-text text-sm resize-none max-h-32 placeholder:text-tg-text-dim focus:outline-none focus:border-tg-accent"
+        class="flex-1 py-2.5 px-4 rounded-2xl bg-tg-input border border-tg-border text-tg-text text-sm leading-5 resize-none max-h-32 min-h-10 placeholder:text-tg-text-dim focus:outline-none focus:border-tg-accent"
       />
       <button
         onClick={send}
