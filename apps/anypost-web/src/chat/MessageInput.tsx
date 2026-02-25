@@ -55,7 +55,24 @@ export const MessageInput = (props: MessageInputProps) => {
   };
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key !== "Enter") return;
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      if (!textareaRef || props.disabled) return;
+      const start = textareaRef.selectionStart ?? textareaRef.value.length;
+      const end = textareaRef.selectionEnd ?? textareaRef.value.length;
+      const next = `${props.value.slice(0, start)}\n${props.value.slice(end)}`;
+      props.onValueChange(next);
+      queueMicrotask(() => {
+        if (!textareaRef) return;
+        const cursor = start + 1;
+        textareaRef.selectionStart = cursor;
+        textareaRef.selectionEnd = cursor;
+        resetHeight();
+      });
+      return;
+    }
+    if (!e.shiftKey && !e.altKey) {
       e.preventDefault();
       send();
     }
