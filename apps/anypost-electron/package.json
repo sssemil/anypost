@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "node ./scripts/dev.mjs",
     "build:main": "tsc --project tsconfig.json",
-    "build": "pnpm --filter anypost-web build && pnpm --filter anypost-relay build && pnpm --filter anypost-core build && pnpm run build:main && node ./scripts/copy-web-dist.mjs",
+    "build": "pnpm --filter anypost-core build && pnpm --filter anypost-web build && pnpm --filter anypost-relay build && pnpm run build:main && node ./scripts/copy-web-dist.mjs",
     "start": "electron ./dist/main/main.js",
     "test": "node -e \"console.log('No electron tests yet')\"",
     "typecheck": "tsc --project tsconfig.json --noEmit"

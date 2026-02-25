@@ -254,7 +254,7 @@ const sendAndWaitWithRetry = async (
   receiverLabel,
   receiverTargetPeerId,
   textPrefix,
-  attempts = 6,
+  attempts = 8,
 ) => {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const text = `${textPrefix}-${attempt}-${Date.now()}`;
@@ -403,18 +403,13 @@ const main = async () => {
       startDm(alice, bobPeerId),
       startDm(bob, alicePeerId),
     ]);
-    await sleep(1_000);
+    await Promise.all([
+      waitForDmHandshakeComplete(alice, "Alice"),
+      waitForDmHandshakeComplete(bob, "Bob"),
+    ]);
+    await sleep(1_500);
 
     log("Exchanging post-refresh messages...");
-    await sendAndWaitWithRetry(
-      alice,
-      "Alice",
-      bobPeerId,
-      bob,
-      "Bob",
-      alicePeerId,
-      "dm-refresh-post-alice1",
-    );
     await sendAndWaitWithRetry(
       bob,
       "Bob",
@@ -423,6 +418,15 @@ const main = async () => {
       "Alice",
       bobPeerId,
       "dm-refresh-post-bob1",
+    );
+    await sendAndWaitWithRetry(
+      alice,
+      "Alice",
+      bobPeerId,
+      bob,
+      "Bob",
+      alicePeerId,
+      "dm-refresh-post-alice1",
     );
     await sendAndWaitWithRetry(
       alice,
