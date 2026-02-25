@@ -5,7 +5,10 @@ type HeaderBarProps = {
   readonly connectionStatus: "connecting" | "connected" | "disconnected";
   readonly activeGroupId: string | null;
   readonly activeGroupName?: string;
+  readonly activeGroupIsDirectMessage?: boolean;
   readonly activeDirectMessageConnected?: boolean;
+  readonly activeDirectMessageStatusLabel?: string;
+  readonly activeDirectMessageStatusTone?: "online" | "offline" | "pending";
   readonly memberCount: number;
   readonly showBackButton: boolean;
   readonly onBackPress: () => void;
@@ -44,6 +47,10 @@ export const HeaderBar = (props: HeaderBarProps) => {
 
   const subtitle = () => {
     if (!props.activeGroupId) return statusLabel(props.connectionStatus);
+    if (props.activeGroupIsDirectMessage) {
+      return props.activeDirectMessageStatusLabel
+        ?? (props.activeDirectMessageConnected ? "online" : "offline");
+    }
     if (props.memberCount > 0) {
       return `${props.memberCount} ${props.memberCount === 1 ? "member" : "members"}`;
     }
@@ -68,8 +75,15 @@ export const HeaderBar = (props: HeaderBarProps) => {
         onClick={() => props.onGroupInfoToggle()}
       >
         <span class="flex items-center gap-2 min-w-0">
-          <Show when={props.activeDirectMessageConnected}>
-            <span class="inline-block w-2 h-2 rounded-full bg-tg-success shrink-0" />
+          <Show when={props.activeGroupIsDirectMessage}>
+            <span
+              class="inline-block w-2 h-2 rounded-full shrink-0"
+              classList={{
+                "bg-tg-success": props.activeDirectMessageStatusTone === "online",
+                "bg-amber-400": props.activeDirectMessageStatusTone === "pending",
+                "bg-gray-500": !props.activeDirectMessageStatusTone || props.activeDirectMessageStatusTone === "offline",
+              }}
+            />
           </Show>
           <span class="font-semibold text-tg-text truncate text-[15px] leading-tight">
             {groupDisplayName()}

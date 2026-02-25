@@ -50,6 +50,8 @@ describe("Action chain state", () => {
       expect(state.groupName).toBe("");
       expect(state.isDirectMessage).toBe(false);
       expect(state.directMessagePeerIds).toBeNull();
+      expect(state.dmGenesisContributorPublicKeys.size).toBe(0);
+      expect(state.dmHandshakeComplete).toBe(false);
       expect(state.joinPolicy).toBe("manual");
       expect(state.members.size).toBe(0);
       expect(state.pendingJoins.size).toBe(0);
@@ -136,13 +138,73 @@ describe("Action chain state", () => {
         "12D3KooWBobPeer",
       ]);
       expect(result.data.groupName).toBe("");
-      expect(result.data.joinPolicy).toBe("auto_with_invite");
+      expect(result.data.joinPolicy).toBe("manual");
+      expect(result.data.dmGenesisContributorPublicKeys.size).toBe(1);
+      expect(result.data.dmHandshakeComplete).toBe(false);
       expect(result.data.members.size).toBe(1);
       expect(result.data.members.get(toHex(creator.publicKey))?.role).toBe("owner");
+    });
+
+    it("should complete DM handshake after second dm-created genesis by another author", () => {
+      const first = generateAccountKey();
+      const second = generateAccountKey();
+      const firstGenesis = makeAction({
+        accountKey: first,
+        parentHashes: [GENESIS_HASH],
+        payload: {
+          type: "dm-created",
+          peerIds: ["12D3KooWAlicePeer", "12D3KooWBobPeer"],
+        },
+        timestamp: 1_000,
+      });
+      const secondGenesis = makeAction({
+        accountKey: second,
+        parentHashes: [GENESIS_HASH],
+        payload: {
+          type: "dm-created",
+          peerIds: ["12D3KooWAlicePeer", "12D3KooWBobPeer"],
+        },
+        timestamp: 1_200,
+      });
+
+      const firstState = applyAction(createActionChainGroupState(DEFAULT_GROUP_ID), firstGenesis);
+      if (!firstState.success) throw new Error("Setup failed");
+      const secondState = applyAction(firstState.data, secondGenesis);
+
+      expect(secondState.success).toBe(true);
+      if (!secondState.success) return;
+      expect(secondState.data.dmGenesisContributorPublicKeys.size).toBe(2);
+      expect(secondState.data.dmHandshakeComplete).toBe(true);
+      expect(secondState.data.members.size).toBe(2);
     });
   });
 
   describe("applyAction — join-request", () => {
+    it("should reject join-request for direct messages", () => {
+      const creator = generateAccountKey();
+      const joiner = generateAccountKey();
+      const dmGenesis = makeAction({
+        accountKey: creator,
+        parentHashes: [GENESIS_HASH],
+        payload: {
+          type: "dm-created",
+          peerIds: ["12D3KooWAlicePeer", "12D3KooWBobPeer"],
+        },
+      });
+      const state = applyAction(createActionChainGroupState(DEFAULT_GROUP_ID), dmGenesis);
+      if (!state.success) throw new Error("Setup failed");
+      const joinReq = makeAction({
+        accountKey: joiner,
+        parentHashes: [dmGenesis.hash],
+        payload: {
+          type: "join-request",
+          requesterPublicKey: pubKey(joiner),
+        },
+      });
+      const result = applyAction(state.data, joinReq);
+      expect(result.success).toBe(false);
+    });
+
     it("should add requester to pending joins", () => {
       const creator = generateAccountKey();
       const joiner = generateAccountKey();
@@ -358,6 +420,28 @@ describe("Action chain state", () => {
   });
 
   describe("applyAction — message", () => {
+    it("should reject DM messages before handshake completion", () => {
+      const creator = generateAccountKey();
+      const dmGenesis = makeAction({
+        accountKey: creator,
+        parentHashes: [GENESIS_HASH],
+        payload: {
+          type: "dm-created",
+          peerIds: ["12D3KooWAlicePeer", "12D3KooWBobPeer"],
+        },
+      });
+      const state = applyAction(createActionChainGroupState(DEFAULT_GROUP_ID), dmGenesis);
+      if (!state.success) throw new Error("Setup failed");
+      const msg = makeAction({
+        accountKey: creator,
+        parentHashes: [dmGenesis.hash],
+        payload: { type: "message", text: "hello" },
+      });
+
+      const result = applyAction(state.data, msg);
+      expect(result.success).toBe(false);
+    });
+
     it("should accept message from a member", () => {
       const creator = generateAccountKey();
       const genesis = makeAction({

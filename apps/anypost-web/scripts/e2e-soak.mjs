@@ -35,6 +35,8 @@ const parseArgs = () => {
     noServer: false,
     headed: false,
     maxFailures: Number.POSITIVE_INFINITY,
+    minPassRate: 0,
+    maxP95Ms: Number.POSITIVE_INFINITY,
   };
 
   for (let i = 0; i < args.length; i += 1) {
@@ -58,6 +60,16 @@ const parseArgs = () => {
     }
     if (arg === "--max-failures" && next) {
       out.maxFailures = Math.max(1, Number(next));
+      i += 1;
+      continue;
+    }
+    if (arg === "--min-pass-rate" && next) {
+      out.minPassRate = Math.max(0, Math.min(1, Number(next)));
+      i += 1;
+      continue;
+    }
+    if (arg === "--max-p95-ms" && next) {
+      out.maxP95Ms = Math.max(1, Number(next));
       i += 1;
       continue;
     }
@@ -140,6 +152,13 @@ const runCommandCapture = (cmd, args, cwd) =>
       resolve({ code: code ?? 1, stdout, stderr });
     });
   });
+
+const percentile = (values, ratio) => {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * ratio) - 1));
+  return sorted[idx];
+};
 
 const startWebServer = async (baseUrl) => {
   log("Building anypost-core...");
@@ -265,6 +284,8 @@ const main = async () => {
     passRate: results.length > 0
       ? Number((results.filter((entry) => entry.passed).length / results.length).toFixed(4))
       : 0,
+    durationP50Ms: percentile(results.map((entry) => entry.durationMs), 0.5),
+    durationP95Ms: percentile(results.map((entry) => entry.durationMs), 0.95),
     results,
   };
 
@@ -273,6 +294,19 @@ const main = async () => {
 
   log(`Soak summary written to ${summaryPath}`);
   log(`Pass rate: ${summary.passed}/${summary.iterationsCompleted}`);
+  log(`Duration p50/p95: ${summary.durationP50Ms}ms / ${summary.durationP95Ms}ms`);
+
+  if (options.minPassRate > 0 && summary.passRate < options.minPassRate) {
+    throw new Error(
+      `Soak failed reliability gate: passRate ${summary.passRate} < minPassRate ${options.minPassRate}`,
+    );
+  }
+
+  if (Number.isFinite(options.maxP95Ms) && summary.durationP95Ms > options.maxP95Ms) {
+    throw new Error(
+      `Soak failed reliability gate: durationP95Ms ${summary.durationP95Ms} > maxP95Ms ${options.maxP95Ms}`,
+    );
+  }
 
   if (summary.failed > 0) {
     throw new Error(`Soak failed: ${summary.failed}/${summary.iterationsCompleted} iterations failed`);

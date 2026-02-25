@@ -5,7 +5,6 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { decodeGroupInvite } from "anypost-core/protocol";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:5173";
 
@@ -193,19 +192,22 @@ const acceptDmWithRetry = async (
   alicePage,
   bobPage,
   alicePeerId,
-  bobPeerId,
   attempts = 18,
 ) => {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     await startDm(bobPage, alicePeerId);
-    await startDm(alicePage, bobPeerId);
+    const dmRequestBanner = alicePage.getByRole("button", { name: /pending DM request/i }).first();
+    const bannerVisible = await isVisible(dmRequestBanner, 4_000);
+    if (bannerVisible) {
+      await dmRequestBanner.click();
+    }
     const acceptBtn = alicePage.getByRole("button", { name: "Accept" }).first();
     if (await isVisible(acceptBtn, 4_000)) {
       await acceptBtn.click();
       log(`Alice: accepted DM request on attempt ${attempt}`);
       return;
     }
-    log(`Alice: DM accept not visible yet (attempt ${attempt}/${attempts})`);
+    log(`Alice: DM accept not visible yet (attempt ${attempt}/${attempts}, bannerVisible=${bannerVisible})`);
     await sleep(1_500);
   }
   throw new Error("Timed out waiting for DM request acceptance UI");
@@ -219,33 +221,13 @@ const openGroupInfo = async (page) => {
   await groupInfoTitle.waitFor({ state: "visible", timeout: 10_000 });
 };
 
-const waitForMembersCount = async (page, expectedCount, label, timeoutMs = 90_000) => {
+const waitForDmHandshakeComplete = async (page, label, timeoutMs = 90_000) => {
   await openGroupInfo(page);
-  const membersHeader = page.getByText(`MEMBERS (${expectedCount})`, { exact: false }).first();
-  await membersHeader.waitFor({ state: "visible", timeout: timeoutMs });
-  log(`${label}: MEMBERS (${expectedCount}) is visible`);
-};
-
-const getInviteCodeFromGroupInfo = async (page) => {
-  await openGroupInfo(page);
-  const includeRelayCheckbox = page.getByLabel("Include relay address in invite").first();
-  await includeRelayCheckbox.waitFor({ state: "visible", timeout: 10_000 });
-  const includeRelayChecked = await includeRelayCheckbox.isChecked();
-  if (includeRelayChecked) {
-    throw new Error("Expected include-relay checkbox to be disabled by default");
-  }
-  await page.getByRole("button", { name: "Copy Invite Code" }).first().click();
-  const inviteCode = await page.evaluate(async () => {
-    try {
-      return await navigator.clipboard.readText();
-    } catch {
-      return "";
-    }
-  });
-  if (!inviteCode || inviteCode.trim().length < 30) {
-    throw new Error("Failed to read invite code from clipboard");
-  }
-  return inviteCode.trim();
+  const handshakeHeader = page.getByText("Handshake", { exact: false }).first();
+  const handshakeComplete = page.getByText("Complete", { exact: true }).first();
+  await handshakeHeader.waitFor({ state: "visible", timeout: timeoutMs });
+  await handshakeComplete.waitFor({ state: "visible", timeout: timeoutMs });
+  log(`${label}: DM handshake is complete`);
 };
 
 const sendMessage = async (page, text) => {
@@ -352,7 +334,7 @@ const main = async () => {
     ]);
 
     log("Starting DM flow: Bob invites Alice...");
-    await acceptDmWithRetry(alice, bob, alicePeerId, bobPeerId);
+    await acceptDmWithRetry(alice, bob, alicePeerId);
     await sleep(1_000);
 
     log("Reconfirming peer connection after DM acceptance...");
@@ -363,19 +345,9 @@ const main = async () => {
 
     log("Waiting for DM membership convergence...");
     await Promise.all([
-      waitForMembersCount(alice, 2, "Alice"),
-      waitForMembersCount(bob, 2, "Bob"),
+      waitForDmHandshakeComplete(alice, "Alice"),
+      waitForDmHandshakeComplete(bob, "Bob"),
     ]);
-
-    log("Validating invite payload excludes relay...");
-    const inviteCode = await getInviteCodeFromGroupInfo(alice);
-    const decodedInvite = decodeGroupInvite(inviteCode);
-    if (decodedInvite.success && decodedInvite.data.relayAddr !== undefined) {
-      throw new Error(`Expected relayAddr to be omitted, got: ${decodedInvite.data.relayAddr}`);
-    }
-    if (!decodedInvite.success) {
-      log(`Invite decode warning (non-fatal): ${decodedInvite.error.message}`);
-    }
 
     log("Exchanging DM messages...");
     await sendAndWaitWithRetry(
@@ -397,7 +369,7 @@ const main = async () => {
       "dm-no-relay-alice",
     );
 
-    log("Validation passed: DM invite without relay + bidirectional messages delivered.");
+    log("Validation passed: explicit DM acceptance + bidirectional messages delivered.");
 
     await aliceContext.close();
     await bobContext.close();

@@ -192,19 +192,22 @@ const acceptDmWithRetry = async (
   alicePage,
   bobPage,
   alicePeerId,
-  bobPeerId,
   attempts = 18,
 ) => {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     await startDm(bobPage, alicePeerId);
-    await startDm(alicePage, bobPeerId);
+    const dmRequestBanner = alicePage.getByRole("button", { name: /pending DM request/i }).first();
+    const bannerVisible = await isVisible(dmRequestBanner, 4_000);
+    if (bannerVisible) {
+      await dmRequestBanner.click();
+    }
     const acceptBtn = alicePage.getByRole("button", { name: "Accept" }).first();
     if (await isVisible(acceptBtn, 4_000)) {
       await acceptBtn.click();
       log(`Alice: accepted DM request on attempt ${attempt}`);
       return;
     }
-    log(`Alice: DM accept not visible yet (attempt ${attempt}/${attempts})`);
+    log(`Alice: DM accept not visible yet (attempt ${attempt}/${attempts}, bannerVisible=${bannerVisible})`);
     await sleep(1_500);
   }
   throw new Error("Timed out waiting for DM request acceptance UI");
@@ -218,11 +221,13 @@ const openGroupInfo = async (page) => {
   await groupInfoTitle.waitFor({ state: "visible", timeout: 10_000 });
 };
 
-const waitForMembersCount = async (page, expectedCount, label, timeoutMs = 90_000) => {
+const waitForDmHandshakeComplete = async (page, label, timeoutMs = 90_000) => {
   await openGroupInfo(page);
-  const membersHeader = page.getByText(`MEMBERS (${expectedCount})`, { exact: false }).first();
-  await membersHeader.waitFor({ state: "visible", timeout: timeoutMs });
-  log(`${label}: MEMBERS (${expectedCount}) is visible`);
+  const handshakeHeader = page.getByText("Handshake", { exact: false }).first();
+  const handshakeComplete = page.getByText("Complete", { exact: true }).first();
+  await handshakeHeader.waitFor({ state: "visible", timeout: timeoutMs });
+  await handshakeComplete.waitFor({ state: "visible", timeout: timeoutMs });
+  log(`${label}: DM handshake is complete`);
 };
 
 const sendMessage = async (page, text) => {
@@ -327,10 +332,10 @@ const main = async () => {
     ]);
 
     log("Starting DM flow...");
-    await acceptDmWithRetry(alice, bob, alicePeerId, bobPeerId);
+    await acceptDmWithRetry(alice, bob, alicePeerId);
     await Promise.all([
-      waitForMembersCount(alice, 2, "Alice"),
-      waitForMembersCount(bob, 2, "Bob"),
+      waitForDmHandshakeComplete(alice, "Alice"),
+      waitForDmHandshakeComplete(bob, "Bob"),
     ]);
 
     log("Exchanging pre-refresh messages...");

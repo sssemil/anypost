@@ -1,13 +1,17 @@
-import { createSignal } from "solid-js";
+import { Show, createEffect } from "solid-js";
 
 type MessageInputProps = {
   readonly onSend: (text: string) => void;
+  readonly value: string;
+  readonly onValueChange: (value: string) => void;
   readonly disabled: boolean;
   readonly placeholder?: string;
+  readonly modeLabel?: string | null;
+  readonly modePreview?: string | null;
+  readonly onCancelMode?: (() => void) | null;
 };
 
 export const MessageInput = (props: MessageInputProps) => {
-  const [inputText, setInputText] = createSignal("");
   let textareaRef: HTMLTextAreaElement | undefined;
 
   const resetHeight = () => {
@@ -17,14 +21,15 @@ export const MessageInput = (props: MessageInputProps) => {
     }
   };
 
+  createEffect(() => {
+    props.value;
+    queueMicrotask(() => resetHeight());
+  });
+
   const send = () => {
-    const text = inputText().trim();
+    const text = props.value.trim();
     if (!text) return;
     props.onSend(text);
-    setInputText("");
-    if (textareaRef) {
-      textareaRef.style.height = "auto";
-    }
   };
 
   const handleKeyDown = (e: KeyboardEvent) => {
@@ -35,13 +40,33 @@ export const MessageInput = (props: MessageInputProps) => {
   };
 
   return (
-    <div class="flex items-end gap-2">
+    <div class="space-y-2">
+      <Show when={props.modeLabel && props.modeLabel!.trim().length > 0}>
+        <div class="rounded-lg border border-tg-border bg-tg-hover px-3 py-2 flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <p class="text-[11px] uppercase tracking-wide text-tg-accent">{props.modeLabel}</p>
+            <Show when={props.modePreview && props.modePreview!.trim().length > 0}>
+              <p class="text-xs text-tg-text-dim truncate">{props.modePreview}</p>
+            </Show>
+          </div>
+          <Show when={props.onCancelMode}>
+            <button
+              type="button"
+              class="text-[11px] text-tg-text-dim hover:text-tg-text cursor-pointer"
+              onClick={() => props.onCancelMode?.()}
+            >
+              cancel
+            </button>
+          </Show>
+        </div>
+      </Show>
+      <div class="flex items-end gap-2">
       <textarea
         ref={textareaRef}
         rows={1}
-        value={inputText()}
+        value={props.value}
         onInput={(e) => {
-          setInputText(e.currentTarget.value);
+          props.onValueChange(e.currentTarget.value);
           resetHeight();
         }}
         onKeyDown={handleKeyDown}
@@ -51,13 +76,14 @@ export const MessageInput = (props: MessageInputProps) => {
       />
       <button
         onClick={send}
-        disabled={props.disabled || !inputText().trim()}
+        disabled={props.disabled || !props.value.trim()}
         class="w-10 h-10 rounded-full bg-tg-accent text-white flex items-center justify-center shrink-0 cursor-pointer disabled:opacity-40 hover:bg-tg-accent/80"
       >
         <svg viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5">
           <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
         </svg>
       </button>
+      </div>
     </div>
   );
 };

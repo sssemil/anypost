@@ -103,6 +103,7 @@ const formatDuration = (ms: number): string => {
 const ENVELOPES_PER_PAGE = 10;
 const SYNC_ACTIVE_MS = 30_000;
 const SYNC_STALE_MS = 5 * 60_000;
+const SYNC_PREVIEW_COUNT = 6;
 
 const formatRelativeTime = (timestampMs: number | null, nowMs: number): string => {
   if (timestampMs === null) return "--";
@@ -116,11 +117,6 @@ const formatRelativeTime = (timestampMs: number | null, nowMs: number): string =
   if (deltaHours < 24) return `${deltaHours}h ago`;
   const deltaDays = Math.floor(deltaHours / 24);
   return `${deltaDays}d ago`;
-};
-
-const shortHash = (hash: string | null): string => {
-  if (!hash) return "--";
-  return hash.length > 12 ? `${hash.slice(0, 10)}...` : hash;
 };
 
 const syncActivityAtMs = (progress: SyncPeerProgress): number =>
@@ -152,6 +148,10 @@ const summarizePayload = (payload: ActionPayload): string => {
       return `Join policy changed: ${payload.joinPolicy}`;
     case "message":
       return `Message: ${payload.text.slice(0, 80)}${payload.text.length > 80 ? "..." : ""}`;
+    case "message-edited":
+      return `Message edited: ${payload.targetActionId.slice(0, 8)}...`;
+    case "message-deleted":
+      return `Message deleted: ${payload.targetActionId.slice(0, 8)}...`;
     case "read-receipt":
       return `Read receipt up to ${payload.upToActionId.slice(0, 8)}...`;
   }
@@ -194,6 +194,8 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
   const [memberDirectMessageError, setMemberDirectMessageError] = createSignal("");
   const [memberDirectMessagePendingPeerId, setMemberDirectMessagePendingPeerId] = createSignal<string | null>(null);
   const [envelopePage, setEnvelopePage] = createSignal(0);
+  const [syncExpanded, setSyncExpanded] = createSignal(false);
+  const [syncAppPeersOnly, setSyncAppPeersOnly] = createSignal(true);
   const [nowMs, setNowMs] = createSignal(Date.now());
 
   const nowInterval = setInterval(() => setNowMs(Date.now()), 1000);
@@ -202,6 +204,8 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
   createEffect(() => {
     props.groupId;
     setEnvelopePage(0);
+    setSyncExpanded(false);
+    setSyncAppPeersOnly(true);
     setInviteCode("");
     setInviteQrDataUrl("");
     setShowInviteQr(false);
@@ -311,6 +315,22 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
       return a.peerId.localeCompare(b.peerId);
     });
     return rows;
+  });
+
+  const appPeerIds = createMemo(() => {
+    const ids = new Set<string>();
+    for (const member of props.members.values()) {
+      const peerId = props.publicKeyToPeerId.get(member.publicKeyHex);
+      if (peerId) ids.add(peerId);
+    }
+    if (props.directMessagePeerId) ids.add(props.directMessagePeerId);
+    return ids;
+  });
+
+  const visibleSyncRows = createMemo(() => {
+    if (!syncAppPeersOnly()) return syncRows();
+    const peers = appPeerIds();
+    return syncRows().filter((row) => peers.has(row.peerId));
   });
 
   const inviteDetails = createMemo(() => {
@@ -987,90 +1007,83 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
       </Show>
 
       <div>
-        <h4 class="text-xs font-medium text-tg-text-dim uppercase tracking-wider mb-2">
-          Node Sync Progress ({syncRows().length})
-        </h4>
+        <div class="flex items-center justify-between gap-2 mb-2">
+          <h4 class="text-xs font-medium text-tg-text-dim uppercase tracking-wider">
+            Node Sync Progress ({visibleSyncRows().length}
+            <Show when={syncAppPeersOnly()}>
+              {` / ${syncRows().length}`}
+            </Show>
+            )
+          </h4>
+          <label class="inline-flex items-center gap-1 text-[10px] text-tg-text-dim cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={syncAppPeersOnly()}
+              onChange={(event) => {
+                setSyncAppPeersOnly(event.currentTarget.checked);
+                setSyncExpanded(false);
+              }}
+              class="accent-tg-accent cursor-pointer"
+            />
+            App peers only
+          </label>
+        </div>
         <Show
-          when={syncRows().length > 0}
+          when={visibleSyncRows().length > 0}
           fallback={<p class="text-sm text-tg-text-dim">No per-node sync activity yet for this group.</p>}
         >
           <div class="rounded border border-tg-border bg-tg-hover divide-y divide-tg-border">
-            <For each={syncRows()}>
+            <For
+              each={syncExpanded()
+                ? visibleSyncRows()
+                : visibleSyncRows().slice(0, SYNC_PREVIEW_COUNT)}
+            >
               {(row) => (
-                <details class="px-2 py-2">
-                  <summary class="list-none cursor-pointer">
-                    <div class="flex items-center justify-between gap-2">
-                      <div class="flex items-center gap-2 min-w-0">
-                        <span
-                          class="w-2 h-2 rounded-full shrink-0"
-                          classList={{
-                            "bg-green-500": row.connected,
-                            "bg-gray-500": !row.connected,
-                          }}
-                        />
-                        <span class="text-xs text-tg-text truncate">{row.peerLabel}</span>
-                        <span class="font-mono text-[10px] text-tg-text-dim shrink-0">
-                          {truncatePeerId(row.peerId)}
-                        </span>
-                      </div>
-                      <div class="flex items-center gap-2 shrink-0">
-                        <span class="text-[10px] text-tg-text-dim">{row.lastSyncLabel}</span>
-                        <span class="text-[10px] text-tg-text">{row.envelopeHint}</span>
-                        <span
-                          class="text-[10px] uppercase px-1.5 py-0.5 rounded"
-                          classList={{
-                            "text-tg-success bg-tg-success/10": row.status === "active",
-                            "text-tg-warning bg-tg-warning/10": row.status === "stale",
-                            "text-tg-text-dim bg-tg-text-dim/10": row.status === "idle",
-                          }}
-                        >
-                          {row.status}
-                        </span>
-                      </div>
-                    </div>
-                  </summary>
-                  <div class="mt-2 rounded border border-tg-border bg-tg-chat px-2 py-2 text-[10px] space-y-1">
-                    <div class="flex justify-between gap-2">
-                      <span class="text-tg-text-dim">Requested</span>
-                      <span class="text-tg-text">
-                        {formatRelativeTime(row.progress.lastRequestedAtMs, nowMs())}
-                        {" · "}
-                        {shortHash(row.progress.lastRequestKnownHashHex)}
+                <div class="px-2 py-1.5">
+                  <div class="flex items-center justify-between gap-2">
+                    <div class="flex items-center gap-2 min-w-0">
+                      <span
+                        class="w-1.5 h-1.5 rounded-full shrink-0"
+                        classList={{
+                          "bg-green-500": row.connected,
+                          "bg-gray-500": !row.connected,
+                        }}
+                      />
+                      <span class="text-[11px] text-tg-text truncate">{row.peerLabel}</span>
+                      <span class="font-mono text-[10px] text-tg-text-dim shrink-0">
+                        {truncatePeerId(row.peerId)}
                       </span>
                     </div>
-                    <div class="flex justify-between gap-2">
-                      <span class="text-tg-text-dim">Served</span>
-                      <span class="text-tg-text">
-                        {formatRelativeTime(row.progress.lastServedAtMs, nowMs())}
-                        {" · "}
-                        {row.progress.lastServedEnvelopeCount}
+                    <div class="flex items-center gap-1.5 shrink-0">
+                      <span class="text-[10px] text-tg-text-dim">{row.lastSyncLabel}</span>
+                      <span class="text-[10px] text-tg-text">{row.envelopeHint}</span>
+                      <span
+                        class="text-[9px] uppercase px-1 py-0.5 rounded"
+                        classList={{
+                          "text-tg-success bg-tg-success/10": row.status === "active",
+                          "text-tg-warning bg-tg-warning/10": row.status === "stale",
+                          "text-tg-text-dim bg-tg-text-dim/10": row.status === "idle",
+                        }}
+                      >
+                        {row.status}
                       </span>
-                    </div>
-                    <div class="flex justify-between gap-2">
-                      <span class="text-tg-text-dim">Served known/head</span>
-                      <span class="text-tg-text">
-                        {shortHash(row.progress.lastServedKnownHashHex)}
-                        {" / "}
-                        {shortHash(row.progress.lastServedHeadHashHex)}
-                      </span>
-                    </div>
-                    <div class="flex justify-between gap-2">
-                      <span class="text-tg-text-dim">Received</span>
-                      <span class="text-tg-text">
-                        {formatRelativeTime(row.progress.lastReceivedAtMs, nowMs())}
-                        {" · "}
-                        {row.progress.lastReceivedEnvelopeCount}
-                      </span>
-                    </div>
-                    <div class="flex justify-between gap-2">
-                      <span class="text-tg-text-dim">Last received hash</span>
-                      <span class="text-tg-text">{shortHash(row.progress.lastReceivedHashHex)}</span>
                     </div>
                   </div>
-                </details>
+                </div>
               )}
             </For>
           </div>
+          <Show when={visibleSyncRows().length > SYNC_PREVIEW_COUNT}>
+            <button
+              type="button"
+              class="mt-1 text-[10px] text-tg-accent hover:text-tg-accent/80"
+              onClick={() => setSyncExpanded((value) => !value)}
+            >
+              {syncExpanded()
+                ? `Show less`
+                : `Show ${visibleSyncRows().length - SYNC_PREVIEW_COUNT} more`}
+            </button>
+          </Show>
         </Show>
       </div>
 

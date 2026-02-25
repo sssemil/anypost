@@ -1,6 +1,6 @@
 import "./polyfills.js";
 import { createRelayNode } from "./create-relay-node.js";
-import { createProviderCid, ANYPOST_RELAY_NAMESPACE } from "anypost-core/protocol";
+import { createProviderCid, ANYPOST_RELAY_NAMESPACE } from "anypost-core/protocol/dht-config";
 
 const RELAY_READVERTISE_INTERVAL_MS = 12 * 60 * 60 * 1000;
 

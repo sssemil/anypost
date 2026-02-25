@@ -14,6 +14,7 @@ import {
   createInviteGrant,
   verifyAndDecodeAction,
   isValidPeerId,
+  formatPeerIdForDisplay,
 } from "anypost-core/protocol";
 import type {
   MultiGroupChat,
@@ -33,6 +34,10 @@ import type {
   SyncProgressState,
   JoinPolicy,
   DirectMessageRequestEvent,
+  RelayContactBook,
+  PinnedPeerWatchdogState,
+  ChatMessageEvent,
+  SignedAction,
 } from "anypost-core/protocol";
 import { getCandidatesByRtt } from "anypost-core/protocol";
 import {
@@ -66,6 +71,8 @@ import { MessageInput } from "./chat/MessageInput.js";
 import { NetworkPanel } from "./network/NetworkPanel.js";
 import { EventLog } from "./network/EventLog.js";
 import { GroupInfoPanel } from "./chat/GroupInfoPanel.js";
+import { DirectMessageInfoPanel } from "./chat/DirectMessageInfoPanel.js";
+import { encodeQuotedMessage, parseQuotedMessage } from "./chat/message-quote.js";
 import { ContactsBookPage } from "./contacts/ContactsBookPage.js";
 import { ProfilePage } from "./profile/ProfilePage.js";
 import { AboutPage } from "./about/AboutPage.js";
@@ -110,14 +117,19 @@ const SYSTEM_SENDER_ID = "__system__";
 const CONTACTS_LAST_SEEN_UPDATE_MS = 60_000;
 const CONTACTS_SELF_NAME_HISTORY_LIMIT = 12;
 const PROFILE_SYNC_REQUEST_COOLDOWN_MS = 15_000;
-const DM_SELF_JOIN_REQUEST_COOLDOWN_MS = 15_000;
 const OUTGOING_DM_RETRY_INTERVAL_MS = 5_000;
 const OUTGOING_DM_RETRY_SWEEP_MS = 4_000;
+const ACTION_MESSAGE_DEDUP_MS = 1_500;
+const ACTION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const READ_RECEIPT_AUTO_SEND_COOLDOWN_MS = 1_500;
 const DEVTOOLS_RECORD_DURATION_MS = 3 * 60_000;
 const DEVTOOLS_RECORD_SNAPSHOT_MS = 1_000;
 const DEVTOOLS_RECORD_MAX_ENTRIES = 25_000;
 const PROJECT_GITHUB_URL = "https://github.com/sssemil/anypost";
 const DEFAULT_DIRECT_MESSAGE_GROUP_NAME = "Direct Message";
+
+const isWebSocketCompatibleBootstrapAddr = (addr: string): boolean =>
+  addr.includes("/ws") || addr.includes("/wss") || addr.includes("/webrtc") || addr.includes("/p2p-circuit");
 
 type DesktopRelayState = {
   readonly running: boolean;
@@ -182,6 +194,12 @@ type OutgoingDirectMessageRequest = {
   readonly lastAttemptAt: number | null;
   readonly attemptCount: number;
   readonly nextAttemptAt: number;
+};
+
+type MessageReadEntry = {
+  readonly peerId: string;
+  readonly label: string;
+  readonly readAt: number;
 };
 
 type DiagnosticsRecorderStatus = "idle" | "recording" | "ready";
@@ -394,19 +412,24 @@ export const App = () => {
 
   const [groupState, setGroupState] = createSignal<MultiGroupState>(createMultiGroupState());
   const [chatStatus, setChatStatus] = createSignal<"connecting" | "connected" | "disconnected">("connecting");
+  const [chatError, setChatError] = createSignal<string | null>(null);
   const [desktopRelayState, setDesktopRelayState] = createSignal<DesktopRelayState | null>(null);
   const [displayName, setDisplayNameState] = createSignal("");
   const [relayPoolState, setRelayPoolState] = createSignal<RelayPoolState | null>(null);
   const [groupDiscoveryState, setGroupDiscoveryState] = createSignal<GroupDiscoveryState | null>(null);
   const [relayCandidateState, setRelayCandidateState] = createSignal<RelayCandidateState | null>(null);
   const [relayReservationState, setRelayReservationState] = createSignal<RelayReservationState | null>(null);
+  const [relayContactBook, setRelayContactBook] = createSignal<RelayContactBook>(new Map());
   const [networkStatus, setNetworkStatus] = createSignal<NetworkStatus | null>(null);
   const [eventLog, setEventLog] = createSignal<readonly NetworkEvent[]>([]);
   const [latencyMap, setLatencyMap] = createSignal<ReadonlyMap<string, number>>(new Map());
   const [connectionMetrics, setConnectionMetrics] = createSignal<ConnectionMetrics | null>(null);
+  const [connectionReasonCounts, setConnectionReasonCounts] = createSignal<ReadonlyMap<string, number>>(new Map());
   const [peerDiscoveryMetricsByGroup, setPeerDiscoveryMetricsByGroup] = createSignal<ReadonlyMap<string, PeerDiscoveryMetrics>>(new Map());
   const [joinRetryState, setJoinRetryState] = createSignal<JoinRetryState>(new Map());
   const [syncProgressState, setSyncProgressState] = createSignal<SyncProgressState>(new Map());
+  const [peerPathCache, setPeerPathCache] = createSignal<ReadonlyMap<string, readonly string[]>>(new Map());
+  const [pinnedPeerWatchdogState, setPinnedPeerWatchdogState] = createSignal<PinnedPeerWatchdogState>(new Map());
   const [mobileView, setMobileView] = createSignal(createMobileViewState());
   const [actionChainState, setActionChainState] = createSignal<ActionChainGroupState | null>(null);
   const [pendingJoinsMap, setPendingJoinsMap] = createSignal<ReadonlyMap<string, readonly PendingJoinRequest[]>>(new Map());
@@ -421,6 +444,9 @@ export const App = () => {
     loadOutgoingDirectMessageRequests(),
   );
   const [pendingDesktopInviteCodes, setPendingDesktopInviteCodes] = createSignal<readonly string[]>([]);
+  const [messageDraft, setMessageDraft] = createSignal("");
+  const [replyTargetMessage, setReplyTargetMessage] = createSignal<ChatMessageEvent | null>(null);
+  const [editTargetMessage, setEditTargetMessage] = createSignal<ChatMessageEvent | null>(null);
   const [profileSyncDebugTick, setProfileSyncDebugTick] = createSignal(0);
   const [diagnosticsRecorder, setDiagnosticsRecorder] = createSignal<DiagnosticsRecorderState>({
     status: "idle",
@@ -440,8 +466,8 @@ export const App = () => {
   let pingInterval: ReturnType<typeof setInterval> | undefined;
   let outgoingDmRetrySweepInFlight = false;
   const profileSyncLastRequestAtByPeer = new Map<string, number>();
-  const dmSelfJoinLastRequestAtByGroup = new Map<string, number>();
-  const dmAckByGroupPeer = new Set<string>();
+  const readReceiptLastSentByGroup = new Map<string, string>();
+  const readReceiptLastAttemptAtByGroup = new Map<string, number>();
   let diagnosticsSnapshotInterval: ReturnType<typeof setInterval> | undefined;
   let diagnosticsProgressInterval: ReturnType<typeof setInterval> | undefined;
   let diagnosticsStopTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -701,6 +727,29 @@ export const App = () => {
             })),
           }
         : null,
+      relayContacts: [...relayContactBook().values()].map((entry) => ({
+        peerId: entry.peerId,
+        addresses: entry.addresses,
+        sources: entry.sources,
+        successCount: entry.successCount,
+        failureCount: entry.failureCount,
+        consecutiveFailures: entry.consecutiveFailures,
+        averageRttMs: entry.averageRttMs,
+        quarantinedUntilMs: entry.quarantinedUntilMs,
+        score: entry.score,
+      })),
+      peerPathCache: [...peerPathCache().entries()].map(([peerId, paths]) => ({
+        peerId,
+        paths,
+      })),
+      pinnedWatchdog: [...pinnedPeerWatchdogState().values()].map((entry) => ({
+        peerId: entry.peerId,
+        status: entry.status,
+        consecutiveFailures: entry.consecutiveFailures,
+        lastSuccessfulPingAtMs: entry.lastSuccessfulPingAtMs,
+        lastReconnectAttemptAtMs: entry.lastReconnectAttemptAtMs,
+      })),
+      connectionReasonCounts: [...connectionReasonCounts().entries()],
       desktopRelay: desktopRelayState()
         ? {
             running: desktopRelayState()!.running,
@@ -1015,12 +1064,23 @@ export const App = () => {
     setActionChainState(chat.getActionChainState(activeId));
   };
 
-  const syncMessagesFromActionChain = (groupId: string) => {
+  const syncMessagesFromActionChain = (
+    groupId: string,
+    options?: { readonly historical?: boolean },
+  ) => {
     const currentChat = chat;
     if (!currentChat) return;
+    const historical = options?.historical ?? false;
+    const eventType = historical ? "message-sent" : "message-received";
     const chainState = currentChat.getActionChainState(groupId);
     const envelopes = currentChat.getActionChainEnvelopes(groupId);
     if (envelopes.length === 0) return;
+    const ownKeyHex = ownPublicKeyHex();
+    const canHydrateMessages = chainState
+      ? (chainState.isDirectMessage
+        ? chainState.dmHandshakeComplete
+        : chainState.members.has(ownKeyHex))
+      : false;
 
     if (chainState) {
       for (const member of chainState.members.values()) {
@@ -1035,7 +1095,7 @@ export const App = () => {
       (groupState().groups.get(groupId)?.messages ?? []).map((m) => m.id),
     );
     const pubKeyMap = publicKeyToPeerIdMap();
-      const memberLabelFromPublicKey = (publicKey: Uint8Array): string => {
+    const memberLabelFromPublicKey = (publicKey: Uint8Array): string => {
       const memberHex = toHex(publicKey);
       const memberPeerId = pubKeyMap.get(memberHex);
       if (memberPeerId) {
@@ -1046,17 +1106,89 @@ export const App = () => {
       }
       return `${memberHex.slice(0, 8)}...${memberHex.slice(-8)}`;
     };
-
+    const resolveAuthorPeerId = (publicKey: Uint8Array): string => {
+      const memberHex = toHex(publicKey);
+      if (memberHex === ownKeyHex && currentChat) return currentChat.peerId;
+      return pubKeyMap.get(memberHex) ?? `pk:${memberHex}`;
+    };
+    const canonicalMessagesById = new Map<string, {
+      readonly id: string;
+      readonly senderPeerId: string;
+      readonly authorPublicKeyHex: string;
+      readonly senderDisplayName: string | undefined;
+      text: string;
+      readonly timestamp: number;
+      deleted: boolean;
+    }>();
+    const latestEditByTargetId = new Map<string, {
+      readonly newText: string;
+      readonly editorPublicKeyHex: string;
+      readonly editedAt: number;
+    }>();
+    const latestDeleteByTargetId = new Map<string, {
+      readonly deleterPublicKeyHex: string;
+      readonly deletedAt: number;
+    }>();
+    const decodedActions: SignedAction[] = [];
     for (const envelope of envelopes) {
       const decoded = verifyAndDecodeAction(envelope);
       if (!decoded.success) continue;
-      const action = decoded.data;
+      decodedActions.push(decoded.data);
+    }
+    decodedActions
+      .sort((left, right) => {
+        if (left.timestamp !== right.timestamp) return left.timestamp - right.timestamp;
+        return left.id.localeCompare(right.id);
+      });
+
+    for (const action of decodedActions) {
+      if (action.payload.type === "message") {
+        if (!canHydrateMessages) continue;
+        const senderPeerId = resolveAuthorPeerId(action.authorPublicKey);
+        const authorPublicKeyHex = toHex(action.authorPublicKey);
+        const senderDisplayName = memberLabelFromPublicKey(action.authorPublicKey);
+        canonicalMessagesById.set(action.id, {
+          id: action.id,
+          senderPeerId,
+          authorPublicKeyHex,
+          senderDisplayName,
+          text: action.payload.text,
+          timestamp: action.timestamp,
+          deleted: false,
+        });
+        continue;
+      }
+      if (action.payload.type === "message-edited") {
+        if (!canHydrateMessages) continue;
+        const editorPublicKeyHex = toHex(action.authorPublicKey);
+        const previous = latestEditByTargetId.get(action.payload.targetActionId);
+        if (!previous || action.timestamp > previous.editedAt) {
+          latestEditByTargetId.set(action.payload.targetActionId, {
+            newText: action.payload.newText,
+            editorPublicKeyHex,
+            editedAt: action.timestamp,
+          });
+        }
+        continue;
+      }
+      if (action.payload.type === "message-deleted") {
+        if (!canHydrateMessages) continue;
+        const deleterPublicKeyHex = toHex(action.authorPublicKey);
+        const previous = latestDeleteByTargetId.get(action.payload.targetActionId);
+        if (!previous || action.timestamp > previous.deletedAt) {
+          latestDeleteByTargetId.set(action.payload.targetActionId, {
+            deleterPublicKeyHex,
+            deletedAt: action.timestamp,
+          });
+        }
+        continue;
+      }
       if (action.payload.type === "member-approved") {
         const indicatorId = `join:${action.id}`;
         if (existingIds.has(indicatorId)) continue;
         const joinedLabel = memberLabelFromPublicKey(action.payload.memberPublicKey);
         dispatchGroupEvent({
-          type: "message-received",
+          type: eventType,
           groupId,
           message: {
             id: indicatorId,
@@ -1075,7 +1207,7 @@ export const App = () => {
         if (existingIds.has(indicatorId)) continue;
         const leftLabel = memberLabelFromPublicKey(action.authorPublicKey);
         dispatchGroupEvent({
-          type: "message-received",
+          type: eventType,
           groupId,
           message: {
             id: indicatorId,
@@ -1094,7 +1226,7 @@ export const App = () => {
         if (existingIds.has(indicatorId)) continue;
         const kickedLabel = memberLabelFromPublicKey(action.payload.memberPublicKey);
         dispatchGroupEvent({
-          type: "message-received",
+          type: eventType,
           groupId,
           message: {
             id: indicatorId,
@@ -1106,6 +1238,103 @@ export const App = () => {
         });
         existingIds.add(indicatorId);
       }
+    }
+
+    for (const [targetActionId, edit] of latestEditByTargetId.entries()) {
+      const target = canonicalMessagesById.get(targetActionId);
+      if (!target) continue;
+      if (target.authorPublicKeyHex !== edit.editorPublicKeyHex) continue;
+      target.text = edit.newText;
+    }
+    for (const [targetActionId, deleted] of latestDeleteByTargetId.entries()) {
+      const target = canonicalMessagesById.get(targetActionId);
+      if (!target) continue;
+      if (target.authorPublicKeyHex !== deleted.deleterPublicKeyHex) continue;
+      target.deleted = true;
+    }
+
+    const canonicalActionMessages = [...canonicalMessagesById.values()]
+      .filter((message) => !message.deleted)
+      .sort((left, right) => {
+        if (left.timestamp !== right.timestamp) return left.timestamp - right.timestamp;
+        return left.id.localeCompare(right.id);
+      });
+
+    for (const actionMessage of canonicalActionMessages) {
+      if (existingIds.has(actionMessage.id)) continue;
+      const hasEquivalentOptimistic = (groupState().groups.get(groupId)?.messages ?? []).some((message) =>
+        message.id !== actionMessage.id
+        && message.senderPeerId === actionMessage.senderPeerId
+        && message.text === actionMessage.text
+        && Math.abs(message.timestamp - actionMessage.timestamp) <= ACTION_MESSAGE_DEDUP_MS);
+      if (hasEquivalentOptimistic) continue;
+      dispatchGroupEvent({
+        type: eventType,
+        groupId,
+        message: {
+          id: actionMessage.id,
+          senderPeerId: actionMessage.senderPeerId,
+          senderDisplayName: actionMessage.senderDisplayName,
+          text: actionMessage.text,
+          timestamp: actionMessage.timestamp,
+        },
+      });
+      existingIds.add(actionMessage.id);
+    }
+    if (canHydrateMessages) {
+      const canonicalById = new Map(
+        canonicalActionMessages.map((message) => [message.id, message] as const),
+      );
+      const canonicalIds = new Set(canonicalActionMessages.map((message) => message.id));
+      setGroupState((state) => {
+        const group = state.groups.get(groupId);
+        if (!group || group.messages.length === 0) return state;
+        let changed = false;
+        const nextMessages = group.messages
+          .filter((message) => {
+            if (message.senderPeerId === SYSTEM_SENDER_ID) return true;
+            if (canonicalIds.has(message.id)) return true;
+            if (ACTION_ID_PATTERN.test(message.id)) {
+              changed = true;
+              return false;
+            }
+            const isOptimisticDuplicate = canonicalActionMessages.some((canonical) =>
+              canonical.senderPeerId === message.senderPeerId
+              && canonical.text === message.text
+              && Math.abs(canonical.timestamp - message.timestamp) <= ACTION_MESSAGE_DEDUP_MS);
+            if (isOptimisticDuplicate) changed = true;
+            return !isOptimisticDuplicate;
+          })
+          .map((message) => {
+            const canonical = canonicalById.get(message.id);
+            if (!canonical) return message;
+            if (
+              message.senderPeerId === canonical.senderPeerId
+              && message.senderDisplayName === canonical.senderDisplayName
+              && message.text === canonical.text
+              && message.timestamp === canonical.timestamp
+            ) {
+              return message;
+            }
+            changed = true;
+            return {
+              ...message,
+              senderPeerId: canonical.senderPeerId,
+              senderDisplayName: canonical.senderDisplayName,
+              text: canonical.text,
+              timestamp: canonical.timestamp,
+            };
+          });
+        if (!changed) return state;
+        const groups = new Map(state.groups);
+        groups.set(groupId, {
+          ...group,
+          messages: nextMessages,
+        });
+        const nextState: MultiGroupState = { ...state, groups };
+        savePersistedGroups(nextState, chat);
+        return nextState;
+      });
     }
   };
 
@@ -1131,6 +1360,29 @@ export const App = () => {
     const activeId = groupState().activeGroupId;
     refreshActionChainState();
     if (activeId) syncMessagesFromActionChain(activeId);
+  });
+
+  createEffect(() => {
+    chatStatus();
+    const activeGroup = getActiveGroup(groupState());
+    const lastMessageId = activeGroup?.messages[activeGroup.messages.length - 1]?.id ?? null;
+    const receiptCount = actionChainState()?.readReceipts.size ?? 0;
+    lastMessageId;
+    receiptCount;
+    maybeSendReadReceiptForActiveGroup();
+  });
+
+  createEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+    const onPotentialRead = () => {
+      maybeSendReadReceiptForActiveGroup();
+    };
+    window.addEventListener("focus", onPotentialRead);
+    document.addEventListener("visibilitychange", onPotentialRead);
+    onCleanup(() => {
+      window.removeEventListener("focus", onPotentialRead);
+      document.removeEventListener("visibilitychange", onPotentialRead);
+    });
   });
 
   const dispatchGroupEvent = (event: Parameters<typeof transitionMultiGroup>[1]) => {
@@ -1353,10 +1605,10 @@ export const App = () => {
       const messages = persisted.messages[groupId];
       if (messages) {
         for (const msg of messages) {
-          dispatchGroupEvent({ type: "message-received", groupId, message: msg });
+          dispatchGroupEvent({ type: "message-sent", groupId, message: msg });
         }
       }
-      syncMessagesFromActionChain(groupId);
+      syncMessagesFromActionChain(groupId, { historical: true });
     }
 
     if (persisted.activeGroupId) {
@@ -1368,13 +1620,18 @@ export const App = () => {
 
   const startChat = async (accountKey: AccountKey) => {
     try {
+      setChatError(null);
       const desktop = desktopBridge();
+      const selectedTransportProfile = ENV_TRANSPORT_PROFILE ?? "websocket";
       const bootstrapPeers = ENV_RELAY_MULTIADDR ? [ENV_RELAY_MULTIADDR] : [];
       if (desktop) {
         const relayState = await desktop.getRelayState().catch(() => null);
         if (relayState?.running) {
           setDesktopRelayState(relayState);
           for (const addr of relayState.listenAddrs) {
+            if (selectedTransportProfile === "websocket" && !isWebSocketCompatibleBootstrapAddr(addr)) {
+              continue;
+            }
             if (!bootstrapPeers.includes(addr)) bootstrapPeers.push(addr);
           }
         }
@@ -1383,6 +1640,8 @@ export const App = () => {
       type PeerPathCacheStoreCompat = {
         readonly getPeerPathCache?: () => Promise<ReadonlyMap<string, readonly string[]>>;
         readonly savePeerPathCache?: (cache: ReadonlyMap<string, readonly string[]>) => Promise<void>;
+        readonly getRelayContactBook?: () => Promise<RelayContactBook>;
+        readonly saveRelayContactBook?: (book: RelayContactBook) => Promise<void>;
         readonly getJoinRetryState?: () => Promise<JoinRetryState>;
         readonly saveJoinRetryState?: (state: JoinRetryState) => Promise<void>;
         readonly getSyncProgressState?: () => Promise<SyncProgressState>;
@@ -1394,6 +1653,7 @@ export const App = () => {
       const store = await openAccountStore();
       let peerPrivateKey: Uint8Array | undefined;
       let initialPeerPathCache: ReadonlyMap<string, readonly string[]> = new Map();
+      let initialRelayContactBook: RelayContactBook = new Map();
       let initialJoinRetryState: JoinRetryState = new Map();
       let initialSyncProgressState: SyncProgressState = new Map();
       let initialContactsBook: ContactsBook = new Map();
@@ -1404,6 +1664,9 @@ export const App = () => {
         const compatStore = store as AccountStore & PeerPathCacheStoreCompat;
         if (typeof compatStore.getPeerPathCache === "function") {
           initialPeerPathCache = await compatStore.getPeerPathCache();
+        }
+        if (typeof compatStore.getRelayContactBook === "function") {
+          initialRelayContactBook = await compatStore.getRelayContactBook();
         }
         if (typeof compatStore.getJoinRetryState === "function") {
           initialJoinRetryState = await compatStore.getJoinRetryState();
@@ -1424,6 +1687,8 @@ export const App = () => {
       setContactsBook(initialContactsBook);
       setBlockedPeerIds(initialBlockedPeerIds);
       setSyncProgressState(initialSyncProgressState);
+      setPeerPathCache(initialPeerPathCache);
+      setRelayContactBook(initialRelayContactBook);
 
       const initialPublicKeyToPeerId = loadPublicKeyToPeerId();
       const initialPendingJoins = loadPendingJoins();
@@ -1438,6 +1703,20 @@ export const App = () => {
             }
           } finally {
             pathStore.close();
+          }
+        })();
+      };
+
+      const persistRelayContactBook = (book: RelayContactBook) => {
+        void (async () => {
+          const relayStore = await openAccountStore();
+          try {
+            const compatStore = relayStore as AccountStore & PeerPathCacheStoreCompat;
+            if (typeof compatStore.saveRelayContactBook === "function") {
+              await compatStore.saveRelayContactBook(book);
+            }
+          } finally {
+            relayStore.close();
           }
         })();
       };
@@ -1475,15 +1754,21 @@ export const App = () => {
         peerPrivateKey,
         initialPublicKeyToPeerId,
         initialPeerPathCache,
+        initialRelayContactBook,
         initialJoinRetryState,
         initialSyncProgressState,
         initialRelayHints,
         bootstrapPeers,
-        useTransports: ENV_TRANSPORT_PROFILE ?? (desktop ? "desktop" : "websocket"),
+        useTransports: selectedTransportProfile,
         discoveryProfile: "aggressive",
         onRelayPoolStateChange: setRelayPoolState,
         onGroupDiscoveryStateChange: setGroupDiscoveryState,
         onRelayCandidateStateChange: setRelayCandidateState,
+        onRelayContactBookChange: (book) => {
+          setRelayContactBook(book);
+          persistRelayContactBook(book);
+        },
+        onPinnedPeerWatchdogStateChange: setPinnedPeerWatchdogState,
         onRelayReservationStateChange: (state) => {
           setRelayReservationState(state);
           saveRelayHints(pickRelayHintsFromState(state));
@@ -1504,6 +1789,7 @@ export const App = () => {
           }
         },
         onPeerPathCacheChange: (cache) => {
+          setPeerPathCache(cache);
           persistPeerPathCache(cache);
         },
         onJoinRetryStateChange: (state) => {
@@ -1525,7 +1811,13 @@ export const App = () => {
         },
       });
 
+      setPeerPathCache(chat.getPeerPathCache());
+      setRelayContactBook(chat.getRelayContactBook());
+      setPinnedPeerWatchdogState(chat.getPinnedPeerWatchdogState());
+      setConnectionReasonCounts(chat.getConnectionReasonCounts());
+
       setChatStatus("connected");
+      setChatError(null);
 
       if (!peerPrivateKey) {
         const saveStore = await openAccountStore();
@@ -1558,6 +1850,10 @@ export const App = () => {
 
       statusInterval = setInterval(() => {
         refreshNetworkStatus();
+        if (chat) {
+          setConnectionReasonCounts(chat.getConnectionReasonCounts());
+          setPinnedPeerWatchdogState(chat.getPinnedPeerWatchdogState());
+        }
         const activeId = groupState().activeGroupId;
         if (activeId) syncMessagesFromActionChain(activeId);
       }, 3000);
@@ -1583,7 +1879,6 @@ export const App = () => {
           void deriveDirectMessageGroupId(liveChat.peerId, msg.senderPeerId).then((dmGroupId) => {
             if (dmGroupId === msg.groupId) {
               setDirectMessagePeerForGroup(msg.groupId, msg.senderPeerId);
-              markDirectMessagePeerAcknowledged(msg.groupId, msg.senderPeerId);
             }
           }).catch(() => {});
         }
@@ -1592,7 +1887,6 @@ export const App = () => {
           return;
         }
         if (dmPeerId && dmPeerId === msg.senderPeerId) {
-          markDirectMessagePeerAcknowledged(msg.groupId, msg.senderPeerId);
         }
         maybeRequestProfileSync(msg.senderPeerId);
         removeOutgoingDirectMessageRequests((entry) =>
@@ -1619,16 +1913,16 @@ export const App = () => {
 
         const bridge = desktopBridge();
         if (bridge && msg.senderPeerId !== liveChat?.peerId) {
-          const focused = typeof document !== "undefined" && !document.hidden && document.hasFocus();
-          if (!focused && msg.groupId !== groupState().activeGroupId) {
-            const groupName = groupState().groups.get(msg.groupId)?.groupName ?? "Anypost";
-            bridge.notifyMessage({
-              title: msg.senderDisplayName || "New message",
-              body: `${groupName}: ${msg.text}`,
-              groupId: msg.groupId,
-              senderPeerId: msg.senderPeerId,
-            });
-          }
+            const focused = typeof document !== "undefined" && !document.hidden && document.hasFocus();
+            if (!focused && msg.groupId !== groupState().activeGroupId) {
+              const groupName = groupState().groups.get(msg.groupId)?.groupName ?? "Anypost";
+              bridge.notifyMessage({
+                title: msg.senderDisplayName || "New message",
+                body: `${groupName}: ${parseQuotedMessage(msg.text).body}`,
+                groupId: msg.groupId,
+                senderPeerId: msg.senderPeerId,
+              });
+            }
         }
       });
 
@@ -1642,7 +1936,6 @@ export const App = () => {
           inviteValidationError: evt.inviteValidationError ?? null,
         });
         upsertContact(evt.senderPeerId, { groupId: evt.groupId });
-        markDirectMessagePeerAcknowledged(evt.groupId, evt.senderPeerId);
         if (evt.autoApproved || evt.alreadyMember) return;
         const pubKeyHex = toHex(new Uint8Array(evt.requesterPublicKey));
         setPendingJoinsMap((prev) => {
@@ -1668,10 +1961,64 @@ export const App = () => {
         upsertContact(evt.senderPeerId, { groupId: evt.groupId });
         maybeRequestProfileSync(evt.senderPeerId);
         setDirectMessagePeerForGroup(evt.groupId, evt.senderPeerId);
-        markDirectMessagePeerAcknowledged(evt.groupId, evt.senderPeerId);
+
+        const reciprocalToOutgoing = outgoingDirectMessageRequests().some((entry) =>
+          entry.groupId === evt.groupId && entry.targetPeerId === evt.senderPeerId);
+        if (reciprocalToOutgoing && chat) {
+          void (async () => {
+            const currentChat = chat;
+            if (!currentChat) return;
+            const decoded = decodeGroupInvite(evt.inviteCode);
+            if (!decoded.success) {
+              appendDiagnosticsEntry("dm-request-reciprocal-invalid-invite", {
+                requestId: evt.requestId,
+                senderPeerId: evt.senderPeerId,
+                groupId: evt.groupId,
+              });
+              return;
+            }
+            try {
+              const { groupId } = await currentChat.joinViaInvite(decoded.data);
+              const chainState = currentChat.getActionChainState(groupId);
+              if (!hasGroup(groupState(), groupId)) {
+                dispatchGroupEvent({
+                  type: "group-joined",
+                  groupId,
+                  groupName: chainState?.groupName || "Direct Message",
+                  hasActionChain: true,
+                });
+              }
+              refreshActionChainState();
+              syncMessagesFromActionChain(groupId);
+            } catch (error) {
+              appendDiagnosticsEntry("dm-request-reciprocal-join-failed", {
+                requestId: evt.requestId,
+                senderPeerId: evt.senderPeerId,
+                groupId: evt.groupId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+              return;
+            }
+            removeOutgoingDirectMessageRequests((entry) =>
+              entry.groupId === evt.groupId && entry.targetPeerId === evt.senderPeerId);
+            appendDiagnosticsEntry("dm-request-reciprocal-accepted", {
+              requestId: evt.requestId,
+              senderPeerId: evt.senderPeerId,
+              groupId: evt.groupId,
+            });
+          })();
+          return;
+        }
+
         upsertPendingDirectMessageRequest(evt);
       });
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      appendDiagnosticsEntry("start-chat-failed", {
+        error: message,
+      });
+      console.error("[anypost-web] startChat failed", error);
+      setChatError(message);
       setChatStatus("disconnected");
     }
   };
@@ -1716,38 +2063,122 @@ export const App = () => {
     onCleanup(() => clearInterval(interval));
   });
 
+  createEffect(() => {
+    groupState().activeGroupId;
+    setReplyTargetMessage(null);
+    setEditTargetMessage(null);
+    setMessageDraft("");
+  });
+
   const handleSendMessage = (text: string) => {
     const currentChat = chat;
     const activeGroup = getActiveGroup(groupState());
     if (!currentChat || !activeGroup) return;
+    const trimmedText = text.trim();
+    if (trimmedText.length === 0) return;
 
     const groupId = activeGroup.groupId;
+    const editTarget = editTargetMessage();
+    const replyTarget = replyTargetMessage();
     appendDiagnosticsEntry("message-send-requested", {
       groupId,
-      textPreview: text.slice(0, 160),
+      mode: editTarget ? "edit" : (replyTarget ? "reply" : "send"),
+      textPreview: trimmedText.slice(0, 160),
     });
 
     const name = displayName() || undefined;
-    currentChat.sendMessage(groupId, text, name).then(() => {
-      appendDiagnosticsEntry("message-send-succeeded", { groupId });
+    if (editTarget) {
+      if (editTarget.senderPeerId !== currentChat.peerId) return;
+      const existing = parseQuotedMessage(editTarget.text);
+      const editedText = existing.quote
+        ? encodeQuotedMessage(trimmedText, existing.quote)
+        : trimmedText;
+      currentChat.editMessage(groupId, editTarget.id, editedText).then(() => {
+        appendDiagnosticsEntry("message-edit-succeeded", { groupId, targetActionId: editTarget.id });
+        setEditTargetMessage(null);
+        setMessageDraft("");
+        syncMessagesFromActionChain(groupId);
+      }).catch((error) => {
+        appendDiagnosticsEntry("message-edit-failed", {
+          groupId,
+          targetActionId: editTarget.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      return;
+    }
+
+    const outgoingText = (() => {
+      if (!replyTarget) return trimmedText;
+      const sender = resolveMessageSenderLabel(replyTarget.senderPeerId, replyTarget.senderDisplayName);
+      const preview = parseQuotedMessage(replyTarget.text).body;
+      return encodeQuotedMessage(trimmedText, {
+        messageId: replyTarget.id,
+        senderPeerId: replyTarget.senderPeerId,
+        senderLabel: sender,
+        text: preview,
+      });
+    })();
+
+    currentChat.sendMessage(groupId, outgoingText, name).then(() => {
+      appendDiagnosticsEntry("message-send-succeeded", { groupId, repliedToActionId: replyTarget?.id ?? null });
       upsertContact(currentChat.peerId, {
         selfName: name ?? null,
         groupId,
       });
-      dispatchGroupEvent({
-        type: "message-sent",
+      setReplyTargetMessage(null);
+      setMessageDraft("");
+      syncMessagesFromActionChain(groupId);
+    }).catch((error) => {
+      appendDiagnosticsEntry("message-send-failed", {
         groupId,
-        message: {
-          id: crypto.randomUUID(),
-          senderPeerId: currentChat.peerId,
-          senderDisplayName: name,
-          text,
-          timestamp: Date.now(),
-        },
+        error: error instanceof Error ? error.message : String(error),
       });
-    }).catch(() => {
-      appendDiagnosticsEntry("message-send-failed", { groupId });
+      setChatError(error instanceof Error ? error.message : String(error));
       setChatStatus("disconnected");
+    });
+  };
+
+  const handleReplyMessage = (message: ChatMessageEvent) => {
+    setEditTargetMessage(null);
+    setReplyTargetMessage(message);
+  };
+
+  const handleEditMessage = (message: ChatMessageEvent) => {
+    const currentChat = chat;
+    if (!currentChat) return;
+    if (message.senderPeerId !== currentChat.peerId) return;
+    setReplyTargetMessage(null);
+    setEditTargetMessage(message);
+    setMessageDraft(parseQuotedMessage(message.text).body);
+  };
+
+  const handleDeleteMessage = (message: ChatMessageEvent) => {
+    const currentChat = chat;
+    const activeGroup = getActiveGroup(groupState());
+    if (!currentChat || !activeGroup) return;
+    if (message.senderPeerId !== currentChat.peerId) return;
+    const groupId = activeGroup.groupId;
+    appendDiagnosticsEntry("message-delete-requested", {
+      groupId,
+      targetActionId: message.id,
+    });
+    currentChat.deleteMessage(groupId, message.id).then(() => {
+      appendDiagnosticsEntry("message-delete-succeeded", {
+        groupId,
+        targetActionId: message.id,
+      });
+      if (editTargetMessage()?.id === message.id) {
+        setEditTargetMessage(null);
+        setMessageDraft("");
+      }
+      syncMessagesFromActionChain(groupId);
+    }).catch((error) => {
+      appendDiagnosticsEntry("message-delete-failed", {
+        groupId,
+        targetActionId: message.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
   };
 
@@ -1894,24 +2325,11 @@ export const App = () => {
     });
   };
 
-  const directMessageAckKey = (groupId: string, peerId: string): string =>
-    `${groupId}:${peerId}`;
-
-  const markDirectMessagePeerAcknowledged = (groupId: string, peerId: string) => {
-    if (!groupId || !peerId) return;
-    dmAckByGroupPeer.add(directMessageAckKey(groupId, peerId));
-  };
-
-  const hasDirectMessagePeerAcknowledged = (groupId: string, peerId: string): boolean =>
-    dmAckByGroupPeer.has(directMessageAckKey(groupId, peerId));
-
   const targetPeerHasJoinedGroup = (groupId: string, targetPeerId: string): boolean => {
     const chainState = chat?.getActionChainState(groupId);
     if (!chainState) return false;
     if (chainState.isDirectMessage) {
-      // For DMs, local approval writes can exist before the remote peer has even
-      // discovered/accepted the DM. Treat "joined" as an explicit remote ack.
-      return hasDirectMessagePeerAcknowledged(groupId, targetPeerId);
+      return chainState.dmHandshakeComplete;
     }
     const map = publicKeyToPeerIdMap();
     for (const member of chainState.members.values()) {
@@ -2008,18 +2426,6 @@ export const App = () => {
               inviteCode: normalizedInviteCode,
             };
 
-        const ownKeyHex = ownPublicKeyHex();
-        const ownMembershipMissing = !!state && !!ownKeyHex && !state.members.has(ownKeyHex);
-        if (ownMembershipMissing) {
-          const lastRequestedAt = dmSelfJoinLastRequestAtByGroup.get(entry.groupId) ?? 0;
-          if (now - lastRequestedAt >= DM_SELF_JOIN_REQUEST_COOLDOWN_MS) {
-            dmSelfJoinLastRequestAtByGroup.set(entry.groupId, now);
-            appendDiagnosticsEntry("dm-self-join-requested", {
-              groupId: entry.groupId,
-            });
-            void currentChat.requestJoin(entry.groupId).catch(() => {});
-          }
-        }
         if (targetPeerHasJoinedGroup(entry.groupId, entry.targetPeerId)) {
           appendDiagnosticsEntry("dm-request-resolved", {
             requestKey: entry.requestKey,
@@ -2150,7 +2556,11 @@ export const App = () => {
 
       const existingGroup = groupState().groups.get(dmGroupId);
       let chainState = currentChat.getActionChainState(dmGroupId);
-      if (!chainState || chainState.createdAt <= 0) {
+      const ownKeyHex = ownPublicKeyHex();
+      const localDmGenesisMissing = !!chainState?.isDirectMessage &&
+        !!ownKeyHex &&
+        !chainState.dmGenesisContributorPublicKeys.has(ownKeyHex);
+      if (!chainState || chainState.createdAt <= 0 || localDmGenesisMissing) {
         await currentChat.createDirectMessageGroupWithId(dmGroupId, [currentChat.peerId, trimmedTarget]);
         chainState = currentChat.getActionChainState(dmGroupId);
         if (existingGroup) {
@@ -2177,38 +2587,6 @@ export const App = () => {
 
       dispatchGroupEvent({ type: "group-selected", groupId: dmGroupId });
       dispatchMobileView({ type: "group-selected" });
-
-      const dmState = currentChat.getActionChainState(dmGroupId);
-      const ownRoleInDm = ownPublicKeyHex()
-        ? dmState?.members.get(ownPublicKeyHex())?.role
-        : undefined;
-      if (
-        dmState &&
-        dmState.joinPolicy !== "auto_with_invite" &&
-        (ownRoleInDm === "owner" || ownRoleInDm === "admin")
-      ) {
-        try {
-          await currentChat.setJoinPolicy(dmGroupId, "auto_with_invite");
-        } catch {
-          // Best-effort for legacy groups created before DM auto-invite policy.
-        }
-      }
-
-      const targetPublicKeyHex = [...publicKeyToPeerIdMap().entries()]
-        .find(([, peerId]) => peerId === trimmedTarget)?.[0];
-      if (targetPublicKeyHex) {
-        try {
-          await currentChat.approveJoin(dmGroupId, hexToBytes(targetPublicKeyHex));
-        } catch {
-          // ignore; peer may already be approved or local node may not be admin
-        }
-      } else {
-        const latestState = currentChat.getActionChainState(dmGroupId);
-        const isLocalMember = latestState?.members.has(ownPublicKeyHex()) ?? false;
-        if (!isLocalMember) {
-          void currentChat.requestJoin(dmGroupId).catch(() => {});
-        }
-      }
 
       const invite = buildInviteCodeForGroup(dmGroupId, {
         kind: "targeted-peer",
@@ -2304,6 +2682,8 @@ export const App = () => {
   };
 
   const handleAcceptDirectMessageRequest = async (requestId: string): Promise<string | null> => {
+    const currentChat = chat;
+    if (!currentChat) return "Not connected";
     const request = pendingDirectMessageRequests().find((entry) => entry.requestId === requestId);
     if (!request) return "DM request not found";
     appendDiagnosticsEntry("dm-request-accept-requested", {
@@ -2312,36 +2692,44 @@ export const App = () => {
       groupId: request.groupId,
     });
 
-    const decoded = decodeGroupInvite(request.inviteCode);
-    if (!decoded.success) {
-      appendDiagnosticsEntry("dm-request-accept-invalid-invite", {
-        requestId,
-        senderPeerId: request.senderPeerId,
-      });
-      return "Invalid DM invite";
-    }
+    try {
+      const result = await currentChat.acceptDirectMessageRequest(requestId);
+      const groupId = result.groupId;
+      const chainState = currentChat.getActionChainState(groupId);
+      const existingGroup = groupState().groups.get(groupId);
+      if (!existingGroup) {
+        dispatchGroupEvent({
+          type: "group-joined",
+          groupId,
+          groupName: chainState?.groupName || "Direct Message",
+          hasActionChain: true,
+        });
+      }
+      dispatchGroupEvent({ type: "group-selected", groupId });
+      dispatchMobileView({ type: "group-selected" });
+      refreshActionChainState();
+      syncMessagesFromActionChain(groupId);
 
-    const error = await handleJoinViaInvite(decoded.data);
-    if (!error) {
-      setDirectMessagePeerForGroup(request.groupId, request.senderPeerId);
-      markDirectMessagePeerAcknowledged(request.groupId, request.senderPeerId);
+      setDirectMessagePeerForGroup(groupId, request.senderPeerId);
       removeOutgoingDirectMessageRequests((entry) =>
-        entry.groupId === request.groupId && entry.targetPeerId === request.senderPeerId);
+        entry.groupId === groupId && entry.targetPeerId === request.senderPeerId);
       removePendingDirectMessageRequest(requestId);
       appendDiagnosticsEntry("dm-request-accepted", {
         requestId,
         senderPeerId: request.senderPeerId,
-        groupId: request.groupId,
+        groupId,
       });
-    } else {
+      return null;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to accept DM request";
       appendDiagnosticsEntry("dm-request-accept-failed", {
         requestId,
         senderPeerId: request.senderPeerId,
         groupId: request.groupId,
-        error,
+        error: message,
       });
+      return message;
     }
-    return error;
   };
 
   const handleDeclineDirectMessageRequest = (requestId: string) => {
@@ -2386,6 +2774,25 @@ export const App = () => {
   const handleAddRelay = (addr: string) => {
     appendDiagnosticsEntry("relay-add-requested", { addr });
     chat?.addRelay(addr);
+  };
+
+  const handleClearRelayContactBook = () => {
+    appendDiagnosticsEntry("relay-contact-book-clear-requested", {});
+    chat?.clearRelayContactBook();
+    saveRelayHints([]);
+    setRelayContactBook(new Map());
+  };
+
+  const handleClearPeerPathCache = () => {
+    appendDiagnosticsEntry("peer-path-cache-clear-requested", {});
+    chat?.clearPeerPathCache();
+    setPeerPathCache(new Map());
+  };
+
+  const handleClearConnectionReasons = () => {
+    appendDiagnosticsEntry("connection-reasons-clear-requested", {});
+    chat?.clearConnectionReasonCounts();
+    setConnectionReasonCounts(new Map());
   };
 
   const ownPublicKeyHex = () => {
@@ -2722,6 +3129,207 @@ export const App = () => {
     return contact?.nickname ?? contact?.selfName ?? `${peerId.slice(0, 12)}...`;
   };
 
+  const resolveMessageSenderLabel = (
+    senderPeerId: string,
+    senderDisplayName?: string,
+  ): string => {
+    const contact = contactsBook().get(senderPeerId);
+    const nickname = contact?.nickname?.trim();
+    if (nickname && nickname.length > 0) return nickname;
+    const selfName = contact?.selfName?.trim();
+    if (selfName && selfName.length > 0) return selfName;
+    const inlineName = senderDisplayName?.trim();
+    if (inlineName && inlineName.length > 0) return inlineName;
+    return formatPeerIdForDisplay(senderPeerId);
+  };
+
+  const visibleMessageText = (text: string): string => parseQuotedMessage(text).body;
+
+  const latestReadableMessageIdForActiveGroup = (): string | null => {
+    const activeGroup = getActiveGroup(groupState());
+    const currentChat = chat;
+    if (!activeGroup || !currentChat) return null;
+    for (let index = activeGroup.messages.length - 1; index >= 0; index -= 1) {
+      const message = activeGroup.messages[index];
+      if (message.senderPeerId === SYSTEM_SENDER_ID) continue;
+      if (message.senderPeerId === currentChat.peerId) continue;
+      return message.id;
+    }
+    return null;
+  };
+
+  const maybeSendReadReceiptForActiveGroup = () => {
+    const currentChat = chat;
+    if (!currentChat || chatStatus() !== "connected") return;
+    if (typeof document !== "undefined") {
+      if (document.hidden) return;
+      if (typeof document.hasFocus === "function" && !document.hasFocus()) return;
+    }
+    const activeGroupId = groupState().activeGroupId;
+    if (!activeGroupId) return;
+    const chainState = currentChat.getActionChainState(activeGroupId);
+    if (!chainState) return;
+    if (chainState.isDirectMessage && !chainState.dmHandshakeComplete) return;
+    const targetActionId = latestReadableMessageIdForActiveGroup();
+    if (!targetActionId) return;
+    const ownKeyHex = ownPublicKeyHex();
+    if (!ownKeyHex) return;
+    if (chainState.readReceipts.get(ownKeyHex) === targetActionId) {
+      readReceiptLastSentByGroup.set(activeGroupId, targetActionId);
+      return;
+    }
+    if (readReceiptLastSentByGroup.get(activeGroupId) === targetActionId) return;
+    const now = Date.now();
+    const lastAttemptAt = readReceiptLastAttemptAtByGroup.get(activeGroupId) ?? 0;
+    if (now - lastAttemptAt < READ_RECEIPT_AUTO_SEND_COOLDOWN_MS) return;
+    readReceiptLastAttemptAtByGroup.set(activeGroupId, now);
+    appendDiagnosticsEntry("read-receipt-send-requested", {
+      groupId: activeGroupId,
+      upToActionId: targetActionId,
+    });
+    void currentChat.sendReadReceipt(activeGroupId, targetActionId).then(() => {
+      readReceiptLastSentByGroup.set(activeGroupId, targetActionId);
+      appendDiagnosticsEntry("read-receipt-send-succeeded", {
+        groupId: activeGroupId,
+        upToActionId: targetActionId,
+      });
+    }).catch((error) => {
+      appendDiagnosticsEntry("read-receipt-send-failed", {
+        groupId: activeGroupId,
+        upToActionId: targetActionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  };
+
+  const activeMessageReadersByMessageId = (): ReadonlyMap<string, readonly MessageReadEntry[]> => {
+    const activeGroupId = groupState().activeGroupId;
+    const currentChat = chat;
+    if (!activeGroupId || !currentChat) return new Map();
+    const allMessages = getActiveMessages(groupState())
+      .filter((message) => message.senderPeerId !== SYSTEM_SENDER_ID);
+    if (allMessages.length === 0) return new Map();
+    const messageIndexById = new Map<string, number>();
+    allMessages.forEach((message, index) => messageIndexById.set(message.id, index));
+    const latestReadByAuthor = new Map<string, { readonly upToActionId: string; readonly readAt: number }>();
+    for (const envelope of currentChat.getActionChainEnvelopes(activeGroupId)) {
+      const decoded = verifyAndDecodeAction(envelope);
+      if (!decoded.success) continue;
+      const action = decoded.data;
+      if (action.payload.type !== "read-receipt") continue;
+      const authorHex = toHex(action.authorPublicKey);
+      const previous = latestReadByAuthor.get(authorHex);
+      if (!previous || action.timestamp > previous.readAt) {
+        latestReadByAuthor.set(authorHex, {
+          upToActionId: action.payload.upToActionId,
+          readAt: action.timestamp,
+        });
+      }
+    }
+    const ownKeyHex = ownPublicKeyHex();
+    const readersByMessageId = new Map<string, MessageReadEntry[]>();
+    for (const [authorHex, receipt] of latestReadByAuthor.entries()) {
+      if (authorHex === ownKeyHex) continue;
+      const upToIndex = messageIndexById.get(receipt.upToActionId);
+      if (upToIndex === undefined) continue;
+      const mappedPeerId = publicKeyToPeerIdMap().get(authorHex);
+      const readerPeerId = mappedPeerId ?? `pk:${authorHex.slice(0, 10)}...`;
+      const contact = mappedPeerId ? contactsBook().get(mappedPeerId) : null;
+      const label = contact?.nickname?.trim()
+        || contact?.selfName?.trim()
+        || (mappedPeerId ? formatPeerIdForDisplay(mappedPeerId) : readerPeerId);
+      for (let index = 0; index <= upToIndex; index += 1) {
+        const messageId = allMessages[index].id;
+        const rows = readersByMessageId.get(messageId) ?? [];
+        rows.push({
+          peerId: readerPeerId,
+          label,
+          readAt: receipt.readAt,
+        });
+        readersByMessageId.set(messageId, rows);
+      }
+    }
+    for (const rows of readersByMessageId.values()) {
+      rows.sort((left, right) => {
+        if (right.readAt !== left.readAt) return right.readAt - left.readAt;
+        return left.label.localeCompare(right.label);
+      });
+    }
+    return readersByMessageId;
+  };
+
+  const activeEditedAtByMessageId = (): ReadonlyMap<string, number> => {
+    const activeGroupId = groupState().activeGroupId;
+    const currentChat = chat;
+    if (!activeGroupId || !currentChat) return new Map();
+    const messageAuthorById = new Map<string, string>();
+    const latestEditedAtByMessageId = new Map<string, { readonly editorHex: string; readonly editedAt: number }>();
+    for (const envelope of currentChat.getActionChainEnvelopes(activeGroupId)) {
+      const decoded = verifyAndDecodeAction(envelope);
+      if (!decoded.success) continue;
+      const action = decoded.data;
+      const authorHex = toHex(action.authorPublicKey);
+      if (action.payload.type === "message") {
+        messageAuthorById.set(action.id, authorHex);
+        continue;
+      }
+      if (action.payload.type !== "message-edited") continue;
+      const targetActionId = action.payload.targetActionId;
+      const previous = latestEditedAtByMessageId.get(targetActionId);
+      if (!previous || action.timestamp > previous.editedAt) {
+        latestEditedAtByMessageId.set(targetActionId, {
+          editorHex: authorHex,
+          editedAt: action.timestamp,
+        });
+      }
+    }
+
+    const editedAtByMessageId = new Map<string, number>();
+    for (const [messageId, edit] of latestEditedAtByMessageId.entries()) {
+      const authorHex = messageAuthorById.get(messageId);
+      if (!authorHex || authorHex !== edit.editorHex) continue;
+      editedAtByMessageId.set(messageId, edit.editedAt);
+    }
+    return editedAtByMessageId;
+  };
+
+  const formatRelativeLastSeen = (timestampMs: number, nowMs = Date.now()): string => {
+    const deltaMs = Math.max(0, nowMs - timestampMs);
+    const deltaSeconds = Math.floor(deltaMs / 1000);
+    if (deltaSeconds < 60) return `${deltaSeconds}s ago`;
+    const deltaMinutes = Math.floor(deltaSeconds / 60);
+    if (deltaMinutes < 60) return `${deltaMinutes}m ago`;
+    const deltaHours = Math.floor(deltaMinutes / 60);
+    if (deltaHours < 24) return `${deltaHours}h ago`;
+    const deltaDays = Math.floor(deltaHours / 24);
+    return `${deltaDays}d ago`;
+  };
+
+  const directMessagePresenceForGroup = (
+    groupId: string,
+    dmPeerId: string | null,
+  ): { label: string; tone: "online" | "offline" | "pending" } | null => {
+    if (!dmPeerId) return null;
+    const chain = chat?.getActionChainState(groupId);
+    if (chain?.isDirectMessage && !chain.dmHandshakeComplete) {
+      return { label: "pending", tone: "pending" };
+    }
+    if (connectedPeerIds().has(dmPeerId)) {
+      return { label: "online", tone: "online" };
+    }
+    const lastSeenAt = contactsBook().get(dmPeerId)?.lastSeenAt;
+    if (typeof lastSeenAt === "number" && Number.isFinite(lastSeenAt) && lastSeenAt > 0) {
+      return { label: `last seen ${formatRelativeLastSeen(lastSeenAt)}`, tone: "offline" };
+    }
+    return { label: "offline", tone: "offline" };
+  };
+
+  const activeDirectMessagePresence = (): { label: string; tone: "online" | "offline" | "pending" } | null => {
+    const activeId = groupState().activeGroupId;
+    if (!activeId) return null;
+    return directMessagePresenceForGroup(activeId, activeDirectMessagePeerId());
+  };
+
   const setPeerBlocked = (peerId: string, blocked: boolean) => {
     appendDiagnosticsEntry("peer-block-updated", {
       peerId,
@@ -2763,23 +3371,27 @@ export const App = () => {
       const visiblePeerCount = [...getSeenPeerIds(groupState(), g.groupId)]
         .filter((peerId) => peerId !== SYSTEM_SENDER_ID)
         .length;
-      const chainName = chat?.getActionChainState(g.groupId)?.groupName;
+      const chainState = chat?.getActionChainState(g.groupId);
+      const chainName = chainState?.groupName;
       const dmPeerId = directMessagePeerIdForGroup(g.groupId);
       const dmLabel = dmPeerId
         ? contactsBook().get(dmPeerId)?.nickname
           ?? contactsBook().get(dmPeerId)?.selfName
           ?? `${dmPeerId.slice(0, 12)}...`
         : null;
-      const isDm = dmPeerId !== null;
+      const isDm = (chainState?.isDirectMessage ?? false) || dmPeerId !== null;
+      const dmPresence = isDm ? directMessagePresenceForGroup(g.groupId, dmPeerId) : null;
       return {
         groupId: g.groupId,
         groupName: dmLabel ?? (chainName ?? g.groupName),
         isDirectMessage: isDm,
-        directMessageConnected: isDm ? connectedPeerIds().has(dmPeerId!) : false,
+        directMessageConnected: isDm && !!dmPeerId ? connectedPeerIds().has(dmPeerId) : false,
+        directMessageStatusLabel: dmPresence?.label,
+        directMessageStatusTone: dmPresence?.tone,
         unreadCount: g.unreadCount,
         seenPeerCount: visiblePeerCount,
         lastMessage: lastMsg
-          ? { text: lastMsg.text, timestamp: lastMsg.timestamp }
+          ? { text: visibleMessageText(lastMsg.text), timestamp: lastMsg.timestamp }
           : undefined,
       };
     });
@@ -2885,7 +3497,7 @@ export const App = () => {
           <div class="flex items-center justify-center min-h-screen bg-tg-chat font-sans">
             <div class="text-center space-y-3 px-6">
               <p class="text-tg-text text-sm">Failed to connect to network.</p>
-              <p class="text-tg-text-dim text-xs">Reload the page to retry.</p>
+              <p class="text-tg-text-dim text-xs break-all">{chatError() || "Reload the page to retry."}</p>
             </div>
           </div>
         </Show>
@@ -2898,12 +3510,15 @@ export const App = () => {
                 connectionStatus={chatStatus()}
                 activeGroupId={groupState().activeGroupId}
                 activeGroupName={activeGroupName()}
+                activeGroupIsDirectMessage={!!activeDirectMessagePeerId() || (actionChainState()?.isDirectMessage ?? false)}
                 activeDirectMessageConnected={
                   (() => {
                     const activeDmPeer = activeDirectMessagePeerId();
                     return !!activeDmPeer && connectedPeerIds().has(activeDmPeer);
                   })()
                 }
+                activeDirectMessageStatusLabel={activeDirectMessagePresence()?.label}
+                activeDirectMessageStatusTone={activeDirectMessagePresence()?.tone}
                 memberCount={actionChainState()?.members.size ?? 0}
                 showBackButton={mobileView().currentView === "chat"}
                 onBackPress={() => dispatchMobileView({ type: "back-pressed" })}
@@ -2947,20 +3562,57 @@ export const App = () => {
               <MessageList
                 messages={getActiveMessages(groupState())}
                 ownPeerId={chat!.peerId}
+                resolveSenderLabel={resolveMessageSenderLabel}
+                readByMessageId={activeMessageReadersByMessageId()}
+                editedAtByMessageId={activeEditedAtByMessageId()}
+                isDirectMessage={actionChainState()?.isDirectMessage ?? false}
+                onReplyMessage={handleReplyMessage}
+                onEditMessage={handleEditMessage}
+                onDeleteMessage={handleDeleteMessage}
               />
             }
             messageInput={
               <MessageInput
                 onSend={handleSendMessage}
+                value={messageDraft()}
+                onValueChange={setMessageDraft}
                 disabled={
                   chatStatus() !== "connected" ||
                   getActiveGroup(groupState()) === null ||
                   (getActiveGroup(groupState())?.hasActionChain === true && !actionChainState()?.members.has(ownPublicKeyHex())) ||
+                  ((actionChainState()?.isDirectMessage ?? false) && !(actionChainState()?.dmHandshakeComplete ?? false)) ||
                   isDirectMessageBlocked(activeDirectMessagePeerId())
+                }
+                modeLabel={(() => {
+                  const editTarget = editTargetMessage();
+                  if (editTarget) return "Editing message";
+                  const replyTarget = replyTargetMessage();
+                  if (!replyTarget) return null;
+                  return `Replying to ${resolveMessageSenderLabel(
+                    replyTarget.senderPeerId,
+                    replyTarget.senderDisplayName,
+                  )}`;
+                })()}
+                modePreview={(() => {
+                  const editTarget = editTargetMessage();
+                  if (editTarget) return visibleMessageText(editTarget.text);
+                  const replyTarget = replyTargetMessage();
+                  if (replyTarget) return visibleMessageText(replyTarget.text);
+                  return null;
+                })()}
+                onCancelMode={
+                  editTargetMessage() || replyTargetMessage()
+                    ? () => {
+                        setEditTargetMessage(null);
+                        setReplyTargetMessage(null);
+                      }
+                    : null
                 }
                 placeholder={
                   isDirectMessageBlocked(activeDirectMessagePeerId())
                     ? "You blocked this peer"
+                    : (actionChainState()?.isDirectMessage ?? false) && !(actionChainState()?.dmHandshakeComplete ?? false)
+                      ? "Waiting for DM acceptance handshake..."
                     : getActiveGroup(groupState())?.hasActionChain === true && !actionChainState()?.members.has(ownPublicKeyHex())
                       ? "Waiting for approval..."
                       : undefined
@@ -3019,6 +3671,10 @@ export const App = () => {
                   groupDiscoveryState={groupDiscoveryState()}
                   relayCandidateState={relayCandidateState()}
                   relayReservationState={relayReservationState()}
+                  relayContactBook={relayContactBook()}
+                  peerPathCache={peerPathCache()}
+                  pinnedPeerWatchdogState={pinnedPeerWatchdogState()}
+                  connectionReasonCounts={connectionReasonCounts()}
                   connectionMetrics={connectionMetrics()}
                   displayName={displayName()}
                   latencyMap={latencyMap()}
@@ -3028,6 +3684,9 @@ export const App = () => {
                   pendingDmDebug={pendingDmDebugRows()}
                   profileSyncDebug={profileSyncDebugRows()}
                   onAddRelay={handleAddRelay}
+                  onClearRelayContactBook={handleClearRelayContactBook}
+                  onClearPeerPathCache={handleClearPeerPathCache}
+                  onClearConnectionReasons={handleClearConnectionReasons}
                 />
                 <EventLog
                   events={eventLog()}
@@ -3036,48 +3695,66 @@ export const App = () => {
               </>
             }
             groupInfoContent={
-              <GroupInfoPanel
-                groupId={groupState().activeGroupId}
-                groupName={activeGroupName() ?? "Unknown Group"}
-                members={actionChainState()?.members ?? new Map()}
-                actionEnvelopes={chat?.getActionChainEnvelopes(groupState().activeGroupId ?? "") ?? []}
-                connectionMetrics={connectionMetrics()}
-                activeGroupDiscoveryMetrics={activeGroupDiscoveryMetrics()}
-                joinRetryEntry={activeJoinRetryEntry()}
-                syncProgressByPeer={activeSyncProgressByPeer()}
-                pendingJoins={pendingJoinsMap().get(groupState().activeGroupId ?? "") ?? []}
-                joinPolicy={actionChainState()?.joinPolicy ?? "manual"}
-                isAdmin={isCurrentUserAdmin()}
-                ownRole={ownRole()}
-                ownPublicKeyHex={ownPublicKeyHex()}
-                ownDisplayName={displayName()}
-                publicKeyToPeerId={publicKeyToPeerIdMap()}
-                contactsBook={contactsBook()}
-                connectedPeerIds={connectedPeerIds()}
-                latencyMap={latencyMap()}
-                directMessagePeerId={activeDirectMessagePeerId()}
-                directMessagePeerLabel={directMessagePeerLabel(activeDirectMessagePeerId())}
-                directMessageBlocked={isDirectMessageBlocked(activeDirectMessagePeerId())}
-                onSetDirectMessageBlocked={(peerId, blocked) => setPeerBlocked(peerId, blocked)}
-                onStartDirectMessage={handleStartDirectMessageFromGroupInfo}
-                onApproveJoin={handleApproveJoin}
-                onRemoveMember={handleRemoveMember}
-                onChangeMemberRole={isCurrentUserAdmin() ? handleChangeMemberRole : null}
-                onAddByPeerId={handleAddByPeerId}
-                onRetryJoinNow={handleRetryJoinNow}
-                onCancelJoinRetry={handleCancelJoinRetry}
-                onCreateInvite={
-                  (chat?.getActionChainEnvelopes(groupState().activeGroupId ?? "")?.length ?? 0) > 0
-                    ? handleCreateInvite
-                    : null
+              <Show
+                when={actionChainState()?.isDirectMessage}
+                fallback={
+                  <GroupInfoPanel
+                    groupId={groupState().activeGroupId}
+                    groupName={activeGroupName() ?? "Unknown Group"}
+                    members={actionChainState()?.members ?? new Map()}
+                    actionEnvelopes={chat?.getActionChainEnvelopes(groupState().activeGroupId ?? "") ?? []}
+                    connectionMetrics={connectionMetrics()}
+                    activeGroupDiscoveryMetrics={activeGroupDiscoveryMetrics()}
+                    joinRetryEntry={activeJoinRetryEntry()}
+                    syncProgressByPeer={activeSyncProgressByPeer()}
+                    pendingJoins={pendingJoinsMap().get(groupState().activeGroupId ?? "") ?? []}
+                    joinPolicy={actionChainState()?.joinPolicy ?? "manual"}
+                    isAdmin={isCurrentUserAdmin()}
+                    ownRole={ownRole()}
+                    ownPublicKeyHex={ownPublicKeyHex()}
+                    ownDisplayName={displayName()}
+                    publicKeyToPeerId={publicKeyToPeerIdMap()}
+                    contactsBook={contactsBook()}
+                    connectedPeerIds={connectedPeerIds()}
+                    latencyMap={latencyMap()}
+                    directMessagePeerId={activeDirectMessagePeerId()}
+                    directMessagePeerLabel={directMessagePeerLabel(activeDirectMessagePeerId())}
+                    directMessageBlocked={isDirectMessageBlocked(activeDirectMessagePeerId())}
+                    onSetDirectMessageBlocked={(peerId, blocked) => setPeerBlocked(peerId, blocked)}
+                    onStartDirectMessage={handleStartDirectMessageFromGroupInfo}
+                    onApproveJoin={handleApproveJoin}
+                    onRemoveMember={handleRemoveMember}
+                    onChangeMemberRole={isCurrentUserAdmin() ? handleChangeMemberRole : null}
+                    onAddByPeerId={handleAddByPeerId}
+                    onRetryJoinNow={handleRetryJoinNow}
+                    onCancelJoinRetry={handleCancelJoinRetry}
+                    onCreateInvite={
+                      (chat?.getActionChainEnvelopes(groupState().activeGroupId ?? "")?.length ?? 0) > 0
+                        ? handleCreateInvite
+                        : null
+                    }
+                    onSetJoinPolicy={isCurrentUserAdmin() ? handleSetJoinPolicy : null}
+                    onRenameGroup={
+                      isCurrentUserAdmin() && !(actionChainState()?.isDirectMessage ?? false)
+                        ? handleRenameGroup
+                        : null
+                    }
+                  />
                 }
-                onSetJoinPolicy={isCurrentUserAdmin() ? handleSetJoinPolicy : null}
-                onRenameGroup={
-                  isCurrentUserAdmin() && !(actionChainState()?.isDirectMessage ?? false)
-                    ? handleRenameGroup
-                    : null
-                }
-              />
+              >
+                <DirectMessageInfoPanel
+                  groupId={groupState().activeGroupId}
+                  peerId={activeDirectMessagePeerId()}
+                  peerLabel={directMessagePeerLabel(activeDirectMessagePeerId())}
+                  peerPresenceLabel={activeDirectMessagePresence()?.label}
+                  peerPresenceTone={activeDirectMessagePresence()?.tone}
+                  blocked={isDirectMessageBlocked(activeDirectMessagePeerId())}
+                  handshakeComplete={actionChainState()?.dmHandshakeComplete ?? false}
+                  missingPeerIds={chat?.getDirectMessageHandshakeState(groupState().activeGroupId ?? "")?.missingPeerIds ?? []}
+                  actionEnvelopes={chat?.getActionChainEnvelopes(groupState().activeGroupId ?? "") ?? []}
+                  onSetBlocked={(peerId, blocked) => setPeerBlocked(peerId, blocked)}
+                />
+              </Show>
             }
             contactsContent={
               <ContactsBookPage

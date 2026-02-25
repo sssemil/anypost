@@ -63,6 +63,15 @@ export const ActionPayloadSchema = z.discriminatedUnion("type", [
     text: z.string().min(1),
   }),
   z.object({
+    type: z.literal("message-edited"),
+    targetActionId: ActionIdSchema,
+    newText: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal("message-deleted"),
+    targetActionId: ActionIdSchema,
+  }),
+  z.object({
     type: z.literal("read-receipt"),
     upToActionId: ActionIdSchema,
   }),
@@ -111,6 +120,8 @@ export type ActionChainGroupState = {
   readonly groupName: string;
   readonly isDirectMessage: boolean;
   readonly directMessagePeerIds: readonly [string, string] | null;
+  readonly dmGenesisContributorPublicKeys: ReadonlySet<string>;
+  readonly dmHandshakeComplete: boolean;
   readonly joinPolicy: JoinPolicy;
   readonly createdAt: number;
   readonly members: ReadonlyMap<string, GroupMember>;

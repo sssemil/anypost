@@ -22,6 +22,10 @@ export type TopologyGraph = {
   readonly edges: readonly GraphEdge[];
 };
 
+export type BuildTopologyGraphOptions = {
+  readonly visiblePeerIds?: ReadonlySet<string>;
+};
+
 const SHORT_ID_LENGTH = 16;
 const PEER_SUFFIX_LENGTH = 4;
 
@@ -93,6 +97,7 @@ export const buildTopologyGraph = (
   bootstrapAddrs: readonly string[],
   latencyMap?: ReadonlyMap<string, number>,
   contactLabelByPeerId?: ReadonlyMap<string, string>,
+  options?: BuildTopologyGraphOptions,
 ): TopologyGraph => {
   const selfNode: GraphNode = {
     id: status.peerId,
@@ -108,6 +113,7 @@ export const buildTopologyGraph = (
   const edges: GraphEdge[] = [];
 
   for (const peer of status.peers) {
+    if (options?.visiblePeerIds && !options.visiblePeerIds.has(peer.peerId)) continue;
     if (seenPeerIds.has(peer.peerId)) continue;
     seenPeerIds.add(peer.peerId);
 

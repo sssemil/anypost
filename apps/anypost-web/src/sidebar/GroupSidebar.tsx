@@ -1,5 +1,5 @@
 import type { JSX } from "solid-js";
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
 import {
   createSidebarState,
   transitionSidebar,
@@ -13,6 +13,8 @@ type GroupItem = {
   readonly groupName?: string;
   readonly isDirectMessage?: boolean;
   readonly directMessageConnected?: boolean;
+  readonly directMessageStatusLabel?: string;
+  readonly directMessageStatusTone?: "online" | "offline" | "pending";
   readonly unreadCount: number;
   readonly seenPeerCount: number;
   readonly lastMessage?: { readonly text: string; readonly timestamp: number };
@@ -67,6 +69,7 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
   const [dmError, setDmError] = createSignal("");
   const [dmRequestActionId, setDmRequestActionId] = createSignal<string | null>(null);
   const [dmRequestError, setDmRequestError] = createSignal("");
+  const [showDmRequestsMenu, setShowDmRequestsMenu] = createSignal(false);
 
   const dispatch = (event: Parameters<typeof transitionSidebar>[1]) => {
     setState((s) => transitionSidebar(s, event));
@@ -154,6 +157,12 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
   const formatRequestTime = (timestamp: number): string =>
     new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
+  createEffect(() => {
+    if (props.pendingDirectMessageRequests.length === 0) {
+      setShowDmRequestsMenu(false);
+    }
+  });
+
   const GroupIcon = () => (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="w-3.5 h-3.5 text-tg-text-dim shrink-0">
       <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
@@ -212,9 +221,29 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
       </div>
 
       <Show when={props.pendingDirectMessageRequests.length > 0}>
+        <div class="px-3 py-2 border-b border-tg-border bg-tg-chat">
+          <button
+            class="w-full rounded border border-tg-accent/40 bg-tg-accent/10 px-2 py-1.5 text-left text-xs text-tg-text hover:bg-tg-accent/20 cursor-pointer"
+            onClick={() => setShowDmRequestsMenu((open) => !open)}
+          >
+            {props.pendingDirectMessageRequests.length} pending DM request(s).{" "}
+            <span class="text-tg-accent">{showDmRequestsMenu() ? "Hide" : "Open menu"}</span>
+          </button>
+        </div>
+      </Show>
+
+      <Show when={showDmRequestsMenu() && props.pendingDirectMessageRequests.length > 0}>
         <div class="px-3 py-2 border-b border-tg-border bg-tg-chat space-y-2">
-          <div class="text-[10px] text-tg-text-dim uppercase tracking-wider">
-            DM Requests ({props.pendingDirectMessageRequests.length})
+          <div class="flex items-center justify-between gap-2">
+            <div class="text-[10px] text-tg-text-dim uppercase tracking-wider">
+              DM Requests Menu
+            </div>
+            <button
+              class="text-[10px] text-tg-text-dim hover:text-tg-text cursor-pointer"
+              onClick={() => setShowDmRequestsMenu(false)}
+            >
+              Close
+            </button>
           </div>
           <div class="space-y-1">
             <For each={props.pendingDirectMessageRequests}>
@@ -353,8 +382,9 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
               <div
                 onMouseEnter={() => setHovered(true)}
                 onMouseLeave={() => setHovered(false)}
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => props.onSelectGroup(group.groupId)}
-                class="flex items-center gap-3 px-3 py-2.5 cursor-pointer border-l-3"
+                class="flex items-center gap-3 px-3 py-2.5 cursor-pointer border-l-3 select-none"
                 classList={{
                   "bg-tg-active border-tg-accent": isActive(),
                   "border-transparent hover:bg-tg-hover": !isActive(),
@@ -370,13 +400,21 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
                       <Show when={!group.isDirectMessage}>
                         <GroupIcon />
                       </Show>
-                      <Show when={group.isDirectMessage && group.directMessageConnected}>
-                        <span class="inline-block w-2 h-2 rounded-full bg-tg-success shrink-0" title="Connected" />
+                      <Show when={group.isDirectMessage}>
+                        <span
+                          class="inline-block w-2 h-2 rounded-full shrink-0"
+                          classList={{
+                            "bg-tg-success": group.directMessageStatusTone === "online",
+                            "bg-amber-400": group.directMessageStatusTone === "pending",
+                            "bg-gray-500": !group.directMessageStatusTone || group.directMessageStatusTone === "offline",
+                          }}
+                          title={group.directMessageStatusLabel ?? "offline"}
+                        />
                       </Show>
                       <span class="text-sm text-tg-text truncate" classList={{ "font-mono": !group.groupName }}>
                         {group.groupName ?? `${group.groupId.slice(0, 8)}...`}
                       </span>
-                      <Show when={group.seenPeerCount > 0}>
+                      <Show when={!group.isDirectMessage && group.seenPeerCount > 0}>
                         <span class="text-[10px] text-tg-text-dim shrink-0">
                           {group.seenPeerCount} {group.seenPeerCount === 1 ? "peer" : "peers"}
                         </span>

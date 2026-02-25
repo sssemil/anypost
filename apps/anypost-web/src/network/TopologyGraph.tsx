@@ -15,6 +15,7 @@ export type TopologyGraphProps = {
   readonly bootstrapAddrs: readonly string[];
   readonly latencyMap: ReadonlyMap<string, number>;
   readonly contactLabelByPeerId?: ReadonlyMap<string, string>;
+  readonly visiblePeerIds?: ReadonlySet<string>;
 };
 
 type SimNode = SimulationNodeDatum & GraphNode;
@@ -133,6 +134,7 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
       props.bootstrapAddrs,
       props.latencyMap,
       props.contactLabelByPeerId,
+      { visiblePeerIds: props.visiblePeerIds },
     );
 
     const prevPositions = new Map<string, { x: number; y: number; vx: number; vy: number }>();
@@ -172,10 +174,11 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
   };
 
   createEffect(() => {
-    const _status = props.networkStatus;
-    const _addrs = props.bootstrapAddrs;
-    const _latency = props.latencyMap;
-    const _contacts = props.contactLabelByPeerId;
+    props.networkStatus;
+    props.bootstrapAddrs;
+    props.latencyMap;
+    props.contactLabelByPeerId;
+    props.visiblePeerIds;
     rebuildSimulation();
   });
 

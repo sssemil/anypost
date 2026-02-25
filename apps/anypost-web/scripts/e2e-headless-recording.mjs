@@ -313,6 +313,11 @@ const waitForMembersCount = async (page, expectedCount, label) => {
 };
 
 const acceptFirstDmRequest = async (page, label) => {
+  const dmRequestBanner = page.getByRole("button", { name: /pending DM request/i }).first();
+  try {
+    await dmRequestBanner.waitFor({ state: "visible", timeout: 45_000 });
+    await dmRequestBanner.click();
+  } catch {}
   const acceptBtn = page.getByRole("button", { name: "Accept" }).first();
   try {
     await acceptBtn.waitFor({ state: "visible", timeout: 45_000 });
@@ -326,6 +331,11 @@ const acceptFirstDmRequest = async (page, label) => {
 };
 
 const declineFirstDmRequest = async (page, label) => {
+  const dmRequestBanner = page.getByRole("button", { name: /pending DM request/i }).first();
+  try {
+    await dmRequestBanner.waitFor({ state: "visible", timeout: 45_000 });
+    await dmRequestBanner.click();
+  } catch {}
   const declineBtn = page.getByRole("button", { name: "Decline" }).first();
   try {
     await declineBtn.waitFor({ state: "visible", timeout: 45_000 });

@@ -4,7 +4,7 @@ import { openDB } from "idb";
 import { openAccountStore } from "./account-store.js";
 import { generateAccountKey } from "../crypto/identity.js";
 import type { JoinRetryState } from "../protocol/join-retry-queue.js";
-import type { SyncProgressState } from "../protocol/multi-group-chat.js";
+import type { SyncProgressState, RelayContactBook } from "../protocol/multi-group-chat.js";
 import type { ContactsBook } from "./account-store.js";
 
 describe("Account Store", () => {
@@ -475,6 +475,48 @@ describe("Account Store", () => {
         expect(retrieved).toEqual(new Set(["12D3KooWBlockedA"]));
       } finally {
         await store2.destroy();
+      }
+    });
+  });
+
+  describe("relay contact book persistence", () => {
+    it("should return empty relay contact book when missing", async () => {
+      const store = await openAccountStore();
+      try {
+        const book = await store.getRelayContactBook();
+        expect(book.size).toBe(0);
+      } finally {
+        await store.destroy();
+      }
+    });
+
+    it("should store and retrieve relay contact book", async () => {
+      const store = await openAccountStore();
+      try {
+        const original: RelayContactBook = new Map([
+          ["12D3KooWRelayA", {
+            peerId: "12D3KooWRelayA",
+            addresses: ["/ip4/127.0.0.1/tcp/9001/ws/p2p/12D3KooWRelayA"],
+            sources: ["bootstrap", "reservation"],
+            firstSeenAtMs: 1_000,
+            lastSeenAtMs: 2_000,
+            lastAttemptAtMs: 1_900,
+            lastSuccessAtMs: 2_000,
+            lastFailureAtMs: null,
+            successCount: 3,
+            failureCount: 1,
+            consecutiveFailures: 0,
+            averageRttMs: 45,
+            quarantinedUntilMs: null,
+            score: 0.92,
+          }],
+        ]);
+
+        await store.saveRelayContactBook(original);
+        const retrieved = await store.getRelayContactBook();
+        expect(retrieved).toEqual(original);
+      } finally {
+        await store.destroy();
       }
     });
   });

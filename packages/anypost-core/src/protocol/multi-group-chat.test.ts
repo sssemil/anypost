@@ -594,7 +594,7 @@ describe("MultiGroupChat", () => {
     expect(metrics[0].syncResponsesRejected).toBe(0);
     expect(reservationStates.length).toBeGreaterThan(0);
     expect(reservationStates[reservationStates.length - 1].entries).toBeGreaterThan(0);
-    expect(reservationStates[reservationStates.length - 1].targetActive).toBe(3);
+    expect(reservationStates[reservationStates.length - 1].targetActive).toBe(5);
   });
 
   it("should prune cached paths for non-pinned peers once membership context is available", async () => {
@@ -651,6 +651,34 @@ describe("MultiGroupChat", () => {
       () => (latestPeerPathCache.get(admin.peerId)?.length ?? 0) > 0,
     );
     const cachedPaths = latestPeerPathCache.get(admin.peerId) ?? [];
+    expect(cachedPaths).toContain(validPath);
+  });
+
+  it("should keep a cached path after a single failure so reconnect can retry it", async () => {
+    const admin = await createTestNode();
+    const { groupId, genesisEnvelope } = await admin.chat.createGroup("Cached Path Retry");
+    const adminPublicKeyHex = toHex(new Uint8Array(admin.accountKey.publicKey));
+    const invalidPath = `/ip4/127.0.0.1/tcp/1/p2p/${admin.peerId}`;
+    const validPath = admin.chat.multiaddrs[0].toString();
+
+    let latestPeerPathCache: ReadonlyMap<string, readonly string[]> = new Map();
+    const joiner = await createTestNode(undefined, undefined, {
+      initialPublicKeyToPeerId: new Map([[adminPublicKeyHex, admin.peerId]]),
+      initialPeerPathCache: new Map([[admin.peerId, [invalidPath, validPath]]]),
+      onPeerPathCacheChange: (cache) => {
+        latestPeerPathCache = cache;
+      },
+    });
+
+    joiner.chat.joinGroup(groupId);
+    joiner.chat.loadActionChain(groupId, [genesisEnvelope]);
+    await joiner.chat.connectToPeerId(admin.peerId);
+
+    await waitUntil(
+      () => (latestPeerPathCache.get(admin.peerId)?.length ?? 0) > 0,
+    );
+    const cachedPaths = latestPeerPathCache.get(admin.peerId) ?? [];
+    expect(cachedPaths).toContain(invalidPath);
     expect(cachedPaths).toContain(validPath);
   });
 
@@ -770,7 +798,7 @@ describe("MultiGroupChat", () => {
     expect(request.inviteCode).toBe(inviteCode);
   });
 
-  it("should auto-approve DM joins without manual approval", async () => {
+  it("should require explicit DM request acceptance before messaging", async () => {
     const alice = await createTestNode();
     const bob = await createTestNode();
 
@@ -784,13 +812,31 @@ describe("MultiGroupChat", () => {
     ]);
 
     const invite = buildInvite(alice, genesisEnvelope);
-    await bob.chat.joinViaInvite(invite);
+    const inviteCode = encodeGroupInvite(invite);
+    await alice.chat.sendDirectMessageRequest({
+      targetPeerId: bob.peerId,
+      groupId,
+      groupName: "DM with Bob",
+      inviteCode,
+    });
+
+    await waitUntil(() => bob.directMessageRequests.length >= 1, 7_000);
+
+    const beforeAcceptHandshake = bob.chat.getDirectMessageHandshakeState(groupId);
+    expect(beforeAcceptHandshake?.complete ?? false).toBe(false);
+
+    const request = bob.directMessageRequests[0];
+    await bob.chat.acceptDirectMessageRequest(request.requestId);
 
     await waitUntil(() => {
       const aliceState = alice.chat.getActionChainState(groupId);
       const bobState = bob.chat.getActionChainState(groupId);
       const bobKeyHex = toHex(new Uint8Array(bob.accountKey.publicKey));
+      const aliceKeyHex = toHex(new Uint8Array(alice.accountKey.publicKey));
       return !!aliceState && !!bobState &&
+        aliceState.dmHandshakeComplete &&
+        bobState.dmHandshakeComplete &&
+        aliceState.members.has(aliceKeyHex) &&
         aliceState.members.has(bobKeyHex) &&
         bobState.members.has(bobKeyHex);
     }, 10_000);
@@ -812,31 +858,16 @@ describe("MultiGroupChat", () => {
 
     await alice.chat.connectTo(bob.chat.multiaddrs[0]);
     await waitFor(400);
-
-    await alice.chat.requestJoin(groupId);
-    await bob.chat.requestJoin(groupId);
-
-    let aliceApprovedIdx = 0;
-    let bobApprovedIdx = 0;
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < 12_000) {
-      while (aliceApprovedIdx < alice.joinRequests.length) {
-        const req = alice.joinRequests[aliceApprovedIdx++];
-        await alice.chat.approveJoin(groupId, req.requesterPublicKey).catch(() => {});
-      }
-      while (bobApprovedIdx < bob.joinRequests.length) {
-        const req = bob.joinRequests[bobApprovedIdx++];
-        await bob.chat.approveJoin(groupId, req.requesterPublicKey).catch(() => {});
-      }
-
+    await waitUntil(() => {
       const aliceState = alice.chat.getActionChainState(groupId);
       const bobState = bob.chat.getActionChainState(groupId);
-      if (aliceState?.members.size === 2 && bobState?.members.size === 2) break;
-      await waitFor(200);
-    }
-
-    expect(alice.chat.getActionChainState(groupId)?.members.size).toBe(2);
-    expect(bob.chat.getActionChainState(groupId)?.members.size).toBe(2);
+      return !!aliceState &&
+        !!bobState &&
+        aliceState.members.size === 2 &&
+        bobState.members.size === 2 &&
+        aliceState.dmHandshakeComplete &&
+        bobState.dmHandshakeComplete;
+    }, 12_000);
   });
 
   it("should reject joinViaInvite when invite targets a different peer ID", async () => {

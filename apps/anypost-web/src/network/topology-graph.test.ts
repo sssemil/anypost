@@ -236,4 +236,29 @@ describe("buildTopologyGraph", () => {
     const node = graph.nodes.find((n) => n.id === "12D3KooWPeerWithSuffixABCD");
     expect(node?.label).toBe("Alice …ABCD");
   });
+
+  it("should filter peers when visiblePeerIds is provided", () => {
+    const keepPeer = createPeerInfo({
+      peerId: "12D3KooWKeepPeer",
+      addrs: ["/ip4/1.2.3.4/tcp/9090/ws/p2p/12D3KooWKeepPeer"],
+    });
+    const skipPeer = createPeerInfo({
+      peerId: "12D3KooWSkipPeer",
+      addrs: ["/ip4/5.6.7.8/tcp/9090/ws/p2p/12D3KooWSkipPeer"],
+    });
+    const status = createNetworkStatus({ peers: [keepPeer, skipPeer] });
+    const graph = buildTopologyGraph(
+      status,
+      [],
+      undefined,
+      undefined,
+      { visiblePeerIds: new Set(["12D3KooWKeepPeer"]) },
+    );
+
+    expect(graph.nodes.map((node) => node.id)).toEqual([
+      "12D3KooWSelf1234567890",
+      "12D3KooWKeepPeer",
+    ]);
+    expect(graph.edges.map((edge) => edge.target)).toEqual(["12D3KooWKeepPeer"]);
+  });
 });

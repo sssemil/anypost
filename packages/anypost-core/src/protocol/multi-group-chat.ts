@@ -40,6 +40,7 @@ import { createSignedActionEnvelope, verifyAndDecodeAction } from "./action-sign
 import { createActionDagState, appendAction, getTips, topologicalOrder } from "./action-dag.js";
 import type { ActionDagState } from "./action-dag.js";
 import { createActionChainGroupState, deriveGroupState } from "./action-chain-state.js";
+import { decodeGroupInvite, encodeGroupInvite } from "./group-invite.js";
 import type { GroupInvite } from "./group-invite.js";
 import {
   validateInviteGrantForJoin,
@@ -100,6 +101,53 @@ export type DirectMessageRequestEvent = {
 
 type DirectMessageRequestListener = (event: DirectMessageRequestEvent) => void;
 
+export type DirectMessageHandshakeState = {
+  readonly complete: boolean;
+  readonly contributorPublicKeyHexes: readonly string[];
+  readonly missingPeerIds: readonly string[];
+};
+
+export type RelayContactSource =
+  | "bootstrap"
+  | "invite"
+  | "candidate"
+  | "manual"
+  | "harvest"
+  | "reservation"
+  | "unknown";
+
+export type RelayContactBookEntry = {
+  readonly peerId: string;
+  readonly addresses: readonly string[];
+  readonly sources: readonly RelayContactSource[];
+  readonly firstSeenAtMs: number;
+  readonly lastSeenAtMs: number;
+  readonly lastAttemptAtMs: number | null;
+  readonly lastSuccessAtMs: number | null;
+  readonly lastFailureAtMs: number | null;
+  readonly successCount: number;
+  readonly failureCount: number;
+  readonly consecutiveFailures: number;
+  readonly averageRttMs: number | null;
+  readonly quarantinedUntilMs: number | null;
+  readonly score: number;
+};
+
+export type RelayContactBook = ReadonlyMap<string, RelayContactBookEntry>;
+
+export type PinnedPeerWatchdogStatus = "connected" | "degraded" | "recovering";
+
+export type PinnedPeerWatchdogEntry = {
+  readonly peerId: string;
+  readonly status: PinnedPeerWatchdogStatus;
+  readonly lastStatusChangeAtMs: number;
+  readonly consecutiveFailures: number;
+  readonly lastSuccessfulPingAtMs: number | null;
+  readonly lastReconnectAttemptAtMs: number | null;
+};
+
+export type PinnedPeerWatchdogState = ReadonlyMap<string, PinnedPeerWatchdogEntry>;
+
 export type DiscoveryProfile = "balanced" | "aggressive";
 
 export type PeerDiscoveryMetrics = {
@@ -159,6 +207,9 @@ export type MultiGroupChat = {
   readonly leaveGroup: (groupId: string) => Promise<void>;
   readonly getJoinedGroups: () => readonly string[];
   readonly sendMessage: (groupId: string, text: string, displayName?: string) => Promise<void>;
+  readonly editMessage: (groupId: string, targetActionId: string, newText: string) => Promise<void>;
+  readonly deleteMessage: (groupId: string, targetActionId: string) => Promise<void>;
+  readonly sendReadReceipt: (groupId: string, upToActionId: string) => Promise<void>;
   readonly createGroup: (name: string) => Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }>;
   readonly createGroupWithId: (groupId: string, name: string) => Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }>;
   readonly createDirectMessageGroupWithId: (
@@ -166,12 +217,21 @@ export type MultiGroupChat = {
     peerIds: readonly [string, string],
   ) => Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }>;
   readonly joinViaInvite: (invite: GroupInvite) => Promise<{ groupId: string }>;
+  readonly acceptDirectMessageRequest: (requestId: string) => Promise<{ groupId: string }>;
   readonly sendDirectMessageRequest: (request: {
     readonly targetPeerId: string;
     readonly groupId: string;
     readonly groupName: string;
     readonly inviteCode: string;
   }) => Promise<void>;
+  readonly getDirectMessageHandshakeState: (groupId: string) => DirectMessageHandshakeState | null;
+  readonly getRelayContactBook: () => RelayContactBook;
+  readonly clearRelayContactBook: () => void;
+  readonly getPinnedPeerWatchdogState: () => PinnedPeerWatchdogState;
+  readonly getPeerPathCache: () => ReadonlyMap<string, readonly string[]>;
+  readonly clearPeerPathCache: () => void;
+  readonly getConnectionReasonCounts: () => ReadonlyMap<string, number>;
+  readonly clearConnectionReasonCounts: () => void;
   readonly renameGroup: (groupId: string, newName: string) => Promise<void>;
   readonly approveJoin: (
     groupId: string,
@@ -222,9 +282,12 @@ type CreateMultiGroupChatOptions = {
   readonly onRelayPoolStateChange?: (state: RelayPoolState) => void;
   readonly onGroupDiscoveryStateChange?: (state: GroupDiscoveryState) => void;
   readonly onRelayCandidateStateChange?: (state: RelayCandidateState) => void;
+  readonly onRelayContactBookChange?: (state: RelayContactBook) => void;
+  readonly onPinnedPeerWatchdogStateChange?: (state: PinnedPeerWatchdogState) => void;
   readonly onPublicKeyToPeerIdChange?: (map: ReadonlyMap<string, string>) => void;
   readonly onPeerPathCacheChange?: (cache: ReadonlyMap<string, readonly string[]>) => void;
   readonly initialRelayHints?: readonly string[];
+  readonly initialRelayContactBook?: RelayContactBook;
   readonly discoveryProfile?: DiscoveryProfile;
   readonly onPeerDiscoveryMetricsChange?: (metrics: PeerDiscoveryMetrics) => void;
   readonly onConnectionMetricsChange?: (metrics: ConnectionMetrics) => void;
@@ -240,10 +303,30 @@ type CreateMultiGroupChatOptions = {
 
 const MAX_CACHED_PEER_PATHS_PER_PEER = 4;
 const MAX_CACHED_PEER_PATH_PEERS = 200;
+const CACHED_PATH_EVICT_FAILURE_THRESHOLD = 3;
+const CACHED_PATH_FAILURE_TRACK_TTL_MS = 10 * 60_000;
 const DIAL_CANDIDATE_LIMIT = 3;
 const DIAL_CANDIDATE_CONCURRENCY = 2;
+const PINNED_DIAL_CANDIDATE_LIMIT = 8;
+const PINNED_DIAL_CANDIDATE_CONCURRENCY = 3;
 const DIAL_BACKOFF_BASE_MS = 1_000;
 const DIAL_BACKOFF_MAX_MS = 30_000;
+const RELAY_RESERVATION_TICK_INTERVAL_MS = 2_000;
+const RELAY_RESERVATION_DIAL_CONCURRENCY = 3;
+const RELAY_RESERVATION_DIAL_TIMEOUT_MS = 4_000;
+const RELAY_RESERVATION_BACKOFF_BASE_MS = 750;
+const RELAY_RESERVATION_BACKOFF_MAX_MS = 15_000;
+const RELAY_RESERVATION_DIAL_ATTEMPT_TIMEOUT_MS = 3_500;
+const RELAY_TARGET_ACTIVE_WEB = 5;
+const RELAY_TARGET_ACTIVE_DESKTOP = 6;
+const MEMBER_RECONNECT_FAST_INTERVAL_MS = 5_000;
+const MEMBER_RECONNECT_IDLE_INTERVAL_MS = 30_000;
+const PINNED_RECONNECT_BURST_SCHEDULE_MS = [0, 1_000, 2_000, 4_000, 8_000, 15_000] as const;
+const PINNED_KEEPALIVE_PING_INTERVAL_MS = 15_000;
+const PINNED_KEEPALIVE_FAILURE_THRESHOLD = 2;
+const RELAY_QUARANTINE_BASE_MS = 2 * 60_000;
+const RELAY_QUARANTINE_MAX_MS = 30 * 60_000;
+const MAX_CONNECTION_REASON_CODES = 200;
 const AGGRESSIVE_DISCOVERY_SEARCH_SCHEDULE_MS = [0, 1_500, 4_000, 9_000] as const;
 const BALANCED_DISCOVERY_SEARCH_SCHEDULE_MS = [0, 5_000] as const;
 const DIRECT_UPGRADE_WINDOW_MS = 60_000;
@@ -269,6 +352,7 @@ const FULL_SYNC_FALLBACK_COOLDOWN_MS = 30_000;
 const DIRECT_MESSAGE_REQUEST_TOPIC = "anypost/system/dm-requests/v1";
 const DIRECT_JOIN_REQUEST_TOPIC = "anypost/system/join-requests/v1";
 const PROFILE_SYNC_TOPIC = "anypost/system/profile/v1";
+const DIRECT_SIGNED_ACTION_PROTOCOL = "/anypost/direct-signed-action/1.0.0";
 const DIRECT_DM_REQUEST_PROTOCOL = "/anypost/direct-dm-request/1.0.0";
 const DIRECT_JOIN_REQUEST_PROTOCOL = "/anypost/direct-join-request/1.0.0";
 
@@ -288,9 +372,12 @@ export const createMultiGroupChat = async (
     onRelayPoolStateChange,
     onGroupDiscoveryStateChange,
     onRelayCandidateStateChange,
+    onRelayContactBookChange,
+    onPinnedPeerWatchdogStateChange,
     onPublicKeyToPeerIdChange,
     onPeerPathCacheChange,
     initialRelayHints = [],
+    initialRelayContactBook,
     discoveryProfile = "balanced",
     onPeerDiscoveryMetricsChange,
     onConnectionMetricsChange,
@@ -429,6 +516,7 @@ export const createMultiGroupChat = async (
   const messageListeners: MessageListener[] = [];
   const joinRequestListeners: JoinRequestListener[] = [];
   const directMessageRequestListeners: DirectMessageRequestListener[] = [];
+  const pendingDirectMessageRequestsById = new Map<string, DirectMessageRequestEvent>();
   const peerChangeListeners: Array<(count: number) => void> = [];
   const eventListeners: EventListener[] = [];
   let stopped = false;
@@ -710,6 +798,35 @@ export const createMultiGroupChat = async (
   };
 
   const pendingDirectUpgradeByPeer = new Map<string, number>();
+  const connectionReasonCounts = new Map<string, number>();
+  const cachedPathFailureCounts = new Map<string, { failures: number; lastFailureAtMs: number }>();
+
+  type MutableRelayContactBookEntry = {
+    peerId: string;
+    addresses: string[];
+    sources: Set<RelayContactSource>;
+    firstSeenAtMs: number;
+    lastSeenAtMs: number;
+    lastAttemptAtMs: number | null;
+    lastSuccessAtMs: number | null;
+    lastFailureAtMs: number | null;
+    successCount: number;
+    failureCount: number;
+    consecutiveFailures: number;
+    averageRttMs: number | null;
+    quarantinedUntilMs: number | null;
+  };
+  const relayContactBook = new Map<string, MutableRelayContactBookEntry>();
+  const pinnedPeerWatchdogState = new Map<string, PinnedPeerWatchdogEntry>();
+
+  const recordReason = (code: string) => {
+    const nextCount = (connectionReasonCounts.get(code) ?? 0) + 1;
+    connectionReasonCounts.set(code, nextCount);
+    if (connectionReasonCounts.size > MAX_CONNECTION_REASON_CODES) {
+      const oldest = connectionReasonCounts.keys().next().value as string | undefined;
+      if (oldest) connectionReasonCounts.delete(oldest);
+    }
+  };
 
   const normalizePathList = (paths: readonly string[]): string[] => {
     const deduped: string[] = [];
@@ -754,6 +871,251 @@ export const createMultiGroupChat = async (
     return pinned;
   };
 
+  const hasOfflinePinnedPeers = (): boolean => {
+    const ownId = node.peerId.toString();
+    const connectedIds = new Set(node.getPeers().map((p) => p.toString()));
+    for (const memberPeerId of getPinnedPeerIds()) {
+      if (memberPeerId === ownId) continue;
+      if (!connectedIds.has(memberPeerId)) return true;
+    }
+    return false;
+  };
+
+  const relayPeerIdFromAddress = (address: string): string | null => {
+    const trimmed = address.trim();
+    if (trimmed.length === 0) return null;
+    const marker = "/p2p/";
+    const idx = trimmed.lastIndexOf(marker);
+    if (idx === -1) return null;
+    const peerId = trimmed.slice(idx + marker.length).split("/")[0];
+    return peerId.length > 0 ? peerId : null;
+  };
+
+  const mergeRelayAddresses = (current: readonly string[], incoming: readonly string[]): string[] => {
+    const seen = new Set<string>();
+    const merged: string[] = [];
+    for (const raw of [...incoming, ...current]) {
+      const addr = raw.trim();
+      if (addr.length === 0 || seen.has(addr)) continue;
+      seen.add(addr);
+      merged.push(addr);
+      if (merged.length >= 12) break;
+    }
+    return merged;
+  };
+
+  const relayContactScore = (entry: MutableRelayContactBookEntry): number => {
+    const successRate = entry.successCount + entry.failureCount > 0
+      ? entry.successCount / (entry.successCount + entry.failureCount)
+      : 0.5;
+    const rttScore = entry.averageRttMs === null
+      ? 0
+      : Math.max(0, 1 - Math.min(entry.averageRttMs, 1500) / 1500);
+    const quarantinePenalty = entry.quarantinedUntilMs !== null && entry.quarantinedUntilMs > Date.now()
+      ? 0.25
+      : 1;
+    return Number((successRate * 0.7 + rttScore * 0.3).toFixed(4)) * quarantinePenalty;
+  };
+
+  const cloneRelayContactBook = (): RelayContactBook => {
+    const snapshot = new Map<string, RelayContactBookEntry>();
+    for (const [peerId, entry] of relayContactBook.entries()) {
+      snapshot.set(peerId, {
+        peerId,
+        addresses: [...entry.addresses],
+        sources: [...entry.sources],
+        firstSeenAtMs: entry.firstSeenAtMs,
+        lastSeenAtMs: entry.lastSeenAtMs,
+        lastAttemptAtMs: entry.lastAttemptAtMs,
+        lastSuccessAtMs: entry.lastSuccessAtMs,
+        lastFailureAtMs: entry.lastFailureAtMs,
+        successCount: entry.successCount,
+        failureCount: entry.failureCount,
+        consecutiveFailures: entry.consecutiveFailures,
+        averageRttMs: entry.averageRttMs,
+        quarantinedUntilMs: entry.quarantinedUntilMs,
+        score: relayContactScore(entry),
+      });
+    }
+    return snapshot;
+  };
+
+  const emitRelayContactBook = () => {
+    onRelayContactBookChange?.(cloneRelayContactBook());
+  };
+
+  const createRelayContactEntry = (
+    peerId: string,
+    source: RelayContactSource,
+    address?: string,
+  ): MutableRelayContactBookEntry => {
+    const now = Date.now();
+    return {
+      peerId,
+      addresses: address ? [address] : [],
+      sources: new Set<RelayContactSource>([source]),
+      firstSeenAtMs: now,
+      lastSeenAtMs: now,
+      lastAttemptAtMs: null,
+      lastSuccessAtMs: null,
+      lastFailureAtMs: null,
+      successCount: 0,
+      failureCount: 0,
+      consecutiveFailures: 0,
+      averageRttMs: null,
+      quarantinedUntilMs: null,
+    };
+  };
+
+  const ensureRelayContact = (
+    relayPeerId: string,
+    source: RelayContactSource,
+    address?: string,
+  ): MutableRelayContactBookEntry => {
+    const existing = relayContactBook.get(relayPeerId);
+    const now = Date.now();
+    if (existing) {
+      existing.lastSeenAtMs = now;
+      existing.sources.add(source);
+      if (address) {
+        existing.addresses = mergeRelayAddresses(existing.addresses, [address]);
+      }
+      return existing;
+    }
+    const created = createRelayContactEntry(relayPeerId, source, address);
+    relayContactBook.set(relayPeerId, created);
+    return created;
+  };
+
+  const ingestRelayContact = (
+    address: string,
+    source: RelayContactSource,
+  ) => {
+    const relayPeerId = relayPeerIdFromAddress(address);
+    if (!relayPeerId) return;
+    ensureRelayContact(relayPeerId, source, address);
+    emitRelayContactBook();
+  };
+
+  const updateRelayContactRtt = (relayPeerId: string, rttMs: number) => {
+    if (!Number.isFinite(rttMs) || rttMs <= 0) return;
+    const entry = ensureRelayContact(relayPeerId, "candidate");
+    const current = entry.averageRttMs;
+    entry.averageRttMs = current === null
+      ? rttMs
+      : Math.round(current * 0.7 + rttMs * 0.3);
+    emitRelayContactBook();
+  };
+
+  const markRelayContactAttempt = (relayPeerId: string, address?: string) => {
+    const entry = relayContactBook.get(relayPeerId)
+      ?? (address ? ensureRelayContact(relayPeerId, "reservation", address) : null);
+    if (!entry) return;
+    entry.lastAttemptAtMs = Date.now();
+    emitRelayContactBook();
+  };
+
+  const markRelayContactSuccess = (relayPeerId: string, address?: string) => {
+    const entry = relayContactBook.get(relayPeerId)
+      ?? (address ? ensureRelayContact(relayPeerId, "reservation", address) : null);
+    if (!entry) return;
+    const now = Date.now();
+    entry.lastSeenAtMs = now;
+    entry.lastSuccessAtMs = now;
+    entry.successCount += 1;
+    entry.consecutiveFailures = 0;
+    entry.quarantinedUntilMs = null;
+    emitRelayContactBook();
+  };
+
+  const markRelayContactFailure = (relayPeerId: string, address?: string) => {
+    const entry = relayContactBook.get(relayPeerId)
+      ?? (address ? ensureRelayContact(relayPeerId, "reservation", address) : null);
+    if (!entry) return;
+    const now = Date.now();
+    entry.lastSeenAtMs = now;
+    entry.lastFailureAtMs = now;
+    entry.failureCount += 1;
+    entry.consecutiveFailures += 1;
+    if (entry.consecutiveFailures >= 2) {
+      const quarantineMs = Math.min(
+        RELAY_QUARANTINE_BASE_MS * 2 ** Math.max(0, entry.consecutiveFailures - 2),
+        RELAY_QUARANTINE_MAX_MS,
+      );
+      entry.quarantinedUntilMs = now + quarantineMs;
+    }
+    emitRelayContactBook();
+  };
+
+  const rankRelayAddressesForDial = (addresses: readonly string[]): readonly string[] => {
+    const now = Date.now();
+    const scored = addresses.map((address, index) => {
+      const relayPeerId = relayPeerIdFromAddress(address);
+      const entry = relayPeerId ? relayContactBook.get(relayPeerId) : undefined;
+      const quarantined = entry?.quarantinedUntilMs !== null &&
+        entry?.quarantinedUntilMs !== undefined &&
+        entry.quarantinedUntilMs > now;
+      const score = entry ? relayContactScore(entry) : 0.4;
+      return {
+        address,
+        index,
+        quarantined,
+        score,
+      };
+    });
+    const nonQuarantined = scored.filter((item) => !item.quarantined);
+    const fallback = nonQuarantined.length > 0 ? nonQuarantined : scored;
+    return fallback
+      .sort((a, b) => b.score - a.score || a.index - b.index)
+      .map((item) => item.address);
+  };
+
+  const emitPinnedPeerWatchdogState = () => {
+    onPinnedPeerWatchdogStateChange?.(new Map(pinnedPeerWatchdogState));
+  };
+
+  const setPinnedPeerWatchdog = (
+    peerId: string,
+    patch: Partial<PinnedPeerWatchdogEntry>,
+  ) => {
+    const existing = pinnedPeerWatchdogState.get(peerId);
+    const next: PinnedPeerWatchdogEntry = {
+      peerId,
+      status: patch.status ?? existing?.status ?? "recovering",
+      lastStatusChangeAtMs:
+        patch.lastStatusChangeAtMs
+        ?? (patch.status && patch.status !== existing?.status ? Date.now() : existing?.lastStatusChangeAtMs ?? Date.now()),
+      consecutiveFailures: patch.consecutiveFailures ?? existing?.consecutiveFailures ?? 0,
+      lastSuccessfulPingAtMs: patch.lastSuccessfulPingAtMs ?? existing?.lastSuccessfulPingAtMs ?? null,
+      lastReconnectAttemptAtMs: patch.lastReconnectAttemptAtMs ?? existing?.lastReconnectAttemptAtMs ?? null,
+    };
+    pinnedPeerWatchdogState.set(peerId, next);
+    emitPinnedPeerWatchdogState();
+  };
+
+  const reconcilePinnedPeerWatchdog = () => {
+    const pinned = getPinnedPeerIds();
+    let changed = false;
+    for (const peerId of [...pinnedPeerWatchdogState.keys()]) {
+      if (pinned.has(peerId)) continue;
+      pinnedPeerWatchdogState.delete(peerId);
+      changed = true;
+    }
+    for (const peerId of pinned) {
+      if (pinnedPeerWatchdogState.has(peerId)) continue;
+      pinnedPeerWatchdogState.set(peerId, {
+        peerId,
+        status: node.getPeers().some((peer) => peer.toString() === peerId) ? "connected" : "recovering",
+        lastStatusChangeAtMs: Date.now(),
+        consecutiveFailures: 0,
+        lastSuccessfulPingAtMs: null,
+        lastReconnectAttemptAtMs: null,
+      });
+      changed = true;
+    }
+    if (changed) emitPinnedPeerWatchdogState();
+  };
+
   const hasCompleteMembershipContext = (): boolean => {
     if (joinedGroups.length === 0) return false;
     for (const groupId of joinedGroups) {
@@ -790,6 +1152,7 @@ export const createMultiGroupChat = async (
     const normalizedPath = path.trim();
     if (normalizedPath.length === 0) return;
     if (!getPinnedPeerIds().has(peerId)) return;
+    clearCachedPathFailure(peerId, normalizedPath);
 
     const current = peerPathCache.get(peerId) ?? [];
     const next = normalizePathList([normalizedPath, ...current]);
@@ -814,10 +1177,12 @@ export const createMultiGroupChat = async (
   };
 
   const forgetPeerPath = (peerId: string, path: string) => {
+    const normalizedPath = path.trim();
+    if (normalizedPath.length === 0) return;
     const existing = peerPathCache.get(peerId);
     if (!existing) return;
 
-    const filtered = existing.filter((cachedPath) => cachedPath !== path);
+    const filtered = existing.filter((cachedPath) => cachedPath !== normalizedPath);
     if (filtered.length === existing.length) return;
 
     if (filtered.length === 0) {
@@ -826,6 +1191,7 @@ export const createMultiGroupChat = async (
       peerPathCache.set(peerId, filtered);
     }
 
+    clearCachedPathFailure(peerId, normalizedPath);
     notifyPeerPathCacheChange();
   };
 
@@ -849,14 +1215,21 @@ export const createMultiGroupChat = async (
       tagGroupMemberKeepAlive(memberPeerId);
     }
     reconcilePeerPathCache();
+    reconcilePinnedPeerWatchdog();
   };
 
   publicKeyToPeerId.set(toHex(new Uint8Array(accountKey.publicKey)), node.peerId.toString());
   notifyPublicKeyToPeerIdChange();
 
   let relayCandidateState = createRelayCandidateState();
+  const relayTargetActive = isDesktopRuntime
+    ? RELAY_TARGET_ACTIVE_DESKTOP
+    : RELAY_TARGET_ACTIVE_WEB;
   const relayReservationManager = createRelayReservationManager({
-    targetActive: 3,
+    targetActive: relayTargetActive,
+    baseBackoffMs: RELAY_RESERVATION_BACKOFF_BASE_MS,
+    maxBackoffMs: RELAY_RESERVATION_BACKOFF_MAX_MS,
+    dialAttemptTimeoutMs: RELAY_RESERVATION_DIAL_ATTEMPT_TIMEOUT_MS,
     onStateChange: (reservationState) => {
       connectionMetrics.activeReservations = [...reservationState.entries.values()]
         .filter((entry) => entry.status === "active" || entry.status === "renewing")
@@ -872,12 +1245,35 @@ export const createMultiGroupChat = async (
     onRelayCandidateStateChange?.(relayCandidateState);
   };
 
+  for (const [peerId, entry] of initialRelayContactBook ?? []) {
+    const normalizedPeerId = peerId.trim();
+    if (normalizedPeerId.length === 0) continue;
+    relayContactBook.set(normalizedPeerId, {
+      peerId: normalizedPeerId,
+      addresses: mergeRelayAddresses([], entry.addresses),
+      sources: new Set(entry.sources.length > 0 ? entry.sources : ["unknown"]),
+      firstSeenAtMs: entry.firstSeenAtMs,
+      lastSeenAtMs: entry.lastSeenAtMs,
+      lastAttemptAtMs: entry.lastAttemptAtMs,
+      lastSuccessAtMs: entry.lastSuccessAtMs,
+      lastFailureAtMs: entry.lastFailureAtMs,
+      successCount: entry.successCount,
+      failureCount: entry.failureCount,
+      consecutiveFailures: entry.consecutiveFailures,
+      averageRttMs: entry.averageRttMs,
+      quarantinedUntilMs: entry.quarantinedUntilMs,
+    });
+  }
+
   for (const relayHint of initialRelayHints) {
     relayReservationManager.ingestRelayAddress(relayHint);
+    ingestRelayContact(relayHint, "bootstrap");
   }
   for (const relayAddr of relayPeers) {
     relayReservationManager.ingestRelayAddress(relayAddr);
+    ingestRelayContact(relayAddr, "bootstrap");
   }
+  emitRelayContactBook();
   emitConnectionMetrics();
   emitJoinRetryState();
   emitSyncProgressState();
@@ -893,6 +1289,57 @@ export const createMultiGroupChat = async (
   const ownPublicKeyHex = toHex(new Uint8Array(accountKey.publicKey));
   const ownPeerId = node.peerId.toString();
 
+  const collectRecentEnvelopeAuthorPeerIds = (
+    groupId: string,
+    limit = 50,
+  ): readonly string[] => {
+    const ordered = getOrderedEnvelopes(groupId);
+    if (ordered.length === 0) return [];
+    const start = Math.max(0, ordered.length - limit);
+    const recent = ordered.slice(start);
+    const seen = new Set<string>();
+    const peers: string[] = [];
+    for (let i = recent.length - 1; i >= 0; i -= 1) {
+      const decoded = verifyAndDecodeAction(recent[i]);
+      if (!decoded.success) continue;
+      const authorHex = toHex(decoded.data.authorPublicKey);
+      const peerId = publicKeyToPeerId.get(authorHex);
+      if (!peerId || peerId === ownPeerId) continue;
+      if (seen.has(peerId)) continue;
+      seen.add(peerId);
+      peers.push(peerId);
+    }
+    return peers;
+  };
+
+  const collectFastPathTargets = (groupId: string): readonly string[] => {
+    const connected = new Set(node.getPeers().map((peer) => peer.toString()));
+    const targets = new Set<string>();
+    const state = actionChainStates.get(groupId);
+
+    if (state) {
+      for (const member of state.members.values()) {
+        const peerId = publicKeyToPeerId.get(member.publicKeyHex);
+        if (!peerId || peerId === ownPeerId || !connected.has(peerId)) continue;
+        targets.add(peerId);
+      }
+
+      if (state.isDirectMessage && state.directMessagePeerIds) {
+        for (const peerId of state.directMessagePeerIds) {
+          if (peerId === ownPeerId || !connected.has(peerId)) continue;
+          targets.add(peerId);
+        }
+      }
+    }
+
+    for (const peerId of collectRecentEnvelopeAuthorPeerIds(groupId, 50)) {
+      if (peerId === ownPeerId || !connected.has(peerId)) continue;
+      targets.add(peerId);
+    }
+
+    return [...targets].slice(0, 24);
+  };
+
   const publishEnvelope = async (groupId: string, envelope: SignedActionEnvelope) => {
     const topic = groupTopic(groupId);
     const wireMessage: WireMessage = {
@@ -901,6 +1348,17 @@ export const createMultiGroupChat = async (
       signature: envelope.signature,
       hash: envelope.hash,
     };
+    const fastPathTargets = collectFastPathTargets(groupId);
+    if (fastPathTargets.length > 0) {
+      emit("sync", `Fast-path signed_action to ${fastPathTargets.length} peer(s) for ${groupId.slice(0, 8)}...`);
+      for (const peerId of fastPathTargets) {
+        void sendWireMessageDirect(
+          peerId,
+          DIRECT_SIGNED_ACTION_PROTOCOL,
+          wireMessage,
+        ).catch(() => {});
+      }
+    }
     await pubsub.publish(topic, encodeWireMessage(wireMessage));
   };
 
@@ -925,6 +1383,49 @@ export const createMultiGroupChat = async (
     const ordered = getOrderedEnvelopes(groupId);
     const latest = ordered[ordered.length - 1];
     return latest ? Uint8Array.from(latest.hash) : undefined;
+  };
+
+  const sameDirectMessagePair = (
+    left: readonly [string, string],
+    right: readonly [string, string],
+  ): boolean =>
+    left[0] === right[0] && left[1] === right[1];
+
+  const findDirectMessageGenesisEnvelopeByAuthor = (
+    groupId: string,
+    authorPublicKeyHex: string,
+    peerIds?: readonly [string, string],
+  ): SignedActionEnvelope | null => {
+    for (const envelope of getOrderedEnvelopes(groupId)) {
+      const decoded = verifyAndDecodeAction(envelope);
+      if (!decoded.success) continue;
+      if (decoded.data.payload.type !== "dm-created") continue;
+      if (toHex(decoded.data.authorPublicKey) !== authorPublicKeyHex) continue;
+      if (peerIds && !sameDirectMessagePair(decoded.data.payload.peerIds, peerIds)) continue;
+      return envelope;
+    }
+    return null;
+  };
+
+  const getDirectMessageHandshakeStateForGroup = (groupId: string): DirectMessageHandshakeState | null => {
+    const state = actionChainStates.get(groupId);
+    if (!state || !state.isDirectMessage || !state.directMessagePeerIds) return null;
+    const contributorPublicKeyHexes = [...state.dmGenesisContributorPublicKeys];
+    const contributorPeerIds = new Set<string>();
+    for (const contributorHex of contributorPublicKeyHexes) {
+      if (contributorHex === ownPublicKeyHex) {
+        contributorPeerIds.add(ownPeerId);
+        continue;
+      }
+      const mapped = publicKeyToPeerId.get(contributorHex);
+      if (mapped) contributorPeerIds.add(mapped);
+    }
+    const missingPeerIds = state.directMessagePeerIds.filter((peerId) => !contributorPeerIds.has(peerId));
+    return {
+      complete: state.dmHandshakeComplete,
+      contributorPublicKeyHexes,
+      missingPeerIds,
+    };
   };
 
   const getMissingEnvelopesForKnownHash = (
@@ -984,6 +1485,9 @@ export const createMultiGroupChat = async (
   const isPeerMemberOfGroup = (groupId: string, peerIdValue: string): boolean => {
     const state = actionChainStates.get(groupId);
     if (!state) return true;
+    if (state.isDirectMessage && state.directMessagePeerIds?.includes(peerIdValue)) {
+      return true;
+    }
     for (const member of state.members.values()) {
       if (publicKeyToPeerId.get(member.publicKeyHex) === peerIdValue) {
         return true;
@@ -1741,12 +2245,12 @@ export const createMultiGroupChat = async (
     actionEnvelopes.set(groupId, [...existing, envelope]);
 
     const previousState = actionChainStates.get(groupId);
-
     const ordered = topologicalOrder(newDag);
     const derived = deriveGroupState(groupId, ordered);
     if (derived.success) {
       actionChainStates.set(groupId, derived.data);
       reconcilePeerPathCache();
+      reconcilePinnedPeerWatchdog();
 
       const wasMember = previousState?.members.has(ownPublicKeyHex) ?? false;
       const isMember = derived.data.members.has(ownPublicKeyHex);
@@ -1829,6 +2333,7 @@ export const createMultiGroupChat = async (
         if (!relayPeers.includes(fullAddr)) {
           relayPeers.push(fullAddr);
         }
+        ingestRelayContact(fullAddr, "candidate");
       }
 
       emit("relay-candidate", `Relay candidate: ${peerId(detail.peerId)}... (${wsAddresses.length} WS addr)`);
@@ -1842,6 +2347,7 @@ export const createMultiGroupChat = async (
             updateRtt(relayCandidateState, remotePeerId, rttMs),
           );
           relayReservationManager.updateRtt(remotePeerId, rttMs);
+          updateRelayContactRtt(remotePeerId, rttMs);
         }).catch(() => {});
       }
     });
@@ -1884,6 +2390,15 @@ export const createMultiGroupChat = async (
     const isMember = [...publicKeyToPeerId.values()].includes(remotePeerId);
     if (isMember) {
       tagGroupMemberKeepAlive(remotePeerId);
+      clearPinnedReconnectBurst(remotePeerId);
+      pinnedKeepAliveFailures.delete(remotePeerId);
+      if (getPinnedPeerIds().has(remotePeerId)) {
+        setPinnedPeerWatchdog(remotePeerId, {
+          status: "connected",
+          consecutiveFailures: 0,
+          lastSuccessfulPingAtMs: Date.now(),
+        });
+      }
     }
 
     void publishProfileRequest(remotePeerId).catch(() => {});
@@ -1905,7 +2420,16 @@ export const createMultiGroupChat = async (
       updateRelayCandidateState(removeCandidate(withLost, disconnectedId));
     }
     relayReservationManager.markReservationLost(disconnectedId);
+    markRelayContactFailure(disconnectedId);
     pendingDirectUpgradeByPeer.delete(disconnectedId);
+    pinnedKeepAliveFailures.delete(disconnectedId);
+    if (getPinnedPeerIds().has(disconnectedId)) {
+      setPinnedPeerWatchdog(disconnectedId, {
+        status: "recovering",
+        lastReconnectAttemptAtMs: Date.now(),
+      });
+      schedulePinnedReconnectBurst(disconnectedId, "disconnect");
+    }
 
     notifyPeerChange();
   });
@@ -1924,6 +2448,7 @@ export const createMultiGroupChat = async (
       }
       if (baseAddr) {
         relayReservationManager.ingestRelayAddress(baseAddr);
+        ingestRelayContact(baseAddr, "harvest");
       }
 
       const relayId = extractRelayPeerId(circuitAddr);
@@ -1935,6 +2460,7 @@ export const createMultiGroupChat = async (
       if (relayId) {
         const priorStatus = relayReservationManager.getState().entries.get(relayId)?.status;
         relayReservationManager.markReservationObserved(relayId);
+        markRelayContactSuccess(relayId);
         observedRelayIds.push(relayId);
         if (priorStatus === "reserving") {
           connectionMetrics.reservationSuccesses += 1;
@@ -1983,6 +2509,8 @@ export const createMultiGroupChat = async (
   const dialedPeers = new Set<string>();
   const inFlightPeerDials = new Map<string, Promise<void>>();
   const dialFailureBackoff = new Map<string, { failures: number; nextAllowedAt: number }>();
+  const pinnedReconnectBurstTimers = new Map<string, Set<ReturnType<typeof setTimeout>>>();
+  const pinnedKeepAliveFailures = new Map<string, number>();
 
   type DialSource = "cached path" | "discovered address" | "circuit relay";
   type DialCandidate = {
@@ -1990,6 +2518,15 @@ export const createMultiGroupChat = async (
     source: DialSource;
     score: number;
   };
+  type DialBehavior = {
+    candidateLimit: number;
+    concurrency: number;
+  };
+
+  const resolveDialBehavior = (prioritizePinned: boolean): DialBehavior => ({
+    candidateLimit: prioritizePinned ? PINNED_DIAL_CANDIDATE_LIMIT : DIAL_CANDIDATE_LIMIT,
+    concurrency: prioritizePinned ? PINNED_DIAL_CANDIDATE_CONCURRENCY : DIAL_CANDIDATE_CONCURRENCY,
+  });
 
   const normalizeDialAddress = (
     targetPeerId: string,
@@ -2031,6 +2568,7 @@ export const createMultiGroupChat = async (
         relayPeers.push(base);
       }
       relayReservationManager.ingestRelayAddress(base);
+      ingestRelayContact(base, "harvest");
     }
   };
 
@@ -2059,6 +2597,34 @@ export const createMultiGroupChat = async (
     dialFailureBackoff.delete(addr);
   };
 
+  const cachedPathFailureKey = (peerId: string, path: string): string => `${peerId}::${path}`;
+
+  const pruneCachedPathFailureState = () => {
+    if (cachedPathFailureCounts.size === 0) return;
+    const cutoff = Date.now() - CACHED_PATH_FAILURE_TRACK_TTL_MS;
+    for (const [key, state] of cachedPathFailureCounts.entries()) {
+      if (state.lastFailureAtMs < cutoff) {
+        cachedPathFailureCounts.delete(key);
+      }
+    }
+  };
+
+  const clearCachedPathFailure = (peerId: string, path: string) => {
+    cachedPathFailureCounts.delete(cachedPathFailureKey(peerId, path));
+  };
+
+  const recordCachedPathFailure = (peerId: string, path: string): number => {
+    pruneCachedPathFailureState();
+    const key = cachedPathFailureKey(peerId, path);
+    const existing = cachedPathFailureCounts.get(key);
+    const next = {
+      failures: (existing?.failures ?? 0) + 1,
+      lastFailureAtMs: Date.now(),
+    };
+    cachedPathFailureCounts.set(key, next);
+    return next.failures;
+  };
+
   const scoreDialCandidate = (source: DialSource, addr: string): number => {
     const sourceScore = source === "cached path"
       ? 100
@@ -2078,6 +2644,7 @@ export const createMultiGroupChat = async (
   const buildDialCandidates = (
     targetPeerId: string,
     preferredAddrs: readonly string[],
+    behavior: DialBehavior,
   ): readonly DialCandidate[] => {
     const candidates = new Map<string, DialCandidate>();
 
@@ -2101,7 +2668,7 @@ export const createMultiGroupChat = async (
     return [...candidates.values()]
       .filter((candidate) => !shouldSkipDialCandidate(candidate.addr))
       .sort((a, b) => b.score - a.score)
-      .slice(0, DIAL_CANDIDATE_LIMIT);
+      .slice(0, behavior.candidateLimit);
   };
 
   const recordDialAttemptMetric = (groupId?: string) => {
@@ -2132,14 +2699,26 @@ export const createMultiGroupChat = async (
       await node.dial(multiaddr(candidate.addr));
       clearDialFailure(candidate.addr);
       emit("dial-success", `Connected to ${remotePeerId.slice(0, 16)}... via ${candidate.source}`);
+      if (candidate.source === "circuit relay") {
+        const relayPeerId = relayPeerIdFromAddress(candidate.addr);
+        if (relayPeerId) markRelayContactSuccess(relayPeerId, candidate.addr);
+      }
       recordSuccessfulPeerPath(remotePeerId, candidate.addr);
       recordDialSuccessMetric(metricGroupId);
       return true;
     } catch {
+      recordReason(`dial_failure:${candidate.source}`);
       emit("dial-failure", `${candidate.source} failed: ${candidate.addr.slice(0, 80)}...`);
       recordDialFailure(candidate.addr);
+      if (candidate.source === "circuit relay") {
+        const relayPeerId = relayPeerIdFromAddress(candidate.addr);
+        if (relayPeerId) markRelayContactFailure(relayPeerId, candidate.addr);
+      }
       if (candidate.source === "cached path") {
-        forgetPeerPath(remotePeerId, candidate.addr);
+        const failures = recordCachedPathFailure(remotePeerId, candidate.addr);
+        if (failures >= CACHED_PATH_EVICT_FAILURE_THRESHOLD) {
+          forgetPeerPath(remotePeerId, candidate.addr);
+        }
       }
       return false;
     }
@@ -2148,13 +2727,14 @@ export const createMultiGroupChat = async (
   const dialCandidateSet = async (
     remotePeerId: string,
     candidates: readonly DialCandidate[],
+    behavior: DialBehavior,
     metricGroupId?: string,
   ): Promise<boolean> => {
     if (candidates.length === 0) return false;
 
     let index = 0;
     let connected = false;
-    const workerCount = Math.min(DIAL_CANDIDATE_CONCURRENCY, candidates.length);
+    const workerCount = Math.min(behavior.concurrency, candidates.length);
 
     const worker = async () => {
       while (!connected) {
@@ -2179,6 +2759,7 @@ export const createMultiGroupChat = async (
     options: {
       readonly preferredAddrs?: readonly string[];
       readonly metricGroupId?: string;
+      readonly prioritizePinned?: boolean;
     } = {},
   ): Promise<void> => {
     const existingDial = inFlightPeerDials.get(targetPeerId);
@@ -2191,14 +2772,16 @@ export const createMultiGroupChat = async (
       const ownPeerId = node.peerId.toString();
       if (targetPeerId === ownPeerId) return;
       if (node.getPeers().some((p) => p.toString() === targetPeerId)) return;
+      const prioritizePinned = options.prioritizePinned ?? getPinnedPeerIds().has(targetPeerId);
+      const dialBehavior = resolveDialBehavior(prioritizePinned);
 
       const normalizedPreferred = (options.preferredAddrs ?? [])
         .map((addr) => normalizeDialAddress(targetPeerId, addr))
         .filter((addr): addr is string => addr !== null);
       harvestRelayBasesFromAddresses(normalizedPreferred);
       const discoveryHints = mergeDiscoveryHints(targetPeerId, normalizedPreferred);
-      const initialCandidates = buildDialCandidates(targetPeerId, discoveryHints);
-      if (await dialCandidateSet(targetPeerId, initialCandidates, options.metricGroupId)) {
+      const initialCandidates = buildDialCandidates(targetPeerId, discoveryHints, dialBehavior);
+      if (await dialCandidateSet(targetPeerId, initialCandidates, dialBehavior, options.metricGroupId)) {
         return;
       }
 
@@ -2224,6 +2807,7 @@ export const createMultiGroupChat = async (
           return;
         }
       } catch {
+        recordReason("dht_find_peer_failed");
         emit("info", `DHT lookup failed for ${targetPeerId.slice(0, 16)}..., trying circuit relay`);
       }
 
@@ -2235,7 +2819,7 @@ export const createMultiGroupChat = async (
         : node.getMultiaddrs()
             .map((ma) => ma.toString())
             .filter((addr) => addr.includes("/p2p/") && !addr.includes("/p2p-circuit/"));
-      const relayAddresses = [...new Set(relayAddressesRaw)];
+      const relayAddresses = rankRelayAddressesForDial([...new Set(relayAddressesRaw)]);
 
       const circuitAddrs = buildCircuitRelayAddresses({
         targetPeerId,
@@ -2251,11 +2835,12 @@ export const createMultiGroupChat = async (
         }))
         .filter((candidate) => !shouldSkipDialCandidate(candidate.addr))
         .sort((a, b) => b.score - a.score)
-        .slice(0, DIAL_CANDIDATE_LIMIT);
-      if (await dialCandidateSet(targetPeerId, relayCandidates, options.metricGroupId)) {
+        .slice(0, dialBehavior.candidateLimit);
+      if (await dialCandidateSet(targetPeerId, relayCandidates, dialBehavior, options.metricGroupId)) {
         return;
       }
 
+      recordReason("connect_to_peer_failed");
       throw new Error(`Could not connect to peer ${targetPeerId}`);
     })();
 
@@ -2271,15 +2856,57 @@ export const createMultiGroupChat = async (
     remotePeerId: string,
     preferredAddrs: readonly string[] = [],
     metricGroupId?: string,
+    prioritizePinned?: boolean,
   ) => {
     if (remotePeerId === node.peerId.toString()) return;
     if (dialedPeers.has(remotePeerId)) return;
     if (node.getPeers().some((p) => p.toString() === remotePeerId)) return;
 
     dialedPeers.add(remotePeerId);
-    tryConnectToPeerId(remotePeerId, { preferredAddrs, metricGroupId }).catch(() => {
+    tryConnectToPeerId(remotePeerId, {
+      preferredAddrs,
+      metricGroupId,
+      prioritizePinned: prioritizePinned ?? getPinnedPeerIds().has(remotePeerId),
+    }).catch(() => {
       dialedPeers.delete(remotePeerId);
     });
+  };
+
+  const clearPinnedReconnectBurst = (peerId: string) => {
+    const timers = pinnedReconnectBurstTimers.get(peerId);
+    if (!timers) return;
+    for (const timer of timers) clearTimeout(timer);
+    pinnedReconnectBurstTimers.delete(peerId);
+  };
+
+  const schedulePinnedReconnectBurst = (peerId: string, reason: string) => {
+    if (!isRelayCapableRuntime) return;
+    if (peerId === ownPeerId) return;
+    if (!getPinnedPeerIds().has(peerId)) return;
+
+    clearPinnedReconnectBurst(peerId);
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    pinnedReconnectBurstTimers.set(peerId, timers);
+    setPinnedPeerWatchdog(peerId, {
+      status: "recovering",
+      lastReconnectAttemptAtMs: Date.now(),
+    });
+    emit("info", `Pinned reconnect burst (${reason}) for ${peerId.slice(0, 12)}...`);
+
+    for (const delayMs of PINNED_RECONNECT_BURST_SCHEDULE_MS) {
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        if (stopped) return;
+        if (!getPinnedPeerIds().has(peerId)) return;
+        if (node.getPeers().some((peer) => peer.toString() === peerId)) return;
+        setPinnedPeerWatchdog(peerId, {
+          status: "recovering",
+          lastReconnectAttemptAtMs: Date.now(),
+        });
+        attemptDirectConnect(peerId, [], undefined, true);
+      }, delayMs);
+      timers.add(timer);
+    }
   };
 
   const emitActionMessage = (
@@ -2325,6 +2952,13 @@ export const createMultiGroupChat = async (
 
     publicKeyToPeerId.set(senderPublicKeyHex, trimmedPeerId);
     notifyPublicKeyToPeerIdChange();
+    if (getPinnedPeerIds().has(trimmedPeerId) && !node.getPeers().some((peer) => peer.toString() === trimmedPeerId)) {
+      setPinnedPeerWatchdog(trimmedPeerId, {
+        status: "recovering",
+        lastReconnectAttemptAtMs: Date.now(),
+      });
+      schedulePinnedReconnectBurst(trimmedPeerId, "identity-map");
+    }
     return trimmedPeerId;
   };
 
@@ -2388,18 +3022,12 @@ export const createMultiGroupChat = async (
     }
 
     const currentJoinPolicy = groupState?.joinPolicy ?? "manual";
-    const expectedDirectMessagePeerId = groupState?.isDirectMessage && groupState.directMessagePeerIds
-      ? groupState.directMessagePeerIds.find((peerId) => peerId !== ownPeerId) ?? null
-      : null;
-    const directMessagePeerJoin = expectedDirectMessagePeerId !== null &&
-      senderPeerId === expectedDirectMessagePeerId;
     const shouldAutoApproveByInvite =
       currentJoinPolicy === "auto_with_invite" && inviteTokenId !== undefined;
-    const shouldAutoApproveDirectMessage = directMessagePeerJoin;
     if (
       isOwnAdminOfGroup(payload.groupId) &&
       !requesterAlreadyMember &&
-      (shouldAutoApproveByInvite || shouldAutoApproveDirectMessage)
+      shouldAutoApproveByInvite
     ) {
       autoApproved = true;
       performApproveJoin(
@@ -2472,6 +3100,16 @@ export const createMultiGroupChat = async (
         inviteCode: payload.inviteCode,
         sentAt: payload.sentAt,
       };
+      for (const [pendingId, pending] of pendingDirectMessageRequestsById.entries()) {
+        if (
+          pending.requestId !== payload.requestId &&
+          pending.senderPeerId === eventPayload.senderPeerId &&
+          pending.groupId === eventPayload.groupId
+        ) {
+          pendingDirectMessageRequestsById.delete(pendingId);
+        }
+      }
+      pendingDirectMessageRequestsById.set(payload.requestId, eventPayload);
       directMessageRequestListeners.forEach((listener) => listener(eventPayload));
       emit("info", `DM request from ${senderPeerId.slice(0, 12)}...`);
       return;
@@ -2640,7 +3278,18 @@ export const createMultiGroupChat = async (
       }
 
       const senderPublicKeyHex = toHex(payload.senderPublicKey);
-      if (isMembershipEnforcedGroup(matchedGroupId) && !actionChainStates.get(matchedGroupId)?.members.has(senderPublicKeyHex)) {
+      const groupState = actionChainStates.get(matchedGroupId);
+      const allowDirectMessageHandshakeSender =
+        !!groupState &&
+        groupState.isDirectMessage &&
+        !groupState.dmHandshakeComplete &&
+        !!groupState.directMessagePeerIds &&
+        groupState.directMessagePeerIds.includes(senderPeerId);
+      if (
+        isMembershipEnforcedGroup(matchedGroupId) &&
+        !groupState?.members.has(senderPublicKeyHex) &&
+        !allowDirectMessageHandshakeSender
+      ) {
         if (isOwnAdminOfGroup(matchedGroupId)) {
           processIncomingJoinRequest({
             groupId: matchedGroupId,
@@ -2833,6 +3482,26 @@ export const createMultiGroupChat = async (
     }).catch(() => {});
   });
 
+  node.handle(DIRECT_SIGNED_ACTION_PROTOCOL, ({ stream, connection }) => {
+    void readDirectSignalPayload(stream as { source: AsyncIterable<unknown> }).then((data) => {
+      if (data.length === 0) return;
+      const decoded = decodeWireMessage(data);
+      if (!decoded.success || decoded.data.type !== "signed_action") return;
+      const envelope: SignedActionEnvelope = {
+        signedBytes: decoded.data.signedBytes,
+        signature: decoded.data.signature,
+        hash: decoded.data.hash,
+      };
+      const verified = verifyAndDecodeAction(envelope);
+      if (!verified.success) return;
+      dispatchDirectSignal(
+        groupTopic(verified.data.groupId),
+        data,
+        connection.remotePeer.toString(),
+      );
+    }).catch(() => {});
+  });
+
   void publishProfileAnnounce().catch(() => {});
 
   if (isRelayCapableRuntime) {
@@ -2841,7 +3510,7 @@ export const createMultiGroupChat = async (
     }).catch(() => {});
   }
 
-  const relayPoolManager = isRelayCapableRuntime && onRelayPoolStateChange
+  const relayPoolManager = isRelayCapableRuntime
     ? startRelayPoolManager({
         node: {
           contentRouting: node.contentRouting,
@@ -2853,8 +3522,9 @@ export const createMultiGroupChat = async (
               relayPeers.push(relay.address);
             }
             relayReservationManager.ingestRelayAddress(relay.address);
+            ingestRelayContact(relay.address, "candidate");
           }
-          onRelayPoolStateChange(poolState);
+          onRelayPoolStateChange?.(poolState);
         },
       })
     : null;
@@ -2885,7 +3555,20 @@ export const createMultiGroupChat = async (
       })
     : null;
 
-  const RESERVATION_TICK_INTERVAL_MS = 5_000;
+  const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, timeoutLabel: string): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error(timeoutLabel));
+      }, timeoutMs);
+    });
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+
   const runRelayReservationTick = async () => {
     const now = Date.now();
     for (const [peerId, startedAt] of [...pendingDirectUpgradeByPeer.entries()]) {
@@ -2895,37 +3578,69 @@ export const createMultiGroupChat = async (
     }
 
     const requests = relayReservationManager.getDialRequests();
-    for (const request of requests) {
-      if (request.reason === "renew") {
-        connectionMetrics.renewAttempts += 1;
-      } else {
-        connectionMetrics.reservationAttempts += 1;
-      }
-      emitConnectionMetrics();
+    if (requests.length === 0) return;
 
-      try {
-        emit("dial-attempt", `Reservation ${request.reason}: ${request.address.slice(0, 80)}...`);
-        await node.dial(multiaddr(request.address));
-      } catch {
-        relayReservationManager.markReservationLost(request.peerId);
+    let cursor = 0;
+    const workerCount = Math.min(
+      hasOfflinePinnedPeers() ? RELAY_RESERVATION_DIAL_CONCURRENCY + 1 : RELAY_RESERVATION_DIAL_CONCURRENCY,
+      requests.length,
+    );
+    const worker = async () => {
+      while (true) {
+        const idx = cursor;
+        cursor += 1;
+        if (idx >= requests.length) return;
+        const request = requests[idx];
+
         if (request.reason === "renew") {
-          connectionMetrics.renewFailures += 1;
+          connectionMetrics.renewAttempts += 1;
         } else {
-          connectionMetrics.reservationFailures += 1;
+          connectionMetrics.reservationAttempts += 1;
         }
+        markRelayContactAttempt(request.peerId, request.address);
         emitConnectionMetrics();
-        emit("dial-failure", `Reservation ${request.reason} failed: ${request.address.slice(0, 80)}...`);
+
+        try {
+          emit("dial-attempt", `Reservation ${request.reason}: ${request.address.slice(0, 80)}...`);
+          await withTimeout(
+            node.dial(multiaddr(request.address)),
+            RELAY_RESERVATION_DIAL_TIMEOUT_MS,
+            "Reservation dial timeout",
+          );
+        } catch {
+          recordReason(`relay_reservation_dial_failed:${request.reason}`);
+          relayReservationManager.markReservationLost(request.peerId);
+          markRelayContactFailure(request.peerId, request.address);
+          if (request.reason === "renew") {
+            connectionMetrics.renewFailures += 1;
+          } else {
+            connectionMetrics.reservationFailures += 1;
+          }
+          emitConnectionMetrics();
+          emit("dial-failure", `Reservation ${request.reason} failed: ${request.address.slice(0, 80)}...`);
+        }
       }
-    }
+    };
+
+    await Promise.all([...Array(workerCount)].map(() => worker()));
+  };
+
+  let relayReservationTickInFlight = false;
+  const triggerRelayReservationTick = () => {
+    if (relayReservationTickInFlight) return;
+    relayReservationTickInFlight = true;
+    void runRelayReservationTick().finally(() => {
+      relayReservationTickInFlight = false;
+    });
   };
 
   const relayReservationInterval = isRelayCapableRuntime
     ? setInterval(() => {
-        void runRelayReservationTick();
-      }, RESERVATION_TICK_INTERVAL_MS)
+        triggerRelayReservationTick();
+      }, RELAY_RESERVATION_TICK_INTERVAL_MS)
     : null;
   if (isRelayCapableRuntime) {
-    void runRelayReservationTick();
+    triggerRelayReservationTick();
   }
 
   const runJoinRetryAttempt = async (groupId: string) => {
@@ -3098,23 +3813,106 @@ export const createMultiGroupChat = async (
     emit("info", `Left group ${groupId.slice(0, 8)}...`);
   };
 
-  const MEMBER_RECONNECT_INTERVAL = 30_000;
-
   const reconnectDisconnectedMembers = () => {
     const ownId = node.peerId.toString();
     const connectedIds = new Set(node.getPeers().map((p) => p.toString()));
     const pinnedPeerIds = getPinnedPeerIds();
+    reconcilePinnedPeerWatchdog();
     for (const memberPeerId of pinnedPeerIds) {
       if (memberPeerId === ownId) continue;
       tagGroupMemberKeepAlive(memberPeerId);
-      if (connectedIds.has(memberPeerId)) continue;
-      attemptDirectConnect(memberPeerId);
+      if (connectedIds.has(memberPeerId)) {
+        setPinnedPeerWatchdog(memberPeerId, {
+          status: "connected",
+          consecutiveFailures: 0,
+        });
+        continue;
+      }
+      setPinnedPeerWatchdog(memberPeerId, {
+        status: "recovering",
+        lastReconnectAttemptAtMs: Date.now(),
+      });
+      attemptDirectConnect(memberPeerId, [], undefined, true);
     }
   };
 
-  const memberReconnectInterval = isRelayCapableRuntime
-    ? setInterval(reconnectDisconnectedMembers, MEMBER_RECONNECT_INTERVAL)
+  const runPinnedKeepAliveTick = async () => {
+    if (!isRelayCapableRuntime) return;
+    const services = node.services as Record<string, unknown>;
+    const pingService = services.ping as PingService | undefined;
+    if (!pingService) return;
+
+    const ownId = node.peerId.toString();
+    const connectedIds = new Set(node.getPeers().map((p) => p.toString()));
+    for (const memberPeerId of getPinnedPeerIds()) {
+      if (memberPeerId === ownId) continue;
+      if (!connectedIds.has(memberPeerId)) {
+        const failures = (pinnedKeepAliveFailures.get(memberPeerId) ?? 0) + 1;
+        pinnedKeepAliveFailures.set(memberPeerId, failures);
+        void publishProfileRequest(memberPeerId).catch(() => {});
+        setPinnedPeerWatchdog(memberPeerId, {
+          status: failures >= PINNED_KEEPALIVE_FAILURE_THRESHOLD ? "recovering" : "degraded",
+          consecutiveFailures: failures,
+          lastReconnectAttemptAtMs: failures >= PINNED_KEEPALIVE_FAILURE_THRESHOLD ? Date.now() : undefined,
+        });
+        if (failures >= PINNED_KEEPALIVE_FAILURE_THRESHOLD) {
+          recordReason("pinned_peer_offline");
+          schedulePinnedReconnectBurst(memberPeerId, "keepalive-offline");
+        }
+        continue;
+      }
+
+      try {
+        await pingService.ping(peerIdFromString(memberPeerId));
+        pinnedKeepAliveFailures.delete(memberPeerId);
+        setPinnedPeerWatchdog(memberPeerId, {
+          status: "connected",
+          consecutiveFailures: 0,
+          lastSuccessfulPingAtMs: Date.now(),
+        });
+      } catch {
+        const failures = (pinnedKeepAliveFailures.get(memberPeerId) ?? 0) + 1;
+        pinnedKeepAliveFailures.set(memberPeerId, failures);
+        setPinnedPeerWatchdog(memberPeerId, {
+          status: failures >= PINNED_KEEPALIVE_FAILURE_THRESHOLD ? "recovering" : "degraded",
+          consecutiveFailures: failures,
+          lastReconnectAttemptAtMs: failures >= PINNED_KEEPALIVE_FAILURE_THRESHOLD ? Date.now() : undefined,
+        });
+        if (failures >= PINNED_KEEPALIVE_FAILURE_THRESHOLD) {
+          recordReason("pinned_peer_ping_failed");
+          schedulePinnedReconnectBurst(memberPeerId, "keepalive-failed");
+          attemptDirectConnect(memberPeerId, [], undefined, true);
+        }
+      }
+    }
+  };
+
+  let memberReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  const scheduleMemberReconnectTick = () => {
+    if (!isRelayCapableRuntime || stopped) return;
+    const intervalMs = hasOfflinePinnedPeers()
+      ? MEMBER_RECONNECT_FAST_INTERVAL_MS
+      : MEMBER_RECONNECT_IDLE_INTERVAL_MS;
+    if (memberReconnectTimer) clearTimeout(memberReconnectTimer);
+    memberReconnectTimer = setTimeout(() => {
+      memberReconnectTimer = null;
+      reconnectDisconnectedMembers();
+      scheduleMemberReconnectTick();
+    }, intervalMs);
+  };
+  if (isRelayCapableRuntime) {
+    reconnectDisconnectedMembers();
+    scheduleMemberReconnectTick();
+  }
+
+  const pinnedKeepAliveInterval = isRelayCapableRuntime
+    ? setInterval(() => {
+        void runPinnedKeepAliveTick();
+      }, PINNED_KEEPALIVE_PING_INTERVAL_MS)
     : null;
+  if (isRelayCapableRuntime) {
+    void runPinnedKeepAliveTick();
+  }
 
   const createGroupWithResolvedId = async (
     groupId: string,
@@ -3186,8 +3984,23 @@ export const createMultiGroupChat = async (
       groupDiscoveryManager?.joinGroup(groupId);
     }
 
-    actionChainStates.set(groupId, createActionChainGroupState(groupId));
+    if (!actionChainStates.has(groupId)) {
+      actionChainStates.set(groupId, createActionChainGroupState(groupId));
+    }
     reconcilePeerPathCache();
+
+    const existingState = actionChainStates.get(groupId);
+    if (existingState && !existingState.isDirectMessage && existingState.createdAt > 0) {
+      throw new Error("Group ID already used for a non-DM group");
+    }
+    const existingLocalGenesis = findDirectMessageGenesisEnvelopeByAuthor(
+      groupId,
+      ownPublicKeyHex,
+      normalizedPeerIds,
+    );
+    if (existingLocalGenesis) {
+      return { groupId, genesisEnvelope: existingLocalGenesis };
+    }
 
     const envelope = createSignedActionEnvelope({
       accountKey,
@@ -3196,7 +4009,10 @@ export const createMultiGroupChat = async (
       payload: { type: "dm-created", peerIds: normalizedPeerIds },
     });
 
-    processSignedAction(groupId, envelope);
+    const action = processSignedAction(groupId, envelope);
+    if (!action) {
+      throw new Error("DM genesis rejected by local policy");
+    }
     await publishEnvelope(groupId, envelope);
 
     emit(
@@ -3265,7 +4081,87 @@ export const createMultiGroupChat = async (
         payload: { type: "message", text },
       });
 
-      processSignedAction(groupId, envelope);
+      const action = processSignedAction(groupId, envelope);
+      if (!action) {
+        throw new Error("Message rejected by local policy");
+      }
+      await publishEnvelope(groupId, envelope);
+    },
+    editMessage: async (groupId: string, targetActionId: string, newText: string) => {
+      const trimmedTargetActionId = targetActionId.trim();
+      const trimmedNewText = newText.trim();
+      if (trimmedTargetActionId.length === 0) throw new Error("Target action ID is required");
+      if (trimmedNewText.length === 0) throw new Error("Edited message cannot be empty");
+      if (isMembershipEnforcedGroup(groupId) && !isOwnMemberOfGroup(groupId)) {
+        throw new Error("Not a member of this group");
+      }
+      const dag = getOrCreateDag(groupId);
+      const tips = getTips(dag);
+      const parentHashes = tips.length > 0 ? tips : [GENESIS_HASH];
+      const envelope = createSignedActionEnvelope({
+        accountKey,
+        groupId,
+        parentHashes,
+        payload: {
+          type: "message-edited",
+          targetActionId: trimmedTargetActionId,
+          newText: trimmedNewText,
+        },
+      });
+      const action = processSignedAction(groupId, envelope);
+      if (!action) throw new Error("Message edit rejected by local policy");
+      await publishEnvelope(groupId, envelope);
+    },
+    deleteMessage: async (groupId: string, targetActionId: string) => {
+      const trimmedTargetActionId = targetActionId.trim();
+      if (trimmedTargetActionId.length === 0) throw new Error("Target action ID is required");
+      if (isMembershipEnforcedGroup(groupId) && !isOwnMemberOfGroup(groupId)) {
+        throw new Error("Not a member of this group");
+      }
+      const dag = getOrCreateDag(groupId);
+      const tips = getTips(dag);
+      const parentHashes = tips.length > 0 ? tips : [GENESIS_HASH];
+      const envelope = createSignedActionEnvelope({
+        accountKey,
+        groupId,
+        parentHashes,
+        payload: {
+          type: "message-deleted",
+          targetActionId: trimmedTargetActionId,
+        },
+      });
+      const action = processSignedAction(groupId, envelope);
+      if (!action) throw new Error("Message delete rejected by local policy");
+      await publishEnvelope(groupId, envelope);
+    },
+    sendReadReceipt: async (groupId: string, upToActionId: string) => {
+      const trimmedUpToActionId = upToActionId.trim();
+      if (trimmedUpToActionId.length === 0) {
+        throw new Error("Read receipt action ID is required");
+      }
+      if (isMembershipEnforcedGroup(groupId) && !isOwnMemberOfGroup(groupId)) {
+        throw new Error("Not a member of this group");
+      }
+      const chainState = actionChainStates.get(groupId);
+      if (chainState?.readReceipts.get(ownPublicKeyHex) === trimmedUpToActionId) {
+        return;
+      }
+      const dag = getOrCreateDag(groupId);
+      const tips = getTips(dag);
+      const parentHashes = tips.length > 0 ? tips : [GENESIS_HASH];
+      const envelope = createSignedActionEnvelope({
+        accountKey,
+        groupId,
+        parentHashes,
+        payload: {
+          type: "read-receipt",
+          upToActionId: trimmedUpToActionId,
+        },
+      });
+      const action = processSignedAction(groupId, envelope);
+      if (!action) {
+        throw new Error("Read receipt rejected by local policy");
+      }
       await publishEnvelope(groupId, envelope);
     },
     createGroup: async (name: string): Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }> => {
@@ -3309,9 +4205,13 @@ export const createMultiGroupChat = async (
           emit("info", `Relay added from invite: ${inviteRelayAddr.slice(0, 40)}...`);
         }
         relayReservationManager.ingestRelayAddress(inviteRelayAddr);
+        ingestRelayContact(inviteRelayAddr, "invite");
       }
 
-      processSignedAction(groupId, invite.genesisEnvelope);
+      const acceptedAction = processSignedAction(groupId, invite.genesisEnvelope);
+      if (!acceptedAction) {
+        throw new Error("Invite genesis rejected by local policy");
+      }
 
       const authorHex = toHex(verifyResult.data.authorPublicKey);
       publicKeyToPeerId.set(authorHex, invite.adminPeerId);
@@ -3333,11 +4233,121 @@ export const createMultiGroupChat = async (
         void tryConnectToPeerId(invite.adminPeerId).catch(() => {});
       }
 
-      joinRetryState = enqueueJoinRetry(joinRetryState, groupId, Date.now());
-      emitJoinRetryState();
-      void runJoinRetryAttempt(groupId);
+      if (verifyResult.data.payload.type !== "dm-created") {
+        joinRetryState = enqueueJoinRetry(joinRetryState, groupId, Date.now());
+        emitJoinRetryState();
+        void runJoinRetryAttempt(groupId);
+      }
       requestSyncFromConnectedPeers(groupId);
 
+      return { groupId };
+    },
+    acceptDirectMessageRequest: async (requestId: string): Promise<{ groupId: string }> => {
+      const request = pendingDirectMessageRequestsById.get(requestId);
+      if (!request) throw new Error("DM request not found");
+
+      const decodedInvite = decodeGroupInvite(request.inviteCode.trim());
+      if (!decodedInvite.success) {
+        throw new Error(`Invalid DM invite: ${decodedInvite.error.message}`);
+      }
+      const verified = verifyAndDecodeAction(decodedInvite.data.genesisEnvelope);
+      if (!verified.success) {
+        throw new Error(`Invalid DM genesis envelope: ${verified.error.message}`);
+      }
+      if (verified.data.payload.type !== "dm-created") {
+        throw new Error("DM request must contain a dm-created genesis invite");
+      }
+      if (verified.data.groupId !== request.groupId) {
+        throw new Error("DM request group mismatch");
+      }
+
+      const groupId = request.groupId;
+      const peerIds = verified.data.payload.peerIds;
+      const remoteInvite = decodedInvite.data;
+      const relayAddr = remoteInvite.relayAddr?.trim();
+      if (relayAddr) {
+        if (!relayPeers.includes(relayAddr)) {
+          relayPeers.push(relayAddr);
+        }
+        relayReservationManager.ingestRelayAddress(relayAddr);
+        ingestRelayContact(relayAddr, "invite");
+      }
+      const acceptedAction = processSignedAction(groupId, remoteInvite.genesisEnvelope);
+      if (!acceptedAction) {
+        throw new Error("DM invite genesis rejected by local policy");
+      }
+      publicKeyToPeerId.set(toHex(verified.data.authorPublicKey), remoteInvite.adminPeerId);
+      notifyPublicKeyToPeerIdChange();
+
+      if (!joinedGroups.includes(groupId)) {
+        const topic = groupTopic(groupId);
+        topicToGroupId.set(topic, groupId);
+        joinedGroups.push(groupId);
+        getOrCreatePeerDiscoveryMetrics(groupId);
+        pubsub.subscribe(topic);
+        groupDiscoveryManager?.joinGroup(groupId);
+        reconcilePeerPathCache();
+      }
+
+      const connectedToRemote = node.getPeers().some((p) => p.toString() === request.senderPeerId);
+      if (!connectedToRemote) {
+        void tryConnectToPeerId(request.senderPeerId).catch(() => {});
+      }
+      requestSyncFromConnectedPeers(groupId);
+
+      const localGenesis = findDirectMessageGenesisEnvelopeByAuthor(groupId, ownPublicKeyHex, peerIds)
+        ?? (await createDirectMessageGroupWithResolvedId(groupId, peerIds)).genesisEnvelope;
+
+      const reciprocalInviteCode = encodeGroupInvite({
+        genesisEnvelope: localGenesis,
+        adminPeerId: ownPeerId,
+      });
+      const senderPublicKey = new Uint8Array(accountKey.publicKey);
+      const reciprocalRequestId = crypto.randomUUID();
+      const sentAt = Date.now();
+      const signature = signDirectMessageRequest({
+        requestId: reciprocalRequestId,
+        senderPeerId: ownPeerId,
+        senderPublicKey,
+        targetPeerId: request.senderPeerId,
+        groupId,
+        groupName: request.groupName,
+        inviteCode: reciprocalInviteCode,
+        sentAt,
+      });
+      const reciprocalWireMessage: WireMessage = {
+        type: "dm_request",
+        payload: {
+          requestId: reciprocalRequestId,
+          senderPeerId: ownPeerId,
+          senderPublicKey,
+          targetPeerId: request.senderPeerId,
+          groupId,
+          groupName: request.groupName,
+          inviteCode: reciprocalInviteCode,
+          sentAt,
+          signature: new Uint8Array(Array.from(signature)),
+        },
+      };
+      const encoded = encodeWireMessage(reciprocalWireMessage);
+      const topics = new Set<string>([
+        DIRECT_MESSAGE_REQUEST_TOPIC,
+        DIRECT_JOIN_REQUEST_TOPIC,
+        ...collectSharedGroupTopicsForPeer(request.senderPeerId),
+      ]);
+      const publishResults = await Promise.allSettled(
+        [...topics].map((topic) => pubsub.publish(topic, new Uint8Array(encoded))),
+      );
+      if (publishResults.every((result) => result.status === "rejected")) {
+        throw new Error("Failed to publish reciprocal DM request");
+      }
+      void sendWireMessageDirect(
+        request.senderPeerId,
+        DIRECT_DM_REQUEST_PROTOCOL,
+        reciprocalWireMessage,
+      ).catch(() => {});
+
+      pendingDirectMessageRequestsById.delete(requestId);
       return { groupId };
     },
     sendDirectMessageRequest: async (request): Promise<void> => {
@@ -3395,6 +4405,9 @@ export const createMultiGroupChat = async (
     renameGroup: async (groupId: string, newName: string): Promise<void> => {
       const trimmed = newName.trim();
       if (trimmed.length === 0) throw new Error("Group name cannot be empty");
+      if (actionChainStates.get(groupId)?.isDirectMessage) {
+        throw new Error("Direct messages cannot be renamed");
+      }
       const dag = actionDags.get(groupId);
       if (!dag) throw new Error("No action chain for this group");
 
@@ -3417,9 +4430,16 @@ export const createMultiGroupChat = async (
       groupId: string,
       memberPublicKey: Uint8Array,
       options?: { readonly inviteTokenId?: string },
-    ): Promise<void> =>
-      performApproveJoin(groupId, memberPublicKey, options),
+    ): Promise<void> => {
+      if (actionChainStates.get(groupId)?.isDirectMessage) {
+        throw new Error("Direct messages do not support member approval");
+      }
+      return performApproveJoin(groupId, memberPublicKey, options);
+    },
     setJoinPolicy: async (groupId: string, joinPolicy: JoinPolicy): Promise<void> => {
+      if (actionChainStates.get(groupId)?.isDirectMessage) {
+        throw new Error("Direct messages do not support join policy");
+      }
       const dag = actionDags.get(groupId);
       if (!dag) throw new Error("No action chain for this group");
 
@@ -3443,6 +4463,9 @@ export const createMultiGroupChat = async (
       memberPublicKey: Uint8Array,
       newRole: ActionRole,
     ): Promise<void> => {
+      if (actionChainStates.get(groupId)?.isDirectMessage) {
+        throw new Error("Direct messages do not support role changes");
+      }
       const dag = actionDags.get(groupId);
       if (!dag) throw new Error("No action chain for this group");
       if (newRole === "owner" && toHex(memberPublicKey) === ownPublicKeyHex) {
@@ -3472,6 +4495,9 @@ export const createMultiGroupChat = async (
       );
     },
     removeMember: async (groupId: string, memberPublicKey: Uint8Array): Promise<void> => {
+      if (actionChainStates.get(groupId)?.isDirectMessage) {
+        throw new Error("Direct messages do not support member removal");
+      }
       const dag = actionDags.get(groupId);
       if (!dag) throw new Error("No action chain for this group");
 
@@ -3494,12 +4520,37 @@ export const createMultiGroupChat = async (
       emit("info", `Removed member ${toHex(memberPublicKey).slice(0, 16)}... from group ${groupId.slice(0, 8)}...`);
     },
     requestJoin: async (groupId: string): Promise<void> => {
+      const state = actionChainStates.get(groupId);
+      if (state?.isDirectMessage) {
+        throw new Error("Direct messages do not support join requests");
+      }
       joinRetryState = enqueueJoinRetry(joinRetryState, groupId, Date.now());
       emitJoinRetryState();
       await runJoinRetryAttempt(groupId);
     },
     getActionChainState: (groupId: string): ActionChainGroupState | null =>
       actionChainStates.get(groupId) ?? null,
+    getDirectMessageHandshakeState: (groupId: string): DirectMessageHandshakeState | null =>
+      getDirectMessageHandshakeStateForGroup(groupId),
+    getRelayContactBook: (): RelayContactBook =>
+      cloneRelayContactBook(),
+    clearRelayContactBook: () => {
+      relayContactBook.clear();
+      emitRelayContactBook();
+    },
+    getPinnedPeerWatchdogState: (): PinnedPeerWatchdogState =>
+      new Map(pinnedPeerWatchdogState),
+    getPeerPathCache: (): ReadonlyMap<string, readonly string[]> =>
+      clonePeerPathCache(),
+    clearPeerPathCache: () => {
+      peerPathCache.clear();
+      notifyPeerPathCacheChange();
+    },
+    getConnectionReasonCounts: (): ReadonlyMap<string, number> =>
+      new Map(connectionReasonCounts),
+    clearConnectionReasonCounts: () => {
+      connectionReasonCounts.clear();
+    },
     getActionChainEnvelopes: (groupId: string): readonly SignedActionEnvelope[] =>
       getOrderedEnvelopes(groupId),
     getAllActionChainEnvelopes: (): ReadonlyMap<string, readonly SignedActionEnvelope[]> =>
@@ -3605,14 +4656,25 @@ export const createMultiGroupChat = async (
         emit("info", `Relay added: ${addr.slice(0, 40)}...`);
       }
       relayReservationManager.ingestRelayAddress(addr);
+      ingestRelayContact(addr, "manual");
     },
     stop: async () => {
       if (stopped) return;
       stopped = true;
-      if (memberReconnectInterval) clearInterval(memberReconnectInterval);
+      if (memberReconnectTimer) clearTimeout(memberReconnectTimer);
+      memberReconnectTimer = null;
       if (relayReservationInterval) clearInterval(relayReservationInterval);
+      if (pinnedKeepAliveInterval) clearInterval(pinnedKeepAliveInterval);
       if (joinRetryInterval) clearInterval(joinRetryInterval);
       clearInterval(syncReconcileInterval);
+      for (const timers of pinnedReconnectBurstTimers.values()) {
+        for (const timer of timers) clearTimeout(timer);
+      }
+      pinnedReconnectBurstTimers.clear();
+      pinnedKeepAliveFailures.clear();
+      relayContactBook.clear();
+      pinnedPeerWatchdogState.clear();
+      connectionReasonCounts.clear();
       inFlightPeerDials.clear();
       pendingDirectUpgradeByPeer.clear();
       joinRetryState = createJoinRetryState();

@@ -48,6 +48,8 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      - name: Build core for e2e scripts
+        run: pnpm --filter anypost-core build
       - run: pnpm --filter anypost-web exec playwright install --with-deps chromium
 
       - name: Run DM No-Relay Browser Integration

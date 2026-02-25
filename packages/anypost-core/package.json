@@ -20,6 +20,10 @@
       "types": "./src/protocol/index.ts",
       "default": "./dist/protocol/index.js"
     },
+    "./protocol/dht-config": {
+      "types": "./src/protocol/dht-config.ts",
+      "default": "./dist/protocol/dht-config.js"
+    },
     "./group-management": {
       "types": "./src/group-management.ts",
       "default": "./dist/group-management.js"
@@ -31,11 +35,16 @@
     "./libp2p": {
       "types": "./src/libp2p/index.ts",
       "default": "./dist/libp2p/index.js"
+    },
+    "./libp2p/bootstrap-peers": {
+      "types": "./src/libp2p/bootstrap-peers.ts",
+      "default": "./dist/libp2p/bootstrap-peers.js"
     }
   },
   "scripts": {
     "build": "tsc --build",
     "test": "vitest run",
+    "test:ipfs-bootstrap": "ANYPOST_RUN_LIVE_IPFS_BOOTSTRAP=1 vitest run src/protocol/ipfs-bootstrap-connect.integration.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

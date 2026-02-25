@@ -9,3 +9,4 @@ data/
 artifacts/
 apps/anypost-web/artifacts/
 anypost-devtools-recording-*.json
+apps/anypost-electron/*.bdic

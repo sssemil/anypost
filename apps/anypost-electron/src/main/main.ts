@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, Menu, Notification, Tray, nativeImage, she
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRelayNode } from "anypost-relay/create-relay-node";
-import { ANYPOST_RELAY_NAMESPACE, createProviderCid } from "anypost-core/protocol";
+import { ANYPOST_RELAY_NAMESPACE, createProviderCid } from "anypost-core/protocol/dht-config";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -191,7 +191,7 @@ const createTray = () => {
 };
 
 const createMainWindow = async () => {
-  const preloadPath = path.resolve(__dirname, "../preload/preload.js");
+  const preloadPath = path.resolve(__dirname, "../preload/preload.cjs");
   mainWindow = new BrowserWindow({
     width: 1500,
     height: 940,

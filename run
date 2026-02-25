@@ -12,6 +12,8 @@ Commands:
   relay          Build and start the relay node
   web            Start the web app dev server
   electron       Start the Electron desktop app in dev mode (optional profile name)
+  electron-appimage Build Linux x86_64 Electron AppImage (incremental)
+  electron-appimage-fresh Build a fresh Linux x86_64 Electron AppImage
   dev            Start both relay and web app (Ctrl+C stops both)
   e2e-record     Run headless Chromium Alice/Bob scenario + download diagnostics logs
   e2e-dm-refresh Run headless Chromium DM refresh continuity integration test
@@ -54,6 +56,52 @@ cmd_electron() {
   else
     pnpm --filter anypost-electron run dev -- "$@"
   fi
+}
+
+clear_dir_if_exists() {
+  local dir="$1"
+  if [[ ! -d "$dir" ]]; then
+    return 0
+  fi
+  find "$dir" -mindepth 1 -delete
+  rmdir "$dir" 2>/dev/null || true
+}
+
+package_electron_appimage() {
+  echo "Prebuilding anypost-core..."
+  pnpm --filter anypost-core build
+
+  echo "Building Electron app..."
+  pnpm --filter anypost-electron build
+
+  mkdir -p "$SCRIPT_DIR/apps/anypost-electron/release"
+  find "$SCRIPT_DIR/apps/anypost-electron/release" -maxdepth 1 -type f -name '*.AppImage' -delete
+
+  echo "Packaging Linux x86_64 AppImage..."
+  pnpm dlx electron-builder@24.13.3 \
+    --projectDir apps/anypost-electron \
+    --config electron-builder.yml \
+    --linux AppImage \
+    --x64 \
+    --publish never \
+    --config.directories.output=release
+
+  echo "AppImage ready:"
+  ls -1 apps/anypost-electron/release/*.AppImage
+}
+
+cmd_electron_appimage() {
+  package_electron_appimage
+}
+
+cmd_electron_appimage_fresh() {
+  echo "Cleaning previous build artifacts..."
+  clear_dir_if_exists "$SCRIPT_DIR/apps/anypost-electron/dist"
+  clear_dir_if_exists "$SCRIPT_DIR/apps/anypost-electron/release"
+  clear_dir_if_exists "$SCRIPT_DIR/apps/anypost-web/dist"
+  clear_dir_if_exists "$SCRIPT_DIR/apps/anypost-relay/dist"
+  clear_dir_if_exists "$SCRIPT_DIR/packages/anypost-core/dist"
+  package_electron_appimage
 }
 
 cmd_dev() {
@@ -118,6 +166,8 @@ case "$1" in
   relay)     cmd_relay ;;
   web)       cmd_web ;;
   electron)  cmd_electron "$@" ;;
+  electron-appimage) cmd_electron_appimage ;;
+  electron-appimage-fresh) cmd_electron_appimage_fresh ;;
   dev)       cmd_dev ;;
   e2e-record) cmd_e2e_record "$@" ;;
   e2e-dm-refresh) cmd_e2e_dm_refresh "$@" ;;

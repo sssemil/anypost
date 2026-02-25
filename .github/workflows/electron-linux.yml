@@ -1,0 +1,47 @@
+name: Electron Linux Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  appimage-linux-x64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Electron app dependencies and renderer
+        run: pnpm --filter anypost-electron build
+
+      - name: Package Linux x64 AppImage
+        run: >
+          pnpm dlx electron-builder@24.13.3
+          --projectDir apps/anypost-electron
+          --config electron-builder.yml
+          --linux AppImage
+          --x64
+          --publish never
+          --config.directories.output=release
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: anypost-electron-linux-x64-appimage
+          path: apps/anypost-electron/release/*.AppImage
+          if-no-files-found: error

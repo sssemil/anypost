@@ -12,6 +12,8 @@ export const createActionChainGroupState = (
   groupName: "",
   isDirectMessage: false,
   directMessagePeerIds: null,
+  dmGenesisContributorPublicKeys: new Set(),
+  dmHandshakeComplete: false,
   joinPolicy: "manual",
   createdAt: 0,
   members: new Map(),
@@ -46,6 +48,10 @@ export const applyAction = (
       return applyJoinPolicyChanged(state, action, authorHex);
     case "message":
       return applyMessage(state, authorHex);
+    case "message-edited":
+      return applyMessageEdited(state, authorHex);
+    case "message-deleted":
+      return applyMessageDeleted(state, authorHex);
     case "read-receipt":
       return applyReadReceipt(state, action, authorHex);
   }
@@ -93,6 +99,8 @@ const applyGroupCreated = (
     groupName: payload.groupName,
     isDirectMessage: false,
     directMessagePeerIds: null,
+    dmGenesisContributorPublicKeys: new Set(),
+    dmHandshakeComplete: false,
     joinPolicy: payload.joinPolicy ?? "manual",
     createdAt: action.timestamp,
     members,
@@ -104,10 +112,6 @@ const applyDirectMessageCreated = (
   action: SignedAction,
   authorHex: string,
 ): Result<ActionChainGroupState, Error> => {
-  if (state.members.size > 0) {
-    return Result.failure(new Error("Group already created"));
-  }
-
   const payload = action.payload as {
     readonly peerIds: readonly [string, string];
   };
@@ -115,22 +119,43 @@ const applyDirectMessageCreated = (
   if (firstPeerId.localeCompare(secondPeerId) >= 0) {
     return Result.failure(new Error("Invalid DM peer ID ordering"));
   }
+  if (state.createdAt > 0 && !state.isDirectMessage) {
+    return Result.failure(new Error("Group already created as non-DM"));
+  }
+  if (
+    state.isDirectMessage &&
+    state.directMessagePeerIds !== null &&
+    (state.directMessagePeerIds[0] !== firstPeerId ||
+      state.directMessagePeerIds[1] !== secondPeerId)
+  ) {
+    return Result.failure(new Error("DM peer IDs do not match existing group"));
+  }
 
   const members = new Map(state.members);
-  members.set(authorHex, {
-    publicKeyHex: authorHex,
-    publicKey: action.authorPublicKey,
-    role: "owner",
-    joinedAt: action.timestamp,
-  });
+  if (!members.has(authorHex)) {
+    members.set(authorHex, {
+      publicKeyHex: authorHex,
+      publicKey: action.authorPublicKey,
+      role: state.members.size === 0 ? "owner" : "member",
+      joinedAt: action.timestamp,
+    });
+  }
+  const contributors = new Set(state.dmGenesisContributorPublicKeys);
+  contributors.add(authorHex);
+  const handshakeComplete = contributors.size >= 2;
+  const createdAt = state.createdAt === 0
+    ? action.timestamp
+    : Math.min(state.createdAt, action.timestamp);
 
   return Result.success({
     ...state,
     groupName: "",
     isDirectMessage: true,
     directMessagePeerIds: [firstPeerId, secondPeerId],
-    joinPolicy: "auto_with_invite",
-    createdAt: action.timestamp,
+    dmGenesisContributorPublicKeys: contributors,
+    dmHandshakeComplete: handshakeComplete,
+    joinPolicy: "manual",
+    createdAt,
     members,
   });
 };
@@ -140,6 +165,9 @@ const applyJoinRequest = (
   action: SignedAction,
   authorHex: string,
 ): Result<ActionChainGroupState, Error> => {
+  if (state.isDirectMessage) {
+    return Result.failure(new Error("Direct messages do not support join requests"));
+  }
   if (state.members.has(authorHex)) {
     return Result.failure(new Error("Already a member"));
   }
@@ -158,6 +186,9 @@ const applyMemberApproved = (
   action: SignedAction,
   authorHex: string,
 ): Result<ActionChainGroupState, Error> => {
+  if (state.isDirectMessage) {
+    return Result.failure(new Error("Direct messages do not support member approval"));
+  }
   if (!isAdmin(state, authorHex)) {
     return Result.failure(new Error("Only admins can approve members"));
   }
@@ -201,6 +232,9 @@ const applyMemberRemoved = (
   action: SignedAction,
   authorHex: string,
 ): Result<ActionChainGroupState, Error> => {
+  if (state.isDirectMessage) {
+    return Result.failure(new Error("Direct messages do not support member removal"));
+  }
   if (!isAdmin(state, authorHex)) {
     return Result.failure(new Error("Only admins can remove members"));
   }
@@ -229,6 +263,9 @@ const applyRoleChanged = (
   action: SignedAction,
   authorHex: string,
 ): Result<ActionChainGroupState, Error> => {
+  if (state.isDirectMessage) {
+    return Result.failure(new Error("Direct messages do not support role changes"));
+  }
   const payload = action.payload as {
     readonly memberPublicKey: Uint8Array;
     readonly newRole: "owner" | "admin" | "member";
@@ -288,6 +325,9 @@ const applyJoinPolicyChanged = (
   action: SignedAction,
   authorHex: string,
 ): Result<ActionChainGroupState, Error> => {
+  if (state.isDirectMessage) {
+    return Result.failure(new Error("Direct messages do not support join policy"));
+  }
   if (!isAdmin(state, authorHex)) {
     return Result.failure(new Error("Only admins can change join policy"));
   }
@@ -302,6 +342,9 @@ const applyMessage = (
   state: ActionChainGroupState,
   authorHex: string,
 ): Result<ActionChainGroupState, Error> => {
+  if (state.isDirectMessage && !state.dmHandshakeComplete) {
+    return Result.failure(new Error("DM handshake incomplete"));
+  }
   if (!isMember(state, authorHex)) {
     return Result.failure(new Error("Only members can send messages"));
   }
@@ -323,6 +366,32 @@ const applyReadReceipt = (
   readReceipts.set(authorHex, payload.upToActionId);
 
   return Result.success({ ...state, readReceipts });
+};
+
+const applyMessageEdited = (
+  state: ActionChainGroupState,
+  authorHex: string,
+): Result<ActionChainGroupState, Error> => {
+  if (state.isDirectMessage && !state.dmHandshakeComplete) {
+    return Result.failure(new Error("DM handshake incomplete"));
+  }
+  if (!isMember(state, authorHex)) {
+    return Result.failure(new Error("Only members can edit messages"));
+  }
+  return Result.success(state);
+};
+
+const applyMessageDeleted = (
+  state: ActionChainGroupState,
+  authorHex: string,
+): Result<ActionChainGroupState, Error> => {
+  if (state.isDirectMessage && !state.dmHandshakeComplete) {
+    return Result.failure(new Error("DM handshake incomplete"));
+  }
+  if (!isMember(state, authorHex)) {
+    return Result.failure(new Error("Only members can delete messages"));
+  }
+  return Result.success(state);
 };
 
 const isAdmin = (state: ActionChainGroupState, publicKeyHex: string): boolean => {

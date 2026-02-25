@@ -1,4 +1,4 @@
-import { createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import type { ContactsBook } from "anypost-core/data";
 import type {
   NetworkStatus,
@@ -17,6 +17,25 @@ type NetworkPanelProps = {
   readonly groupDiscoveryState: GroupDiscoveryState | null;
   readonly relayCandidateState: RelayCandidateState | null;
   readonly relayReservationState: RelayReservationState | null;
+  readonly relayContactBook: ReadonlyMap<string, {
+    readonly peerId: string;
+    readonly addresses: readonly string[];
+    readonly sources: readonly string[];
+    readonly successCount: number;
+    readonly failureCount: number;
+    readonly averageRttMs: number | null;
+    readonly quarantinedUntilMs: number | null;
+    readonly score: number;
+  }>;
+  readonly peerPathCache: ReadonlyMap<string, readonly string[]>;
+  readonly pinnedPeerWatchdogState: ReadonlyMap<string, {
+    readonly peerId: string;
+    readonly status: "connected" | "degraded" | "recovering";
+    readonly consecutiveFailures: number;
+    readonly lastSuccessfulPingAtMs: number | null;
+    readonly lastReconnectAttemptAtMs: number | null;
+  }>;
+  readonly connectionReasonCounts: ReadonlyMap<string, number>;
   readonly connectionMetrics: ConnectionMetrics | null;
   readonly displayName: string;
   readonly latencyMap: ReadonlyMap<string, number>;
@@ -46,6 +65,9 @@ type NetworkPanelProps = {
     readonly lastRequestedAt: number | null;
   }[];
   readonly onAddRelay?: (addr: string) => void;
+  readonly onClearRelayContactBook?: () => void;
+  readonly onClearPeerPathCache?: () => void;
+  readonly onClearConnectionReasons?: () => void;
 };
 
 const PEERS_PER_PAGE = 10;
@@ -60,6 +82,10 @@ const PINNED_PEERS_PER_PAGE = 10;
 const DM_OUTGOING_PER_PAGE = 8;
 const DM_PENDING_PER_PAGE = 8;
 const PROFILE_SYNC_PER_PAGE = 8;
+const RELAY_CONTACTS_PER_PAGE = 10;
+const PEER_PATH_CACHE_PER_PAGE = 10;
+const WATCHDOG_PER_PAGE = 10;
+const REASON_CODES_PER_PAGE = 12;
 
 const latencyBadge = (ms: number) => {
   const classes = ms < 50
@@ -108,6 +134,16 @@ const formatLastSeen = (timestamp: number, now = Date.now()): string => {
   return `${days}d ago`;
 };
 
+const formatFutureWindow = (timestamp: number, now = Date.now()): string => {
+  const deltaMs = Math.max(0, timestamp - now);
+  const seconds = Math.ceil(deltaMs / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.ceil(minutes / 60);
+  return `${hours}h`;
+};
+
 export const NetworkPanel = (props: NetworkPanelProps) => {
   const [showPanel, setShowPanel] = createSignal(true);
   const [relayPoolPage, setRelayPoolPage] = createSignal(0);
@@ -120,17 +156,32 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
   const [dmOutgoingPage, setDmOutgoingPage] = createSignal(0);
   const [dmPendingPage, setDmPendingPage] = createSignal(0);
   const [profileSyncPage, setProfileSyncPage] = createSignal(0);
+  const [relayContactsPage, setRelayContactsPage] = createSignal(0);
+  const [peerPathCachePage, setPeerPathCachePage] = createSignal(0);
+  const [watchdogPage, setWatchdogPage] = createSignal(0);
+  const [reasonCodesPage, setReasonCodesPage] = createSignal(0);
   const [peerSearch, setPeerSearch] = createSignal("");
   const [peerPage, setPeerPage] = createSignal(0);
   const [contactsSearch, setContactsSearch] = createSignal("");
   const [contactsPage, setContactsPage] = createSignal(0);
   const [manualRelay, setManualRelay] = createSignal("");
+  const [appPeersOnly, setAppPeersOnly] = createSignal(true);
 
   const relayAddresses = () => {
     const pool = props.relayPoolState;
     if (!pool) return [];
     return pool.relays.map((r) => r.address);
   };
+
+  const appPeerIds = createMemo<ReadonlySet<string>>(() => {
+    const ids = new Set<string>();
+    for (const contact of props.contactsBook.values()) ids.add(contact.peerId);
+    for (const peerId of props.pinnedPeerIds) ids.add(peerId);
+    for (const row of props.dmOutgoingDebug) ids.add(row.targetPeerId);
+    for (const row of props.pendingDmDebug) ids.add(row.senderPeerId);
+    for (const row of props.profileSyncDebug) ids.add(row.peerId);
+    return ids;
+  });
 
   const handleAddRelay = () => {
     const addr = manualRelay().trim();
@@ -174,6 +225,22 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
         {(status) => (
           <div class="font-mono text-xs">
             <div class="mb-3 pb-3 border-b border-tg-border">
+              <div class="flex items-center justify-between mb-1.5 text-[10px]">
+                <label class="inline-flex items-center gap-1.5 text-tg-text-dim cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={appPeersOnly()}
+                    onChange={(e) => setAppPeersOnly(e.currentTarget.checked)}
+                    class="accent-tg-accent cursor-pointer"
+                  />
+                  App peers only
+                </label>
+                <Show when={appPeersOnly()}>
+                  <span class="text-tg-text-dim">
+                    {appPeerIds().size} app peer{appPeerIds().size !== 1 ? "s" : ""}
+                  </span>
+                </Show>
+              </div>
               <TopologyGraph
                 networkStatus={status()}
                 bootstrapAddrs={relayAddresses()}
@@ -184,6 +251,7 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                     contact.nickname ?? contact.selfName ?? "",
                   ]),
                 )}
+                visiblePeerIds={appPeersOnly() ? appPeerIds() : undefined}
               />
             </div>
 
@@ -354,6 +422,245 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                 </div>
               )}
             </Show>
+
+            <div class="mb-3 pb-3 border-b border-tg-border">
+              <div class="flex items-center justify-between gap-2 mb-1.5">
+                <span class="text-tg-text-dim">Relay Contacts Book</span>
+                <div class="flex items-center gap-2">
+                  <span class="text-tg-text text-[10px]">{props.relayContactBook.size} entries</span>
+                  <Show when={props.onClearRelayContactBook}>
+                    <button
+                      onClick={() => props.onClearRelayContactBook?.()}
+                      class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer hover:text-tg-text"
+                    >
+                      clear
+                    </button>
+                  </Show>
+                </div>
+              </div>
+              <Show when={props.relayContactBook.size > 0} fallback={<p class="text-[10px] text-tg-text-dim">No relay contacts yet.</p>}>
+                {(() => {
+                  const rows = [...props.relayContactBook.values()].sort((a, b) => b.score - a.score);
+                  const totalPages = Math.max(1, Math.ceil(rows.length / RELAY_CONTACTS_PER_PAGE));
+                  const page = Math.min(relayContactsPage(), totalPages - 1);
+                  const paged = rows.slice(page * RELAY_CONTACTS_PER_PAGE, (page + 1) * RELAY_CONTACTS_PER_PAGE);
+                  return (
+                    <>
+                      <For each={paged}>
+                        {(entry) => (
+                          <div class="flex items-center gap-2 py-0.5">
+                            <code class="text-tg-text flex-1">{entry.peerId.slice(0, 20)}...</code>
+                            <span class="text-[10px] text-tg-text-dim">
+                              ok {entry.successCount} / fail {entry.failureCount}
+                            </span>
+                            <span class="text-[10px] text-tg-text-dim">
+                              score {entry.score.toFixed(2)}
+                            </span>
+                            <Show when={entry.quarantinedUntilMs && entry.quarantinedUntilMs > Date.now()}>
+                              <span class="text-[10px] text-tg-warning">
+                                q {formatFutureWindow(entry.quarantinedUntilMs!)}
+                              </span>
+                            </Show>
+                          </div>
+                        )}
+                      </For>
+                      <Show when={totalPages > 1}>
+                        <div class="flex justify-center items-center gap-2 mt-2">
+                          <button
+                            onClick={() => setRelayContactsPage(Math.max(0, page - 1))}
+                            disabled={page === 0}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                          >
+                            prev
+                          </button>
+                          <span class="text-tg-text-dim text-xs">{page + 1} / {totalPages}</span>
+                          <button
+                            onClick={() => setRelayContactsPage(Math.min(totalPages - 1, page + 1))}
+                            disabled={page >= totalPages - 1}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                          >
+                            next
+                          </button>
+                        </div>
+                      </Show>
+                    </>
+                  );
+                })()}
+              </Show>
+            </div>
+
+            <div class="mb-3 pb-3 border-b border-tg-border">
+              <div class="flex items-center justify-between gap-2 mb-1.5">
+                <span class="text-tg-text-dim">Pinned Watchdog</span>
+                <span class="text-tg-text text-[10px]">{props.pinnedPeerWatchdogState.size} peers</span>
+              </div>
+              <Show when={props.pinnedPeerWatchdogState.size > 0} fallback={<p class="text-[10px] text-tg-text-dim">No pinned watchdog entries.</p>}>
+                {(() => {
+                  const rows = [...props.pinnedPeerWatchdogState.values()].sort((a, b) => a.peerId.localeCompare(b.peerId));
+                  const totalPages = Math.max(1, Math.ceil(rows.length / WATCHDOG_PER_PAGE));
+                  const page = Math.min(watchdogPage(), totalPages - 1);
+                  const paged = rows.slice(page * WATCHDOG_PER_PAGE, (page + 1) * WATCHDOG_PER_PAGE);
+                  return (
+                    <>
+                      <For each={paged}>
+                        {(entry) => (
+                          <div class="flex items-center gap-2 py-0.5">
+                            <code class="text-tg-text flex-1">{entry.peerId.slice(0, 20)}...</code>
+                            <span
+                              class="text-[10px]"
+                              classList={{
+                                "text-tg-success": entry.status === "connected",
+                                "text-tg-warning": entry.status === "degraded",
+                                "text-amber-300": entry.status === "recovering",
+                              }}
+                            >
+                              {entry.status}
+                            </span>
+                            <span class="text-[10px] text-tg-text-dim">f{entry.consecutiveFailures}</span>
+                            <Show when={entry.lastSuccessfulPingAtMs !== null}>
+                              <span class="text-[10px] text-tg-text-dim">{formatLastSeen(entry.lastSuccessfulPingAtMs!)}</span>
+                            </Show>
+                          </div>
+                        )}
+                      </For>
+                      <Show when={totalPages > 1}>
+                        <div class="flex justify-center items-center gap-2 mt-2">
+                          <button
+                            onClick={() => setWatchdogPage(Math.max(0, page - 1))}
+                            disabled={page === 0}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                          >
+                            prev
+                          </button>
+                          <span class="text-tg-text-dim text-xs">{page + 1} / {totalPages}</span>
+                          <button
+                            onClick={() => setWatchdogPage(Math.min(totalPages - 1, page + 1))}
+                            disabled={page >= totalPages - 1}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                          >
+                            next
+                          </button>
+                        </div>
+                      </Show>
+                    </>
+                  );
+                })()}
+              </Show>
+            </div>
+
+            <div class="mb-3 pb-3 border-b border-tg-border">
+              <div class="flex items-center justify-between gap-2 mb-1.5">
+                <span class="text-tg-text-dim">Peer Path Cache</span>
+                <div class="flex items-center gap-2">
+                  <span class="text-tg-text text-[10px]">{props.peerPathCache.size} peers</span>
+                  <Show when={props.onClearPeerPathCache}>
+                    <button
+                      onClick={() => props.onClearPeerPathCache?.()}
+                      class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer hover:text-tg-text"
+                    >
+                      clear
+                    </button>
+                  </Show>
+                </div>
+              </div>
+              <Show when={props.peerPathCache.size > 0} fallback={<p class="text-[10px] text-tg-text-dim">No cached peer paths.</p>}>
+                {(() => {
+                  const rows = [...props.peerPathCache.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+                  const totalPages = Math.max(1, Math.ceil(rows.length / PEER_PATH_CACHE_PER_PAGE));
+                  const page = Math.min(peerPathCachePage(), totalPages - 1);
+                  const paged = rows.slice(page * PEER_PATH_CACHE_PER_PAGE, (page + 1) * PEER_PATH_CACHE_PER_PAGE);
+                  return (
+                    <>
+                      <For each={paged}>
+                        {(entry) => (
+                          <div class="py-0.5">
+                            <div class="flex items-center gap-2">
+                              <code class="text-tg-text">{entry[0].slice(0, 20)}...</code>
+                              <span class="text-[10px] text-tg-text-dim">{entry[1].length} path(s)</span>
+                            </div>
+                          </div>
+                        )}
+                      </For>
+                      <Show when={totalPages > 1}>
+                        <div class="flex justify-center items-center gap-2 mt-2">
+                          <button
+                            onClick={() => setPeerPathCachePage(Math.max(0, page - 1))}
+                            disabled={page === 0}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                          >
+                            prev
+                          </button>
+                          <span class="text-tg-text-dim text-xs">{page + 1} / {totalPages}</span>
+                          <button
+                            onClick={() => setPeerPathCachePage(Math.min(totalPages - 1, page + 1))}
+                            disabled={page >= totalPages - 1}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                          >
+                            next
+                          </button>
+                        </div>
+                      </Show>
+                    </>
+                  );
+                })()}
+              </Show>
+            </div>
+
+            <div class="mb-3 pb-3 border-b border-tg-border">
+              <div class="flex items-center justify-between gap-2 mb-1.5">
+                <span class="text-tg-text-dim">Failure Reason Codes</span>
+                <div class="flex items-center gap-2">
+                  <span class="text-tg-text text-[10px]">{props.connectionReasonCounts.size} codes</span>
+                  <Show when={props.onClearConnectionReasons}>
+                    <button
+                      onClick={() => props.onClearConnectionReasons?.()}
+                      class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer hover:text-tg-text"
+                    >
+                      clear
+                    </button>
+                  </Show>
+                </div>
+              </div>
+              <Show when={props.connectionReasonCounts.size > 0} fallback={<p class="text-[10px] text-tg-text-dim">No recorded failure reasons yet.</p>}>
+                {(() => {
+                  const rows = [...props.connectionReasonCounts.entries()].sort((a, b) => b[1] - a[1]);
+                  const totalPages = Math.max(1, Math.ceil(rows.length / REASON_CODES_PER_PAGE));
+                  const page = Math.min(reasonCodesPage(), totalPages - 1);
+                  const paged = rows.slice(page * REASON_CODES_PER_PAGE, (page + 1) * REASON_CODES_PER_PAGE);
+                  return (
+                    <>
+                      <For each={paged}>
+                        {(entry) => (
+                          <div class="flex items-center justify-between gap-2 py-0.5">
+                            <code class="text-tg-text break-all">{entry[0]}</code>
+                            <span class="text-[10px] text-tg-text-dim">{entry[1]}</span>
+                          </div>
+                        )}
+                      </For>
+                      <Show when={totalPages > 1}>
+                        <div class="flex justify-center items-center gap-2 mt-2">
+                          <button
+                            onClick={() => setReasonCodesPage(Math.max(0, page - 1))}
+                            disabled={page === 0}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                          >
+                            prev
+                          </button>
+                          <span class="text-tg-text-dim text-xs">{page + 1} / {totalPages}</span>
+                          <button
+                            onClick={() => setReasonCodesPage(Math.min(totalPages - 1, page + 1))}
+                            disabled={page >= totalPages - 1}
+                            class="border border-tg-border rounded px-2 py-0.5 text-tg-text-dim text-xs cursor-pointer disabled:opacity-40"
+                          >
+                            next
+                          </button>
+                        </div>
+                      </Show>
+                    </>
+                  );
+                })()}
+              </Show>
+            </div>
 
             <div class="mb-3 pb-3 border-b border-tg-border">
               <div class="flex items-center gap-2 mb-1.5">

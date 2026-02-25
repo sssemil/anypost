@@ -2,7 +2,13 @@ import { openDB, deleteDB } from "idb";
 import type { IDBPDatabase } from "idb";
 import type { AccountKey } from "../crypto/identity.js";
 import type { JoinRetryEntry, JoinRetryState, JoinRetryStatus } from "../protocol/join-retry-queue.js";
-import type { SyncPeerProgress, SyncProgressState } from "../protocol/multi-group-chat.js";
+import type {
+  SyncPeerProgress,
+  SyncProgressState,
+  RelayContactBook,
+  RelayContactBookEntry,
+  RelayContactSource,
+} from "../protocol/multi-group-chat.js";
 
 const DB_NAME = "anypost:account";
 
@@ -18,6 +24,7 @@ const JOIN_RETRY_STATE_KEY = "joinRetryState";
 const SYNC_PROGRESS_STATE_KEY = "syncProgressState";
 const CONTACTS_BOOK_KEY = "contactsBook";
 const BLOCKED_PEERS_KEY = "blockedPeers";
+const RELAY_CONTACT_BOOK_KEY = "relayContactBook";
 
 export type ContactBookEntry = {
   readonly peerId: string;
@@ -276,6 +283,117 @@ const encodeContactsBook = (contacts: ContactsBook): string =>
     },
   ]));
 
+const isRelayContactSource = (value: unknown): value is RelayContactSource =>
+  value === "bootstrap"
+  || value === "invite"
+  || value === "candidate"
+  || value === "manual"
+  || value === "harvest"
+  || value === "reservation"
+  || value === "unknown";
+
+const decodeRelayContactBook = (value: string): RelayContactBook => {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return new Map();
+
+    const book = new Map<string, RelayContactBookEntry>();
+    for (const rawEntry of parsed) {
+      if (!Array.isArray(rawEntry) || rawEntry.length !== 2) continue;
+      const [peerId, rawValue] = rawEntry;
+      if (typeof peerId !== "string" || typeof rawValue !== "object" || rawValue === null) continue;
+
+      const valueObj = rawValue as Record<string, unknown>;
+      const addressesRaw = valueObj.addresses;
+      const sourcesRaw = valueObj.sources;
+      const firstSeenAtMs = valueObj.firstSeenAtMs;
+      const lastSeenAtMs = valueObj.lastSeenAtMs;
+      const lastAttemptAtMs = valueObj.lastAttemptAtMs;
+      const lastSuccessAtMs = valueObj.lastSuccessAtMs;
+      const lastFailureAtMs = valueObj.lastFailureAtMs;
+      const successCount = valueObj.successCount;
+      const failureCount = valueObj.failureCount;
+      const consecutiveFailures = valueObj.consecutiveFailures;
+      const averageRttMs = valueObj.averageRttMs;
+      const quarantinedUntilMs = valueObj.quarantinedUntilMs;
+      const score = valueObj.score;
+
+      if (
+        !Array.isArray(addressesRaw) ||
+        !Array.isArray(sourcesRaw) ||
+        typeof firstSeenAtMs !== "number" ||
+        typeof lastSeenAtMs !== "number" ||
+        !isNullableFiniteNumber(lastAttemptAtMs) ||
+        !isNullableFiniteNumber(lastSuccessAtMs) ||
+        !isNullableFiniteNumber(lastFailureAtMs) ||
+        typeof successCount !== "number" ||
+        !Number.isFinite(successCount) ||
+        typeof failureCount !== "number" ||
+        !Number.isFinite(failureCount) ||
+        typeof consecutiveFailures !== "number" ||
+        !Number.isFinite(consecutiveFailures) ||
+        !isNullableFiniteNumber(averageRttMs) ||
+        !isNullableFiniteNumber(quarantinedUntilMs) ||
+        typeof score !== "number" ||
+        !Number.isFinite(score)
+      ) {
+        continue;
+      }
+
+      const addresses = [...new Set(
+        addressesRaw
+          .filter((addr): addr is string => typeof addr === "string")
+          .map((addr) => addr.trim())
+          .filter((addr) => addr.length > 0),
+      )];
+      const sources = [...new Set(
+        sourcesRaw.filter(isRelayContactSource),
+      )];
+      if (addresses.length === 0 && sources.length === 0) continue;
+
+      book.set(peerId, {
+        peerId,
+        addresses,
+        sources,
+        firstSeenAtMs,
+        lastSeenAtMs,
+        lastAttemptAtMs,
+        lastSuccessAtMs,
+        lastFailureAtMs,
+        successCount: Math.max(0, Math.floor(successCount)),
+        failureCount: Math.max(0, Math.floor(failureCount)),
+        consecutiveFailures: Math.max(0, Math.floor(consecutiveFailures)),
+        averageRttMs,
+        quarantinedUntilMs,
+        score,
+      });
+    }
+    return book;
+  } catch {
+    return new Map();
+  }
+};
+
+const encodeRelayContactBook = (book: RelayContactBook): string =>
+  JSON.stringify([...book.entries()].map(([peerId, entry]) => [
+    peerId,
+    {
+      addresses: [...entry.addresses],
+      sources: [...entry.sources],
+      firstSeenAtMs: entry.firstSeenAtMs,
+      lastSeenAtMs: entry.lastSeenAtMs,
+      lastAttemptAtMs: entry.lastAttemptAtMs,
+      lastSuccessAtMs: entry.lastSuccessAtMs,
+      lastFailureAtMs: entry.lastFailureAtMs,
+      successCount: entry.successCount,
+      failureCount: entry.failureCount,
+      consecutiveFailures: entry.consecutiveFailures,
+      averageRttMs: entry.averageRttMs,
+      quarantinedUntilMs: entry.quarantinedUntilMs,
+      score: entry.score,
+    },
+  ]));
+
 export type AccountStore = {
   readonly getAccountKey: () => Promise<AccountKey | null>;
   readonly saveAccountKey: (key: AccountKey) => Promise<void>;
@@ -293,6 +411,8 @@ export type AccountStore = {
   readonly saveSyncProgressState: (state: SyncProgressState) => Promise<void>;
   readonly getContactsBook: () => Promise<ContactsBook>;
   readonly saveContactsBook: (contacts: ContactsBook) => Promise<void>;
+  readonly getRelayContactBook: () => Promise<RelayContactBook>;
+  readonly saveRelayContactBook: (book: RelayContactBook) => Promise<void>;
   readonly getBlockedPeerIds: () => Promise<ReadonlySet<string>>;
   readonly saveBlockedPeerIds: (blockedPeerIds: ReadonlySet<string>) => Promise<void>;
   readonly destroy: () => Promise<void>;
@@ -417,6 +537,16 @@ export const openAccountStore = async (): Promise<AccountStore> => {
 
     saveContactsBook: async (contacts: ContactsBook) => {
       await db.put("account", encodeContactsBook(contacts), CONTACTS_BOOK_KEY);
+    },
+
+    getRelayContactBook: async () => {
+      const value = await db.get("account", RELAY_CONTACT_BOOK_KEY);
+      if (typeof value !== "string") return new Map();
+      return decodeRelayContactBook(value);
+    },
+
+    saveRelayContactBook: async (book: RelayContactBook) => {
+      await db.put("account", encodeRelayContactBook(book), RELAY_CONTACT_BOOK_KEY);
     },
 
     getBlockedPeerIds: async () => {

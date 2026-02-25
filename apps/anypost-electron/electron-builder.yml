@@ -1,0 +1,16 @@
+appId: com.anypost.desktop
+productName: Anypost
+asar: true
+files:
+  - from: dist
+    to: dist
+    filter:
+      - "**/*"
+      - "!**/*.map"
+  - from: .
+    to: .
+    filter:
+      - package.json
+      - node_modules/**/*
+      - node_modules/.pnpm/**/*
+      - "!**/*.tsbuildinfo"

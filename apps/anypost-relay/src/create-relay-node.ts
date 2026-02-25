@@ -12,7 +12,7 @@ import { identify } from "@libp2p/identify";
 import { kadDHT } from "@libp2p/kad-dht";
 import { ping } from "@libp2p/ping";
 import { bootstrap } from "@libp2p/bootstrap";
-import { IPFS_BOOTSTRAP_TCP_PEERS } from "anypost-core/libp2p";
+import { IPFS_BOOTSTRAP_TCP_PEERS } from "anypost-core/libp2p/bootstrap-peers";
 import {
   generateKeyPair,
   privateKeyFromProtobuf,
