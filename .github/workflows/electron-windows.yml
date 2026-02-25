@@ -33,7 +33,7 @@ jobs:
         shell: bash
         run: >
           pnpm --filter anypost-electron exec electron-builder
-          --projectDir apps/anypost-electron
+          --projectDir .
           --config electron-builder.yml
           --win portable
           --x64

@@ -107,7 +107,7 @@ package_electron_appimage() {
 
   echo "Packaging Linux x86_64 AppImage..."
   pnpm --filter anypost-electron exec electron-builder \
-    --projectDir apps/anypost-electron \
+    --projectDir . \
     --config electron-builder.yml \
     --linux AppImage \
     --x64 \
@@ -147,7 +147,7 @@ package_electron_windows() {
 
   echo "Packaging Windows x86_64 Portable EXE..."
   pnpm --filter anypost-electron exec electron-builder \
-    --projectDir apps/anypost-electron \
+    --projectDir . \
     --config electron-builder.yml \
     --win portable \
     --x64 \
@@ -187,7 +187,7 @@ package_electron_macos() {
 
   echo "Packaging macOS x64 DMG + ZIP..."
   CSC_IDENTITY_AUTO_DISCOVERY=false pnpm --filter anypost-electron exec electron-builder \
-    --projectDir apps/anypost-electron \
+    --projectDir . \
     --config electron-builder.yml \
     --mac dmg zip \
     --x64 \
