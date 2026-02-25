@@ -10,3 +10,5 @@ artifacts/
 apps/anypost-web/artifacts/
 anypost-devtools-recording-*.json
 apps/anypost-electron/*.bdic
+apps/anypost-electron/release/
+apps/anypost-electron/release-debug/
