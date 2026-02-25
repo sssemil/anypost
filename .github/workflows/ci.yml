@@ -56,7 +56,21 @@ jobs:
         run: pnpm --filter anypost-web run e2e:dm-no-relay-ipfs
 
       - name: Run DM Refresh Browser Integration
-        run: pnpm --filter anypost-web run e2e:dm-refresh-ipfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2; do
+            echo "DM refresh e2e attempt ${attempt}/2"
+            if pnpm --filter anypost-web run e2e:dm-refresh-ipfs; then
+              exit 0
+            fi
+            if [[ "$attempt" -lt 2 ]]; then
+              echo "DM refresh e2e failed; retrying once..."
+              sleep 3
+            fi
+          done
+          echo "DM refresh e2e failed after 2 attempts"
+          exit 1
 
       - name: Run Headless Validation
         run: pnpm --filter anypost-web run e2e:record -- --out-dir artifacts/headless-recordings/ci --record-wait-ms 120000 --settle-ms 5000

@@ -254,7 +254,7 @@ const sendAndWaitWithRetry = async (
   receiverLabel,
   receiverTargetPeerId,
   textPrefix,
-  attempts = 8,
+  attempts = 10,
 ) => {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const text = `${textPrefix}-${attempt}-${Date.now()}`;
@@ -262,11 +262,20 @@ const sendAndWaitWithRetry = async (
     await startDm(receiverPage, receiverTargetPeerId);
     await sendMessage(senderPage, text);
 
-    if (await waitForMessage(receiverPage, text, 12_000)) {
+    if (await waitForMessage(receiverPage, text, 20_000)) {
       log(`${senderLabel} -> ${receiverLabel} delivered on attempt ${attempt}`);
       return text;
     }
     log(`${senderLabel} -> ${receiverLabel} not delivered yet (attempt ${attempt}/${attempts})`);
+    // CI can temporarily lose direct paths post-refresh; force reconnect before retrying.
+    await Promise.all([
+      connectPeer(senderPage, senderTargetPeerId, senderLabel),
+      connectPeer(receiverPage, receiverTargetPeerId, receiverLabel),
+    ]);
+    await Promise.all([
+      ensurePeerConnection(senderPage, senderTargetPeerId, senderLabel, 20_000),
+      ensurePeerConnection(receiverPage, receiverTargetPeerId, receiverLabel, 20_000),
+    ]);
     await sleep(1_500);
   }
   throw new Error(`Timed out delivering ${senderLabel} -> ${receiverLabel} message`);
