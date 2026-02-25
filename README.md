@@ -54,6 +54,7 @@ Run `./run` with no arguments to see all available commands:
 ./run android-sync   Build web assets and sync Capacitor Android project
 ./run android-open   Open Android Studio for the Android target
 ./run android-build-apk Build Android debug APK
+./run relay-docker-build Build Docker image for anypost relay
 ./run dev            Start both relay and web app
 ./run build          Build all packages
 ./run test           Run all tests
@@ -123,6 +124,29 @@ The `./run` script is the main entry point for all development tasks. It handles
 ```
 
 The web app dev server watches `anypost-core` for changes and rebuilds automatically.
+
+## Relay Docker Deploy
+
+Build a relay image from the repo root:
+
+```bash
+./run relay-docker-build
+```
+
+Run it:
+
+```bash
+docker run --name anypost-relay \
+  --restart unless-stopped \
+  -p 9001:9001 \
+  -p 9090:9090 \
+  -e RELAY_TCP_PORT=9001 \
+  -e RELAY_WS_PORT=9090 \
+  -v "$(pwd)/apps/anypost-relay/data:/workspace/apps/anypost-relay/data" \
+  anypost-relay:local
+```
+
+Relay docs and compose example live in [`apps/anypost-relay/README.md`](apps/anypost-relay/README.md).
 
 ## Testing
 

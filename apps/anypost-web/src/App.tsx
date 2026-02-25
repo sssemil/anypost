@@ -2,6 +2,7 @@ import { createSignal, createEffect, For, Match, onCleanup, onMount, Show, Switc
 import {
   createMultiGroupChat,
   createMultiGroupState,
+  createDefaultRuntimeAdapter,
   transitionMultiGroup,
   getActiveGroup,
   getActiveMessages,
@@ -118,6 +119,7 @@ const PENDING_JOINS_STORAGE_KEY = "anypost:pending-joins";
 const RELAY_HINTS_STORAGE_KEY = "anypost:relay-hints";
 const PENDING_DM_REQUESTS_STORAGE_KEY = "anypost:pending-dm-requests";
 const OUTGOING_DM_REQUESTS_STORAGE_KEY = "anypost:outgoing-dm-requests";
+const USE_PUBLIC_BOOTSTRAP_STORAGE_KEY = "anypost:use-public-bootstrap";
 const MAX_EVENTS = 200;
 const SYSTEM_SENDER_ID = "__system__";
 const CONTACTS_LAST_SEEN_UPDATE_MS = 60_000;
@@ -462,6 +464,20 @@ const saveOutgoingDirectMessageRequests = (requests: readonly OutgoingDirectMess
   localStorage.setItem(OUTGOING_DM_REQUESTS_STORAGE_KEY, JSON.stringify(requests));
 };
 
+const loadUsePublicBootstrapNodes = (): boolean => {
+  try {
+    const raw = localStorage.getItem(USE_PUBLIC_BOOTSTRAP_STORAGE_KEY);
+    if (raw === null) return true;
+    return raw !== "0";
+  } catch {
+    return true;
+  }
+};
+
+const saveUsePublicBootstrapNodes = (enabled: boolean) => {
+  localStorage.setItem(USE_PUBLIC_BOOTSTRAP_STORAGE_KEY, enabled ? "1" : "0");
+};
+
 const loadRelayHints = (): readonly string[] => {
   try {
     const json = localStorage.getItem(RELAY_HINTS_STORAGE_KEY);
@@ -563,6 +579,7 @@ export const App = () => {
   const [callClockMs, setCallClockMs] = createSignal(Date.now());
   const [pendingDesktopInviteCodes, setPendingDesktopInviteCodes] = createSignal<readonly string[]>([]);
   const [messageDraft, setMessageDraft] = createSignal("");
+  const [usePublicBootstrapNodes, setUsePublicBootstrapNodes] = createSignal(loadUsePublicBootstrapNodes());
   const [keyboardInsetPx, setKeyboardInsetPx] = createSignal(0);
   const [backgroundNodeRunning, setBackgroundNodeRunning] = createSignal(false);
   const [backgroundNodeBusy, setBackgroundNodeBusy] = createSignal(false);
@@ -846,6 +863,14 @@ export const App = () => {
     requests: readonly OutgoingDirectMessageRequest[],
   ) => {
     saveOutgoingDirectMessageRequests(requests);
+  };
+
+  const setBootstrapPreference = (enabled: boolean) => {
+    setUsePublicBootstrapNodes(enabled);
+    saveUsePublicBootstrapNodes(enabled);
+    appendDiagnosticsEntry("bootstrap-preference-updated", {
+      usePublicBootstrapNodes: enabled,
+    });
   };
 
   const createRecordingFilename = (atMs: number): string => {
@@ -2389,11 +2414,17 @@ export const App = () => {
     }
   };
 
-  const handleDisplayNameSet = async (name: string) => {
+  const handleDisplayNameSet = async (
+    name: string,
+    options?: { readonly usePublicBootstrapNodes?: boolean },
+  ) => {
     const state = onboardingState();
     if (state.status !== "display-name-prompt") return;
 
     try {
+      if (typeof options?.usePublicBootstrapNodes === "boolean") {
+        setBootstrapPreference(options.usePublicBootstrapNodes);
+      }
       const persistedSettings = await createPersistedSettingsDocument(state.accountKey.publicKey);
       try {
         setDisplayName(persistedSettings.doc, name);
@@ -2521,6 +2552,22 @@ export const App = () => {
       const bridge = hostBridge();
       const selectedTransportProfile = ENV_TRANSPORT_PROFILE
         ?? (hasDesktopBridge() ? "desktop" : hasAndroidBridge() ? "android" : "websocket");
+      const runtimeAdapter = usePublicBootstrapNodes()
+        ? createDefaultRuntimeAdapter(selectedTransportProfile)
+        : {
+            ...createDefaultRuntimeAdapter(selectedTransportProfile),
+            resolveBootstrapPeers: (initialBootstrapPeers: readonly string[]) => {
+              const unique = new Set<string>();
+              const result: string[] = [];
+              for (const addr of initialBootstrapPeers) {
+                const trimmed = addr.trim();
+                if (trimmed.length === 0 || unique.has(trimmed)) continue;
+                unique.add(trimmed);
+                result.push(trimmed);
+              }
+              return result;
+            },
+          };
       const bootstrapPeers = ENV_RELAY_MULTIADDR ? [ENV_RELAY_MULTIADDR] : [];
       if (bridge?.getRelayState) {
         const relayState = await bridge.getRelayState().catch(() => null);
@@ -2661,6 +2708,7 @@ export const App = () => {
         initialRelayHints,
         bootstrapPeers,
         useTransports: selectedTransportProfile,
+        runtimeAdapter,
         discoveryProfile: "aggressive",
         onRelayPoolStateChange: setRelayPoolState,
         onGroupDiscoveryStateChange: setGroupDiscoveryState,
@@ -4779,7 +4827,8 @@ export const App = () => {
 
       <Match when={onboardingState().status === "display-name-prompt"}>
         <DisplayNamePrompt
-          onSubmit={(name) => void handleDisplayNameSet(name)}
+          defaultUsePublicBootstrapNodes={usePublicBootstrapNodes()}
+          onSubmit={(name, options) => void handleDisplayNameSet(name, options)}
         />
       </Match>
 
@@ -5096,6 +5145,26 @@ export const App = () => {
                       Download Recording
                     </button>
                   </Show>
+                </div>
+                <div class="rounded-xl border border-tg-border bg-tg-chat p-4 mb-4">
+                  <div class="flex items-center justify-between gap-2 mb-1.5">
+                    <strong class="text-sm text-tg-text">Bootstrap Nodes</strong>
+                    <label class="inline-flex items-center gap-2 text-xs text-tg-text cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={usePublicBootstrapNodes()}
+                        onChange={(event) => setBootstrapPreference(event.currentTarget.checked)}
+                        class="accent-tg-accent"
+                      />
+                      <span>{usePublicBootstrapNodes() ? "Public on" : "Public off"}</span>
+                    </label>
+                  </div>
+                  <p class="text-[10px] text-tg-text-dim mb-1">
+                    Use IPFS public bootstrap nodes in addition to your configured relay addresses.
+                  </p>
+                  <p class="text-[10px] text-tg-text-dim">
+                    Changing this affects new networking sessions. Reconnect to fully apply.
+                  </p>
                 </div>
                 <Show when={hasAndroidBridge()}>
                   <div class="rounded-xl border border-tg-border bg-tg-chat p-4 mb-4">

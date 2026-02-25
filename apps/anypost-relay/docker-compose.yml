@@ -1,0 +1,13 @@
+services:
+  anypost-relay:
+    image: anypost-relay:local
+    container_name: anypost-relay
+    restart: unless-stopped
+    ports:
+      - "9001:9001"
+      - "9090:9090"
+    environment:
+      RELAY_TCP_PORT: "9001"
+      RELAY_WS_PORT: "9090"
+    volumes:
+      - ./data:/workspace/apps/anypost-relay/data

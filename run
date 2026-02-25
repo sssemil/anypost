@@ -15,8 +15,13 @@ Commands:
   android-sync   Build web assets and sync into Capacitor Android project
   android-open   Open Android Studio for the Capacitor Android project
   android-build-apk Build debug APK via Gradle
+  relay-docker-build Build Docker image for anypost-relay
   electron-appimage Build Linux x86_64 Electron AppImage (incremental)
   electron-appimage-fresh Build a fresh Linux x86_64 Electron AppImage
+  electron-win   Build Windows x86_64 Electron Portable EXE (incremental)
+  electron-win-fresh Build a fresh Windows x86_64 Electron Portable EXE
+  electron-mac   Build macOS x64 DMG+ZIP (incremental, run on macOS host)
+  electron-mac-fresh Build a fresh macOS x64 DMG+ZIP (run on macOS host)
   dev            Start both relay and web app (Ctrl+C stops both)
   e2e-record     Run headless Chromium Alice/Bob scenario + download diagnostics logs
   e2e-dm-refresh Run headless Chromium DM refresh continuity integration test
@@ -73,6 +78,14 @@ cmd_android_build_apk() {
   pnpm --filter anypost-android run build:apk
 }
 
+cmd_relay_docker_build() {
+  docker build \
+    --file apps/anypost-relay/Dockerfile \
+    --tag anypost-relay:local \
+    .
+  echo "Built image: anypost-relay:local"
+}
+
 clear_dir_if_exists() {
   local dir="$1"
   if [[ ! -d "$dir" ]]; then
@@ -117,6 +130,86 @@ cmd_electron_appimage_fresh() {
   clear_dir_if_exists "$SCRIPT_DIR/apps/anypost-relay/dist"
   clear_dir_if_exists "$SCRIPT_DIR/packages/anypost-core/dist"
   package_electron_appimage
+}
+
+package_electron_windows() {
+  echo "Prebuilding anypost-core..."
+  pnpm --filter anypost-core build
+
+  echo "Building Electron app..."
+  pnpm --filter anypost-electron build
+
+  mkdir -p "$SCRIPT_DIR/apps/anypost-electron/release"
+  find "$SCRIPT_DIR/apps/anypost-electron/release" -maxdepth 1 -type f -name '*win*.exe' -delete
+  find "$SCRIPT_DIR/apps/anypost-electron/release" -maxdepth 1 -type f -name '*.exe' -delete
+  find "$SCRIPT_DIR/apps/anypost-electron/release" -maxdepth 1 -type f -name '*.blockmap' -delete
+  find "$SCRIPT_DIR/apps/anypost-electron/release" -maxdepth 1 -type f -name 'latest*.yml' -delete
+
+  echo "Packaging Windows x86_64 Portable EXE..."
+  pnpm dlx electron-builder@24.13.3 \
+    --projectDir apps/anypost-electron \
+    --config electron-builder.yml \
+    --win portable \
+    --x64 \
+    --publish never \
+    --config.directories.output=release
+
+  echo "Windows build ready:"
+  ls -1 apps/anypost-electron/release/*.exe
+}
+
+cmd_electron_win() {
+  package_electron_windows
+}
+
+cmd_electron_win_fresh() {
+  echo "Cleaning previous build artifacts..."
+  clear_dir_if_exists "$SCRIPT_DIR/apps/anypost-electron/dist"
+  clear_dir_if_exists "$SCRIPT_DIR/apps/anypost-electron/release"
+  clear_dir_if_exists "$SCRIPT_DIR/apps/anypost-web/dist"
+  clear_dir_if_exists "$SCRIPT_DIR/apps/anypost-relay/dist"
+  clear_dir_if_exists "$SCRIPT_DIR/packages/anypost-core/dist"
+  package_electron_windows
+}
+
+package_electron_macos() {
+  echo "Prebuilding anypost-core..."
+  pnpm --filter anypost-core build
+
+  echo "Building Electron app..."
+  pnpm --filter anypost-electron build
+
+  mkdir -p "$SCRIPT_DIR/apps/anypost-electron/release"
+  find "$SCRIPT_DIR/apps/anypost-electron/release" -maxdepth 1 -type f -name '*.dmg' -delete
+  find "$SCRIPT_DIR/apps/anypost-electron/release" -maxdepth 1 -type f -name '*mac*.zip' -delete
+  find "$SCRIPT_DIR/apps/anypost-electron/release" -maxdepth 1 -type f -name '*.blockmap' -delete
+  find "$SCRIPT_DIR/apps/anypost-electron/release" -maxdepth 1 -type f -name 'latest*.yml' -delete
+
+  echo "Packaging macOS x64 DMG + ZIP..."
+  CSC_IDENTITY_AUTO_DISCOVERY=false pnpm dlx electron-builder@24.13.3 \
+    --projectDir apps/anypost-electron \
+    --config electron-builder.yml \
+    --mac dmg zip \
+    --x64 \
+    --publish never \
+    --config.directories.output=release
+
+  echo "macOS build ready:"
+  ls -1 apps/anypost-electron/release/*.dmg apps/anypost-electron/release/*mac*.zip
+}
+
+cmd_electron_mac() {
+  package_electron_macos
+}
+
+cmd_electron_mac_fresh() {
+  echo "Cleaning previous build artifacts..."
+  clear_dir_if_exists "$SCRIPT_DIR/apps/anypost-electron/dist"
+  clear_dir_if_exists "$SCRIPT_DIR/apps/anypost-electron/release"
+  clear_dir_if_exists "$SCRIPT_DIR/apps/anypost-web/dist"
+  clear_dir_if_exists "$SCRIPT_DIR/apps/anypost-relay/dist"
+  clear_dir_if_exists "$SCRIPT_DIR/packages/anypost-core/dist"
+  package_electron_macos
 }
 
 cmd_dev() {
@@ -184,8 +277,13 @@ case "$1" in
   android-sync) cmd_android_sync ;;
   android-open) cmd_android_open ;;
   android-build-apk) cmd_android_build_apk ;;
+  relay-docker-build) cmd_relay_docker_build ;;
   electron-appimage) cmd_electron_appimage ;;
   electron-appimage-fresh) cmd_electron_appimage_fresh ;;
+  electron-win) cmd_electron_win ;;
+  electron-win-fresh) cmd_electron_win_fresh ;;
+  electron-mac) cmd_electron_mac ;;
+  electron-mac-fresh) cmd_electron_mac_fresh ;;
   dev)       cmd_dev ;;
   e2e-record) cmd_e2e_record "$@" ;;
   e2e-dm-refresh) cmd_e2e_dm_refresh "$@" ;;

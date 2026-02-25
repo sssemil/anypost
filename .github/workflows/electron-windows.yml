@@ -1,0 +1,48 @@
+name: Electron Windows Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  portable-windows-x64:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Electron app dependencies and renderer
+        run: pnpm --filter anypost-electron build
+
+      - name: Package Windows x64 Portable EXE
+        shell: bash
+        run: >
+          pnpm dlx electron-builder@24.13.3
+          --projectDir apps/anypost-electron
+          --config electron-builder.yml
+          --win portable
+          --x64
+          --publish never
+          --config.directories.output=release
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: anypost-electron-windows-x64-portable
+          path: apps/anypost-electron/release/*.exe
+          if-no-files-found: error

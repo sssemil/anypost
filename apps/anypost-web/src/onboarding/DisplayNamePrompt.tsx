@@ -1,11 +1,15 @@
 import { createSignal, Show } from "solid-js";
 
 type DisplayNamePromptProps = {
-  readonly onSubmit: (displayName: string) => void;
+  readonly defaultUsePublicBootstrapNodes?: boolean;
+  readonly onSubmit: (displayName: string, options: { readonly usePublicBootstrapNodes: boolean }) => void;
 };
 
 export const DisplayNamePrompt = (props: DisplayNamePromptProps) => {
   const [name, setName] = createSignal("");
+  const [usePublicBootstrapNodes, setUsePublicBootstrapNodes] = createSignal(
+    props.defaultUsePublicBootstrapNodes ?? true,
+  );
   const [error, setError] = createSignal("");
 
   const handleSubmit = () => {
@@ -18,7 +22,9 @@ export const DisplayNamePrompt = (props: DisplayNamePromptProps) => {
       setError("Display name must be 100 characters or less");
       return;
     }
-    props.onSubmit(trimmed);
+    props.onSubmit(trimmed, {
+      usePublicBootstrapNodes: usePublicBootstrapNodes(),
+    });
   };
 
   const handleKeyDown = (e: KeyboardEvent) => {
@@ -51,6 +57,19 @@ export const DisplayNamePrompt = (props: DisplayNamePromptProps) => {
       <Show when={error()}>
         <p class="text-tg-danger text-sm mt-0 mb-3">{error()}</p>
       </Show>
+
+      <label class="flex items-start gap-2 text-left text-sm text-tg-text-dim mb-4 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={usePublicBootstrapNodes()}
+          onChange={(e) => setUsePublicBootstrapNodes(e.currentTarget.checked)}
+          class="mt-1 accent-tg-accent"
+        />
+        <span>
+          Use IPFS public bootstrap nodes for easier peer discovery.
+          Disable to run in private/self-hosted relay mode only.
+        </span>
+      </label>
 
       <button
         onClick={handleSubmit}
