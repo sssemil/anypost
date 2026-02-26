@@ -141,6 +141,10 @@ export {
   OUTGOING_SYNC_REQUEST_MAX,
   FULL_SYNC_FALLBACK_COOLDOWN_MS,
 } from "./sync-protocol.js";
+export type {
+  SyncRequestPayload,
+  SyncResponsePayload,
+} from "./sync-protocol.js";
 export { createMultiGroupChat } from "./multi-group-chat.js";
 export type {
   MultiGroupChat,

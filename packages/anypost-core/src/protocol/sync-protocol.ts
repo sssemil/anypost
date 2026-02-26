@@ -7,7 +7,7 @@ export const INCOMING_SYNC_REQUEST_MAX = 40;
 export const OUTGOING_SYNC_REQUEST_MAX = 60;
 export const FULL_SYNC_FALLBACK_COOLDOWN_MS = 30_000;
 
-type SyncRequestPayload = {
+export type SyncRequestPayload = {
   readonly groupId: string;
   readonly senderPeerId: string;
   readonly senderPublicKey: Uint8Array;
@@ -16,7 +16,7 @@ type SyncRequestPayload = {
   readonly knownHash?: Uint8Array;
 };
 
-type SyncResponsePayload = {
+export type SyncResponsePayload = {
   readonly groupId: string;
   readonly senderPeerId: string;
   readonly senderPublicKey: Uint8Array;
@@ -69,37 +69,47 @@ export const signSyncRequest = (
   payload: SyncRequestPayload,
   privateKey: Uint8Array,
 ): Uint8Array =>
-  new Uint8Array([...ed25519.sign(
+  new Uint8Array(ed25519.sign(
     encodeSyncRequestSigningPayload(payload),
     privateKey,
-  )]);
+  ));
 
 export const verifySyncRequest = (
   payload: SyncRequestPayload & { readonly signature: Uint8Array },
-): boolean =>
-  ed25519.verify(
-    payload.signature,
-    encodeSyncRequestSigningPayload(payload),
-    payload.senderPublicKey,
-  );
+): boolean => {
+  try {
+    return ed25519.verify(
+      payload.signature,
+      encodeSyncRequestSigningPayload(payload),
+      payload.senderPublicKey,
+    );
+  } catch {
+    return false;
+  }
+};
 
 export const signSyncResponse = (
   payload: SyncResponsePayload,
   privateKey: Uint8Array,
 ): Uint8Array =>
-  new Uint8Array([...ed25519.sign(
+  new Uint8Array(ed25519.sign(
     encodeSyncResponseSigningPayload(payload),
     privateKey,
-  )]);
+  ));
 
 export const verifySyncResponse = (
   payload: SyncResponsePayload & { readonly signature: Uint8Array },
-): boolean =>
-  ed25519.verify(
-    payload.signature,
-    encodeSyncResponseSigningPayload(payload),
-    payload.senderPublicKey,
-  );
+): boolean => {
+  try {
+    return ed25519.verify(
+      payload.signature,
+      encodeSyncResponseSigningPayload(payload),
+      payload.senderPublicKey,
+    );
+  } catch {
+    return false;
+  }
+};
 
 export const getMissingEnvelopesForKnownHash = (
   orderedEnvelopes: readonly SignedActionEnvelope[],

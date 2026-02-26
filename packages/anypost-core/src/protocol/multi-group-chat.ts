@@ -1470,8 +1470,9 @@ export const createMultiGroupChat = async (
   const dagHeadHash = (groupId: string): Uint8Array | undefined => {
     const dag = actionDags.get(groupId);
     if (!dag) return undefined;
-    const tips = getTips(dag);
-    return tips.length > 0 ? Uint8Array.from(tips[tips.length - 1]) : undefined;
+    const ordered = topologicalOrder(dag);
+    const last = ordered[ordered.length - 1];
+    return last ? Uint8Array.from(last.hash) : undefined;
   };
 
   const sameDirectMessagePair = (

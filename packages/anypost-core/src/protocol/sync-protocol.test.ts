@@ -163,6 +163,72 @@ describe("Sync protocol", () => {
       const valid = verifySyncResponse({ ...payload, signature: tampered });
       expect(valid).toBe(false);
     });
+
+    it("should reject when verified with a different public key", () => {
+      const signerKey = generateAccountKey();
+      const otherKey = generateAccountKey();
+      const payload = {
+        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+        senderPeerId: "12D3KooWTest",
+        senderPublicKey: new Uint8Array(signerKey.publicKey),
+        targetPeerId: "12D3KooWOther",
+        envelopes: [],
+      };
+
+      const signature = signSyncResponse(payload, signerKey.privateKey);
+
+      const valid = verifySyncResponse({
+        ...payload,
+        senderPublicKey: new Uint8Array(otherKey.publicKey),
+        signature,
+      });
+      expect(valid).toBe(false);
+    });
+
+    it("should return false for a malformed signature length", () => {
+      const accountKey = generateAccountKey();
+      const payload = {
+        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+        senderPeerId: "12D3KooWTest",
+        senderPublicKey: new Uint8Array(accountKey.publicKey),
+        targetPeerId: "12D3KooWOther",
+        envelopes: [],
+      };
+
+      const valid = verifySyncResponse({ ...payload, signature: new Uint8Array(1) });
+      expect(valid).toBe(false);
+    });
+  });
+
+  describe("verifySyncRequest with malformed inputs", () => {
+    it("should return false for a zero-length signature", () => {
+      const accountKey = generateAccountKey();
+      const payload = {
+        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+        senderPeerId: "12D3KooWTest",
+        senderPublicKey: new Uint8Array(accountKey.publicKey),
+      };
+
+      const valid = verifySyncRequest({ ...payload, signature: new Uint8Array(0) });
+      expect(valid).toBe(false);
+    });
+
+    it("should return false for a public key of wrong length", () => {
+      const accountKey = generateAccountKey();
+      const signature = signSyncRequest({
+        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+        senderPeerId: "12D3KooWTest",
+        senderPublicKey: new Uint8Array(accountKey.publicKey),
+      }, accountKey.privateKey);
+
+      const valid = verifySyncRequest({
+        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+        senderPeerId: "12D3KooWTest",
+        senderPublicKey: new Uint8Array(5),
+        signature,
+      });
+      expect(valid).toBe(false);
+    });
   });
 
   describe("getMissingEnvelopesForKnownHash", () => {
