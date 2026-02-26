@@ -24,6 +24,7 @@ export const createSignedActionEnvelope = (
   options: CreateSignedActionEnvelopeOptions,
 ): SignedActionEnvelope => {
   const signable: SignableAction = {
+    protocolVersion: 2,
     id: options.id ?? crypto.randomUUID(),
     groupId: options.groupId,
     authorPublicKey: new Uint8Array(options.accountKey.publicKey),

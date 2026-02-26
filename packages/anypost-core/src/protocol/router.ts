@@ -3,6 +3,7 @@ import type { WireMessage, EncryptedMessage, GroupId } from "../shared/schemas.j
 type MlsCommitPayload = Extract<WireMessage, { type: "mls_commit" }>["payload"];
 type SyncRequestPayload = Extract<WireMessage, { type: "sync_request" }>["payload"];
 type SyncResponsePayload = Extract<WireMessage, { type: "sync_response" }>["payload"];
+type HeadsAnnouncePayload = Extract<WireMessage, { type: "heads_announce" }>["payload"];
 
 type SignedActionPayload = {
   readonly signedBytes: Uint8Array;
@@ -25,6 +26,7 @@ export type MessageHandler = {
   readonly onSyncResponse: (payload: SyncResponsePayload) => void;
   readonly onSignedAction: (payload: SignedActionPayload) => void;
   readonly onJoinRequest: (payload: JoinRequestPayload) => void;
+  readonly onHeadsAnnounce: (payload: HeadsAnnouncePayload) => void;
 };
 
 type Router = {
@@ -62,12 +64,15 @@ export const createRouter = (handlers: MessageHandler): Router => ({
           inviteGrant: message.inviteGrant,
         });
         break;
+      case "heads_announce":
+        handlers.onHeadsAnnounce(message.payload);
+        break;
     }
   },
 });
 
 export const groupTopic = (groupId: GroupId): string =>
-  `anypost/group/${groupId}`;
+  `anypost2/group/${groupId}`;
 
 export const deviceDiscoveryTopic = (accountPublicKeyHex: string): string =>
   `anypost/account/${accountPublicKeyHex}/devices`;

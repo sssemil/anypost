@@ -60,10 +60,7 @@ const SyncRequestPayloadSchema = z.object({
   signature: Uint8ArraySchema,
   requestId: z.string().uuid().optional(),
   targetPeerId: PeerIdSchema.optional(),
-  // Legacy field kept for backward compatibility with old peers.
-  stateVector: Uint8ArraySchema.optional(),
-  // Cursor hash for action-chain sync.
-  knownHash: Uint8ArraySchema.optional(),
+  knownHeads: z.array(Uint8ArraySchema),
 });
 
 const SignedActionEnvelopeWireSchema = z.object({
@@ -79,10 +76,18 @@ const SyncResponsePayloadSchema = z.object({
   signature: Uint8ArraySchema,
   requestId: z.string().uuid().optional(),
   targetPeerId: PeerIdSchema,
-  requestKnownHash: Uint8ArraySchema.optional(),
-  headHash: Uint8ArraySchema.optional(),
-  nextCursorHash: Uint8ArraySchema.optional(),
+  theirHeads: z.array(Uint8ArraySchema),
   envelopes: z.array(SignedActionEnvelopeWireSchema),
+});
+
+const HeadsAnnouncePayloadSchema = z.object({
+  groupId: GroupIdSchema,
+  heads: z.array(Uint8ArraySchema).max(64),
+  approxDagSize: z.number().int().nonnegative().optional(),
+  sentAt: z.number(),
+  senderPeerId: PeerIdSchema,
+  senderPublicKey: Uint8ArraySchema,
+  signature: Uint8ArraySchema,
 });
 
 const DirectMessageRequestPayloadSchema = z.object({
@@ -188,10 +193,12 @@ export const WireMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("sync_request"),
+    protocolVersion: z.literal(2),
     payload: SyncRequestPayloadSchema,
   }),
   z.object({
     type: z.literal("sync_response"),
+    protocolVersion: z.literal(2),
     payload: SyncResponsePayloadSchema,
   }),
   z.object({
@@ -200,6 +207,7 @@ export const WireMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("join_request_direct"),
+    protocolVersion: z.literal(2),
     payload: DirectJoinRequestPayloadSchema,
   }),
   z.object({
@@ -216,17 +224,24 @@ export const WireMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("signed_action"),
+    protocolVersion: z.literal(2),
     signedBytes: Uint8ArraySchema,
     signature: Uint8ArraySchema,
     hash: Uint8ArraySchema,
   }),
   z.object({
     type: z.literal("join_request"),
+    protocolVersion: z.literal(2),
     groupId: GroupIdSchema,
     senderPeerId: PeerIdSchema,
     requesterPublicKey: Uint8ArraySchema,
     signature: Uint8ArraySchema,
     inviteGrant: InviteGrantProofSchema.optional(),
+  }),
+  z.object({
+    type: z.literal("heads_announce"),
+    protocolVersion: z.literal(2),
+    payload: HeadsAnnouncePayloadSchema,
   }),
 ]);
 

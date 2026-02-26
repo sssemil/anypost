@@ -34,6 +34,7 @@ describe("Sync protocol", () => {
         groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
         senderPeerId: "12D3KooWTest",
         senderPublicKey: createTestPublicKey(),
+        knownHeads: [],
       });
 
       expect(result).toBeInstanceOf(Uint8Array);
@@ -46,11 +47,13 @@ describe("Sync protocol", () => {
         groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
         senderPeerId: "12D3KooWTest",
         senderPublicKey: publicKey,
+        knownHeads: [],
       });
       const result2 = encodeSyncRequestSigningPayload({
         groupId: "b1ffcc00-0000-0000-0000-000000000000",
         senderPeerId: "12D3KooWTest",
         senderPublicKey: publicKey,
+        knownHeads: [],
       });
 
       expect(result1).not.toEqual(result2);
@@ -64,6 +67,7 @@ describe("Sync protocol", () => {
         senderPeerId: "12D3KooWTest",
         senderPublicKey: createTestPublicKey(),
         targetPeerId: "12D3KooWOther",
+        theirHeads: [],
         envelopes: [],
       });
 
@@ -79,6 +83,7 @@ describe("Sync protocol", () => {
         groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
         senderPeerId: "12D3KooWTest",
         senderPublicKey: new Uint8Array(accountKey.publicKey),
+        knownHeads: [new Uint8Array(32).fill(1)],
       };
 
       const signature = signSyncRequest(payload, accountKey.privateKey);
@@ -96,6 +101,7 @@ describe("Sync protocol", () => {
         groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
         senderPeerId: "12D3KooWTest",
         senderPublicKey: new Uint8Array(accountKey.publicKey),
+        knownHeads: [],
       };
 
       const signature = signSyncRequest(payload, accountKey.privateKey);
@@ -113,6 +119,7 @@ describe("Sync protocol", () => {
         groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
         senderPeerId: "12D3KooWTest",
         senderPublicKey: new Uint8Array(signerKey.publicKey),
+        knownHeads: [],
       };
 
       const signature = signSyncRequest(payload, signerKey.privateKey);
@@ -134,6 +141,7 @@ describe("Sync protocol", () => {
         senderPeerId: "12D3KooWTest",
         senderPublicKey: new Uint8Array(accountKey.publicKey),
         targetPeerId: "12D3KooWOther",
+        theirHeads: [],
         envelopes: [],
       };
 
@@ -153,6 +161,7 @@ describe("Sync protocol", () => {
         senderPeerId: "12D3KooWTest",
         senderPublicKey: new Uint8Array(accountKey.publicKey),
         targetPeerId: "12D3KooWOther",
+        theirHeads: [],
         envelopes: [],
       };
 
@@ -172,6 +181,7 @@ describe("Sync protocol", () => {
         senderPeerId: "12D3KooWTest",
         senderPublicKey: new Uint8Array(signerKey.publicKey),
         targetPeerId: "12D3KooWOther",
+        theirHeads: [],
         envelopes: [],
       };
 
@@ -192,6 +202,7 @@ describe("Sync protocol", () => {
         senderPeerId: "12D3KooWTest",
         senderPublicKey: new Uint8Array(accountKey.publicKey),
         targetPeerId: "12D3KooWOther",
+        theirHeads: [],
         envelopes: [],
       };
 
@@ -207,6 +218,7 @@ describe("Sync protocol", () => {
         groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
         senderPeerId: "12D3KooWTest",
         senderPublicKey: new Uint8Array(accountKey.publicKey),
+        knownHeads: [],
       };
 
       const valid = verifySyncRequest({ ...payload, signature: new Uint8Array(0) });
@@ -219,12 +231,14 @@ describe("Sync protocol", () => {
         groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
         senderPeerId: "12D3KooWTest",
         senderPublicKey: new Uint8Array(accountKey.publicKey),
+        knownHeads: [],
       }, accountKey.privateKey);
 
       const valid = verifySyncRequest({
         groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
         senderPeerId: "12D3KooWTest",
         senderPublicKey: new Uint8Array(5),
+        knownHeads: [],
         signature,
       });
       expect(valid).toBe(false);

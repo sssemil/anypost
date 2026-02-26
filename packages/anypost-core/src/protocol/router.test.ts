@@ -15,6 +15,7 @@ const createMockHandlers = (): MessageHandler => ({
   onSyncResponse: vi.fn(),
   onSignedAction: vi.fn(),
   onJoinRequest: vi.fn(),
+  onHeadsAnnounce: vi.fn(),
 });
 
 describe("createRouter", () => {
@@ -53,13 +54,14 @@ describe("createRouter", () => {
     const router = createRouter(handlers);
     const message: WireMessage = {
       type: "sync_request",
+      protocolVersion: 2,
       payload: {
         groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
         senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
         senderPublicKey: new Uint8Array(32).fill(3),
         signature: new Uint8Array(64).fill(4),
         requestId: "d4ffbc99-9c0b-4ef8-bb6d-6bb9bd380a44",
-        knownHash: new Uint8Array([5, 6, 7]),
+        knownHeads: [new Uint8Array(32).fill(5)],
       },
     };
 
@@ -73,6 +75,7 @@ describe("createRouter", () => {
     const router = createRouter(handlers);
     const message: WireMessage = {
       type: "sync_response",
+      protocolVersion: 2,
       payload: {
         groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
         senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
@@ -80,6 +83,7 @@ describe("createRouter", () => {
         signature: new Uint8Array(64).fill(4),
         requestId: "e5ffbc99-9c0b-4ef8-bb6d-6bb9bd380a55",
         targetPeerId: "12D3KooWQkVLLv8c9r7y9ZwzhsMvy4c8h6ivm8xv3vN4K8n9sYf2",
+        theirHeads: [],
         envelopes: [],
       },
     };
@@ -94,6 +98,7 @@ describe("createRouter", () => {
     const router = createRouter(handlers);
     const message: WireMessage = {
       type: "signed_action",
+      protocolVersion: 2,
       signedBytes: new Uint8Array([1, 2, 3]),
       signature: new Uint8Array(64).fill(0),
       hash: new Uint8Array(32).fill(0),
@@ -113,6 +118,7 @@ describe("createRouter", () => {
     const router = createRouter(handlers);
     const message: WireMessage = {
       type: "join_request",
+      protocolVersion: 2,
       groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
       senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
       requesterPublicKey: new Uint8Array(32).fill(1),
@@ -129,6 +135,27 @@ describe("createRouter", () => {
     });
   });
 
+  it("should dispatch heads_announce to heads announce handler", () => {
+    const handlers = createMockHandlers();
+    const router = createRouter(handlers);
+    const message: WireMessage = {
+      type: "heads_announce",
+      protocolVersion: 2,
+      payload: {
+        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+        heads: [new Uint8Array(32).fill(1)],
+        sentAt: 1700000000000,
+        senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
+        senderPublicKey: new Uint8Array(32).fill(3),
+        signature: new Uint8Array(64).fill(4),
+      },
+    };
+
+    router.handleMessage(message);
+
+    expect(handlers.onHeadsAnnounce).toHaveBeenCalledWith(message.payload);
+  });
+
   it("should not call other handlers when dispatching a specific type", () => {
     const handlers = createMockHandlers();
     const router = createRouter(handlers);
@@ -142,6 +169,7 @@ describe("createRouter", () => {
     expect(handlers.onSyncResponse).not.toHaveBeenCalled();
     expect(handlers.onSignedAction).not.toHaveBeenCalled();
     expect(handlers.onJoinRequest).not.toHaveBeenCalled();
+    expect(handlers.onHeadsAnnounce).not.toHaveBeenCalled();
   });
 });
 
@@ -149,7 +177,7 @@ describe("groupTopic", () => {
   it("should return a topic string for a group ID", () => {
     const topic = groupTopic("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11");
 
-    expect(topic).toBe("anypost/group/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11");
+    expect(topic).toBe("anypost2/group/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11");
   });
 
   it("should produce different topics for different group IDs", () => {

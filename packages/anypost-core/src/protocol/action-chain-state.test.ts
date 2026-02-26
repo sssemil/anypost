@@ -56,6 +56,7 @@ describe("Action chain state", () => {
       expect(state.members.size).toBe(0);
       expect(state.pendingJoins.size).toBe(0);
       expect(state.readReceipts.size).toBe(0);
+      expect(state.lastMergeTimestampByAuthor.size).toBe(0);
     });
   });
 
@@ -1142,7 +1143,7 @@ describe("Action chain state", () => {
   });
 
   describe("applyAction — read-receipt", () => {
-    it("should record read receipt for a member", () => {
+    it("should record read receipt for a member using hash", () => {
       const creator = generateAccountKey();
 
       const genesis = makeAction({
@@ -1167,7 +1168,7 @@ describe("Action chain state", () => {
       const receipt = makeAction({
         accountKey: creator,
         parentHashes: [msg.hash],
-        payload: { type: "read-receipt", upToActionId: msg.id },
+        payload: { type: "read-receipt", upToHash: new Uint8Array(msg.hash) },
       });
 
       const result = applyAction(state2.data, receipt);
@@ -1177,7 +1178,7 @@ describe("Action chain state", () => {
 
       expect(
         result.data.readReceipts.get(toHex(creator.publicKey)),
-      ).toBe(msg.id);
+      ).toBe(toHex(msg.hash));
     });
 
     it("should reject read receipt from non-member", () => {
@@ -1206,10 +1207,70 @@ describe("Action chain state", () => {
       const receipt = makeAction({
         accountKey: outsider,
         parentHashes: [msg.hash],
-        payload: { type: "read-receipt", upToActionId: msg.id },
+        payload: { type: "read-receipt", upToHash: new Uint8Array(msg.hash) },
       });
 
       const result = applyAction(state2.data, receipt);
+
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe("applyAction — merge", () => {
+    it("should record merge timestamp for a member", () => {
+      const creator = generateAccountKey();
+
+      const genesis = makeAction({
+        accountKey: creator,
+        parentHashes: [GENESIS_HASH],
+        payload: { type: "group-created", groupName: "Group" },
+        timestamp: 1000,
+      });
+      const state1 = applyAction(
+        createActionChainGroupState(DEFAULT_GROUP_ID),
+        genesis,
+      );
+      if (!state1.success) throw new Error("Setup failed");
+
+      const merge = makeAction({
+        accountKey: creator,
+        parentHashes: [genesis.hash],
+        payload: { type: "merge" },
+        timestamp: 2000,
+      });
+
+      const result = applyAction(state1.data, merge);
+
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+
+      expect(
+        result.data.lastMergeTimestampByAuthor.get(toHex(creator.publicKey)),
+      ).toBe(2000);
+    });
+
+    it("should reject merge from non-member", () => {
+      const creator = generateAccountKey();
+      const outsider = generateAccountKey();
+
+      const genesis = makeAction({
+        accountKey: creator,
+        parentHashes: [GENESIS_HASH],
+        payload: { type: "group-created", groupName: "Group" },
+      });
+      const state1 = applyAction(
+        createActionChainGroupState(DEFAULT_GROUP_ID),
+        genesis,
+      );
+      if (!state1.success) throw new Error("Setup failed");
+
+      const merge = makeAction({
+        accountKey: outsider,
+        parentHashes: [genesis.hash],
+        payload: { type: "merge" },
+      });
+
+      const result = applyAction(state1.data, merge);
 
       expect(result.success).toBe(false);
     });

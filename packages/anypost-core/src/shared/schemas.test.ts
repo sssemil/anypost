@@ -289,9 +289,10 @@ describe("WireMessageSchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("should validate sync_request type", () => {
+  it("should validate sync_request type with protocolVersion and knownHeads", () => {
     const wireMsg = {
       type: "sync_request" as const,
+      protocolVersion: 2 as const,
       payload: {
         groupId: "b1ffbc99-9c0b-4ef8-bb6d-6bb9bd380a22",
         senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
@@ -299,7 +300,7 @@ describe("WireMessageSchema", () => {
         signature: new Uint8Array(64).fill(4),
         requestId: "d4ffbc99-9c0b-4ef8-bb6d-6bb9bd380a44",
         targetPeerId: "12D3KooWQkVLLv8c9r7y9ZwzhsMvy4c8h6ivm8xv3vN4K8n9sYf2",
-        knownHash: new Uint8Array(32).fill(5),
+        knownHeads: [new Uint8Array(32).fill(5)],
       },
     };
 
@@ -308,9 +309,10 @@ describe("WireMessageSchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("should validate sync_response type", () => {
+  it("should validate sync_response type with protocolVersion and theirHeads", () => {
     const wireMsg = {
       type: "sync_response" as const,
+      protocolVersion: 2 as const,
       payload: {
         groupId: "b1ffbc99-9c0b-4ef8-bb6d-6bb9bd380a22",
         senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
@@ -318,9 +320,7 @@ describe("WireMessageSchema", () => {
         signature: new Uint8Array(64).fill(4),
         requestId: "e5ffbc99-9c0b-4ef8-bb6d-6bb9bd380a55",
         targetPeerId: "12D3KooWQkVLLv8c9r7y9ZwzhsMvy4c8h6ivm8xv3vN4K8n9sYf2",
-        requestKnownHash: new Uint8Array(32).fill(1),
-        headHash: new Uint8Array(32).fill(2),
-        nextCursorHash: new Uint8Array(32).fill(6),
+        theirHeads: [new Uint8Array(32).fill(1)],
         envelopes: [
           {
             signedBytes: new Uint8Array([1, 2, 3]),
@@ -336,9 +336,10 @@ describe("WireMessageSchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("should validate signed_action type", () => {
+  it("should validate signed_action type with protocolVersion", () => {
     const wireMsg = {
       type: "signed_action" as const,
+      protocolVersion: 2 as const,
       signedBytes: new Uint8Array([1, 2, 3]),
       signature: new Uint8Array(64).fill(0),
       hash: new Uint8Array(32).fill(0),
@@ -349,13 +350,34 @@ describe("WireMessageSchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("should validate join_request type", () => {
+  it("should validate join_request type with protocolVersion", () => {
     const wireMsg = {
       type: "join_request" as const,
+      protocolVersion: 2 as const,
       groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
       senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
       requesterPublicKey: new Uint8Array(32).fill(1),
       signature: new Uint8Array(64).fill(2),
+    };
+
+    const result = WireMessageSchema.safeParse(wireMsg);
+
+    expect(result.success).toBe(true);
+  });
+
+  it("should validate heads_announce type", () => {
+    const wireMsg = {
+      type: "heads_announce" as const,
+      protocolVersion: 2 as const,
+      payload: {
+        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+        heads: [new Uint8Array(32).fill(1), new Uint8Array(32).fill(2)],
+        approxDagSize: 42,
+        sentAt: Date.now(),
+        senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
+        senderPublicKey: new Uint8Array(32).fill(3),
+        signature: new Uint8Array(64).fill(4),
+      },
     };
 
     const result = WireMessageSchema.safeParse(wireMsg);

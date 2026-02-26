@@ -85,6 +85,7 @@ describe("round-trip", () => {
   it("should round-trip sync_request type", () => {
     const message: WireMessage = {
       type: "sync_request",
+      protocolVersion: 2,
       payload: {
         groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
         senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
@@ -92,7 +93,7 @@ describe("round-trip", () => {
         signature: new Uint8Array(64).fill(4),
         requestId: "d4ffbc99-9c0b-4ef8-bb6d-6bb9bd380a44",
         targetPeerId: "12D3KooWQkVLLv8c9r7y9ZwzhsMvy4c8h6ivm8xv3vN4K8n9sYf2",
-        knownHash: new Uint8Array([5, 6, 7, 8]),
+        knownHeads: [new Uint8Array(32).fill(5)],
       },
     };
     const encoded = encodeWireMessage(message);
@@ -107,6 +108,7 @@ describe("round-trip", () => {
   it("should round-trip sync_response type", () => {
     const message: WireMessage = {
       type: "sync_response",
+      protocolVersion: 2,
       payload: {
         groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
         senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
@@ -114,9 +116,7 @@ describe("round-trip", () => {
         signature: new Uint8Array(64).fill(4),
         requestId: "e5ffbc99-9c0b-4ef8-bb6d-6bb9bd380a55",
         targetPeerId: "12D3KooWQkVLLv8c9r7y9ZwzhsMvy4c8h6ivm8xv3vN4K8n9sYf2",
-        requestKnownHash: new Uint8Array([1, 2, 3]),
-        headHash: new Uint8Array([4, 5, 6]),
-        nextCursorHash: new Uint8Array([7, 8, 9]),
+        theirHeads: [new Uint8Array(32).fill(1)],
         envelopes: [{
           signedBytes: new Uint8Array([10, 20, 30]),
           signature: new Uint8Array(64).fill(1),

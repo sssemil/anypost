@@ -13,7 +13,7 @@ export type SyncRequestPayload = {
   readonly senderPublicKey: Uint8Array;
   readonly requestId?: string;
   readonly targetPeerId?: string;
-  readonly knownHash?: Uint8Array;
+  readonly knownHeads: readonly Uint8Array[];
 };
 
 export type SyncResponsePayload = {
@@ -22,9 +22,7 @@ export type SyncResponsePayload = {
   readonly senderPublicKey: Uint8Array;
   readonly requestId?: string;
   readonly targetPeerId: string;
-  readonly requestKnownHash?: Uint8Array;
-  readonly headHash?: Uint8Array;
-  readonly nextCursorHash?: Uint8Array;
+  readonly theirHeads: readonly Uint8Array[];
   readonly envelopes: ReadonlyArray<{
     readonly signedBytes: Uint8Array;
     readonly signature: Uint8Array;
@@ -43,7 +41,7 @@ export const encodeSyncRequestSigningPayload = (
       senderPublicKey: payload.senderPublicKey,
       requestId: payload.requestId,
       targetPeerId: payload.targetPeerId,
-      knownHash: payload.knownHash,
+      knownHeads: payload.knownHeads,
     }),
   );
 
@@ -58,9 +56,7 @@ export const encodeSyncResponseSigningPayload = (
       senderPublicKey: payload.senderPublicKey,
       requestId: payload.requestId,
       targetPeerId: payload.targetPeerId,
-      requestKnownHash: payload.requestKnownHash,
-      headHash: payload.headHash,
-      nextCursorHash: payload.nextCursorHash,
+      theirHeads: payload.theirHeads,
       envelopes: payload.envelopes,
     }),
   );

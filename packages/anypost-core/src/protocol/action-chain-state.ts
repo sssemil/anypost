@@ -19,6 +19,7 @@ export const createActionChainGroupState = (
   members: new Map(),
   pendingJoins: new Map(),
   readReceipts: new Map(),
+  lastMergeTimestampByAuthor: new Map(),
 });
 
 export const applyAction = (
@@ -54,6 +55,8 @@ export const applyAction = (
       return applyMessageDeleted(state, authorHex);
     case "read-receipt":
       return applyReadReceipt(state, action, authorHex);
+    case "merge":
+      return applyMerge(state, action, authorHex);
   }
 };
 
@@ -361,9 +364,9 @@ const applyReadReceipt = (
     return Result.failure(new Error("Only members can send read receipts"));
   }
 
-  const payload = action.payload as { readonly upToActionId: string };
+  const payload = action.payload as { readonly upToHash: Uint8Array };
   const readReceipts = new Map(state.readReceipts);
-  readReceipts.set(authorHex, payload.upToActionId);
+  readReceipts.set(authorHex, toHex(payload.upToHash));
 
   return Result.success({ ...state, readReceipts });
 };
@@ -392,6 +395,21 @@ const applyMessageDeleted = (
     return Result.failure(new Error("Only members can delete messages"));
   }
   return Result.success(state);
+};
+
+const applyMerge = (
+  state: ActionChainGroupState,
+  action: SignedAction,
+  authorHex: string,
+): Result<ActionChainGroupState, Error> => {
+  if (!isMember(state, authorHex)) {
+    return Result.failure(new Error("Only members can create merge actions"));
+  }
+
+  const lastMergeTimestampByAuthor = new Map(state.lastMergeTimestampByAuthor);
+  lastMergeTimestampByAuthor.set(authorHex, action.timestamp);
+
+  return Result.success({ ...state, lastMergeTimestampByAuthor });
 };
 
 const isAdmin = (state: ActionChainGroupState, publicKeyHex: string): boolean => {

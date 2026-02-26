@@ -127,13 +127,40 @@ describe("Action chain schemas", () => {
       expect(payload.type).toBe("message");
     });
 
-    it("should accept read-receipt payload", () => {
+    it("should accept read-receipt payload with upToHash", () => {
       const payload = ActionPayloadSchema.parse({
         type: "read-receipt",
-        upToActionId: DEFAULT_ACTION_ID,
+        upToHash: new Uint8Array(32).fill(9),
       });
 
       expect(payload.type).toBe("read-receipt");
+    });
+
+    it("should accept merge payload", () => {
+      const payload = ActionPayloadSchema.parse({
+        type: "merge",
+      });
+
+      expect(payload.type).toBe("merge");
+    });
+
+    it("should accept message-edited payload with targetHash", () => {
+      const payload = ActionPayloadSchema.parse({
+        type: "message-edited",
+        targetHash: new Uint8Array(32).fill(5),
+        newText: "Updated text",
+      });
+
+      expect(payload.type).toBe("message-edited");
+    });
+
+    it("should accept message-deleted payload with targetHash", () => {
+      const payload = ActionPayloadSchema.parse({
+        type: "message-deleted",
+        targetHash: new Uint8Array(32).fill(6),
+      });
+
+      expect(payload.type).toBe("message-deleted");
     });
 
     it("should reject payload with unknown type", () => {
@@ -165,8 +192,9 @@ describe("Action chain schemas", () => {
   });
 
   describe("SignableActionSchema", () => {
-    it("should accept a valid signable action", () => {
+    it("should accept a valid signable action with protocolVersion 2", () => {
       const action = SignableActionSchema.parse({
+        protocolVersion: 2,
         id: DEFAULT_ACTION_ID,
         groupId: DEFAULT_GROUP_ID,
         authorPublicKey: DEFAULT_PUBLIC_KEY,
@@ -177,13 +205,28 @@ describe("Action chain schemas", () => {
 
       expect(action.id).toBe(DEFAULT_ACTION_ID);
       expect(action.groupId).toBe(DEFAULT_GROUP_ID);
+      expect(action.protocolVersion).toBe(2);
       expect(action.authorPublicKey).toEqual(DEFAULT_PUBLIC_KEY);
       expect(action.parentHashes).toHaveLength(1);
+    });
+
+    it("should reject action missing protocolVersion", () => {
+      expect(() =>
+        SignableActionSchema.parse({
+          id: DEFAULT_ACTION_ID,
+          groupId: DEFAULT_GROUP_ID,
+          authorPublicKey: DEFAULT_PUBLIC_KEY,
+          timestamp: DEFAULT_TIMESTAMP,
+          parentHashes: [GENESIS_HASH],
+          payload: { type: "group-created", groupName: "Test" },
+        }),
+      ).toThrow();
     });
 
     it("should reject action with non-UUID id", () => {
       expect(() =>
         SignableActionSchema.parse({
+          protocolVersion: 2,
           id: "not-a-uuid",
           groupId: DEFAULT_GROUP_ID,
           authorPublicKey: DEFAULT_PUBLIC_KEY,
@@ -197,6 +240,7 @@ describe("Action chain schemas", () => {
     it("should reject action with non-UUID groupId", () => {
       expect(() =>
         SignableActionSchema.parse({
+          protocolVersion: 2,
           id: DEFAULT_ACTION_ID,
           groupId: "not-a-uuid",
           authorPublicKey: DEFAULT_PUBLIC_KEY,
@@ -207,20 +251,36 @@ describe("Action chain schemas", () => {
       ).toThrow();
     });
 
-    it("should accept action with multiple parent hashes", () => {
-      const hash1 = new Uint8Array(32).fill(1);
-      const hash2 = new Uint8Array(32).fill(2);
+    it("should accept action with up to 4 parent hashes", () => {
+      const hashes = [1, 2, 3, 4].map((n) => new Uint8Array(32).fill(n));
 
       const action = SignableActionSchema.parse({
+        protocolVersion: 2,
         id: DEFAULT_ACTION_ID,
         groupId: DEFAULT_GROUP_ID,
         authorPublicKey: DEFAULT_PUBLIC_KEY,
         timestamp: DEFAULT_TIMESTAMP,
-        parentHashes: [hash1, hash2],
+        parentHashes: hashes,
         payload: { type: "message", text: "Hello" },
       });
 
-      expect(action.parentHashes).toHaveLength(2);
+      expect(action.parentHashes).toHaveLength(4);
+    });
+
+    it("should reject action with more than 4 parent hashes", () => {
+      const hashes = [1, 2, 3, 4, 5].map((n) => new Uint8Array(32).fill(n));
+
+      expect(() =>
+        SignableActionSchema.parse({
+          protocolVersion: 2,
+          id: DEFAULT_ACTION_ID,
+          groupId: DEFAULT_GROUP_ID,
+          authorPublicKey: DEFAULT_PUBLIC_KEY,
+          timestamp: DEFAULT_TIMESTAMP,
+          parentHashes: hashes,
+          payload: { type: "message", text: "Hello" },
+        }),
+      ).toThrow();
     });
   });
 

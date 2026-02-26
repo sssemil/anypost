@@ -64,27 +64,31 @@ export const ActionPayloadSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("message-edited"),
-    targetActionId: ActionIdSchema,
+    targetHash: Uint8ArraySchema,
     newText: z.string().min(1),
   }),
   z.object({
     type: z.literal("message-deleted"),
-    targetActionId: ActionIdSchema,
+    targetHash: Uint8ArraySchema,
   }),
   z.object({
     type: z.literal("read-receipt"),
-    upToActionId: ActionIdSchema,
+    upToHash: Uint8ArraySchema,
+  }),
+  z.object({
+    type: z.literal("merge"),
   }),
 ]);
 
 export type ActionPayload = z.infer<typeof ActionPayloadSchema>;
 
 export const SignableActionSchema = z.object({
+  protocolVersion: z.literal(2),
   id: ActionIdSchema,
   groupId: GroupIdSchema,
   authorPublicKey: Uint8ArraySchema,
   timestamp: z.number(),
-  parentHashes: z.array(Uint8ArraySchema),
+  parentHashes: z.array(Uint8ArraySchema).max(4),
   payload: ActionPayloadSchema,
 });
 
@@ -127,4 +131,5 @@ export type ActionChainGroupState = {
   readonly members: ReadonlyMap<string, GroupMember>;
   readonly pendingJoins: ReadonlyMap<string, Uint8Array>;
   readonly readReceipts: ReadonlyMap<string, string>;
+  readonly lastMergeTimestampByAuthor: ReadonlyMap<string, number>;
 };
