@@ -129,6 +129,18 @@ export type {
 } from "./group-discovery-state.js";
 export { createGroupDiscoveryManager } from "./group-discovery.js";
 export type { GroupDiscoveryManager } from "./group-discovery.js";
+export {
+  encodeSyncRequestSigningPayload,
+  encodeSyncResponseSigningPayload,
+  signSyncRequest,
+  verifySyncRequest,
+  signSyncResponse,
+  verifySyncResponse,
+  getMissingEnvelopesForKnownHash,
+  INCOMING_SYNC_REQUEST_MAX,
+  OUTGOING_SYNC_REQUEST_MAX,
+  FULL_SYNC_FALLBACK_COOLDOWN_MS,
+} from "./sync-protocol.js";
 export { createMultiGroupChat } from "./multi-group-chat.js";
 export type {
   MultiGroupChat,

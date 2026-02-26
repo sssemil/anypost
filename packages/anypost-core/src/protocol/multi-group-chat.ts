@@ -78,6 +78,16 @@ import {
   type MultiGroupTransportProfile,
 } from "./runtime-adapter.js";
 import {
+  signSyncRequest,
+  verifySyncRequest,
+  signSyncResponse,
+  verifySyncResponse,
+  getMissingEnvelopesForKnownHash,
+  INCOMING_SYNC_REQUEST_MAX,
+  OUTGOING_SYNC_REQUEST_MAX,
+  FULL_SYNC_FALLBACK_COOLDOWN_MS,
+} from "./sync-protocol.js";
+import {
   MEDIA_SIGNAL_PROTOCOL,
   encodeMediaSignalEnvelope,
   decodeMediaSignalEnvelope,
@@ -407,11 +417,9 @@ const MAX_SYNC_ENVELOPES_PER_RESPONSE = 256;
 const INCOMING_JOIN_REQUEST_WINDOW_MS = 30_000;
 const INCOMING_JOIN_REQUEST_MAX = 8;
 const INCOMING_SYNC_REQUEST_WINDOW_MS = 10_000;
-const INCOMING_SYNC_REQUEST_MAX = 40;
 const OUTGOING_JOIN_REQUEST_WINDOW_MS = 30_000;
 const OUTGOING_JOIN_REQUEST_MAX = 10;
 const OUTGOING_SYNC_REQUEST_WINDOW_MS = 10_000;
-const OUTGOING_SYNC_REQUEST_MAX = 60;
 const OUTGOING_APPROVAL_WINDOW_MS = 30_000;
 const OUTGOING_APPROVAL_MAX = 10;
 const SYNC_REQUEST_TRACK_TTL_MS = 60_000;
@@ -423,7 +431,6 @@ const CALL_HEARTBEAT_INTERVAL_MS = 2_500;
 const CALL_PARTICIPANT_STALE_MS = 12_000;
 const DEFAULT_SYNC_RECONCILE_INTERVAL_MS = 20_000;
 const DEFAULT_SYNC_RECONCILE_STALE_MS = 45_000;
-const FULL_SYNC_FALLBACK_COOLDOWN_MS = 30_000;
 const DIRECT_MESSAGE_REQUEST_TOPIC = "anypost/system/dm-requests/v1";
 const DIRECT_JOIN_REQUEST_TOPIC = "anypost/system/join-requests/v1";
 const PROFILE_SYNC_TOPIC = "anypost/system/profile/v1";
@@ -1460,10 +1467,11 @@ export const createMultiGroupChat = async (
     return ordered;
   };
 
-  const getLatestKnownHash = (groupId: string): Uint8Array | undefined => {
-    const ordered = getOrderedEnvelopes(groupId);
-    const latest = ordered[ordered.length - 1];
-    return latest ? Uint8Array.from(latest.hash) : undefined;
+  const dagHeadHash = (groupId: string): Uint8Array | undefined => {
+    const dag = actionDags.get(groupId);
+    if (!dag) return undefined;
+    const tips = getTips(dag);
+    return tips.length > 0 ? Uint8Array.from(tips[tips.length - 1]) : undefined;
   };
 
   const sameDirectMessagePair = (
@@ -1507,20 +1515,6 @@ export const createMultiGroupChat = async (
       contributorPublicKeyHexes,
       missingPeerIds,
     };
-  };
-
-  const getMissingEnvelopesForKnownHash = (
-    groupId: string,
-    knownHash?: Uint8Array,
-  ): readonly SignedActionEnvelope[] => {
-    const ordered = getOrderedEnvelopes(groupId);
-    if (ordered.length === 0) return [];
-    if (!knownHash || knownHash.length === 0) return ordered;
-
-    const knownHashHex = toHex(knownHash);
-    const idx = ordered.findIndex((envelope) => toHex(envelope.hash) === knownHashHex);
-    if (idx === -1) return ordered;
-    return ordered.slice(idx + 1);
   };
 
   const isOwnMemberOfGroup = (groupId: string): boolean => {
@@ -1582,138 +1576,6 @@ export const createMultiGroupChat = async (
 
   const canLocalPeerConsumeGroupUpdates = (groupId: string): boolean =>
     !isMembershipEnforcedGroup(groupId) || isOwnMemberOfGroup(groupId);
-
-  const encodeSyncRequestSigningPayload = (
-    payload: {
-      readonly groupId: string;
-      readonly senderPeerId: string;
-      readonly senderPublicKey: Uint8Array;
-      readonly requestId?: string;
-      readonly targetPeerId?: string;
-      readonly knownHash?: Uint8Array;
-    },
-  ): Uint8Array =>
-    new Uint8Array(
-      encode({
-        type: "sync_request",
-        groupId: payload.groupId,
-        senderPeerId: payload.senderPeerId,
-        senderPublicKey: payload.senderPublicKey,
-        requestId: payload.requestId,
-        targetPeerId: payload.targetPeerId,
-        knownHash: payload.knownHash,
-      }),
-    );
-
-  const encodeSyncResponseSigningPayload = (
-    payload: {
-      readonly groupId: string;
-      readonly senderPeerId: string;
-      readonly senderPublicKey: Uint8Array;
-      readonly requestId?: string;
-      readonly targetPeerId: string;
-      readonly requestKnownHash?: Uint8Array;
-      readonly headHash?: Uint8Array;
-      readonly nextCursorHash?: Uint8Array;
-      readonly envelopes: ReadonlyArray<{
-        readonly signedBytes: Uint8Array;
-        readonly signature: Uint8Array;
-        readonly hash: Uint8Array;
-      }>;
-    },
-  ): Uint8Array =>
-    new Uint8Array(
-      encode({
-        type: "sync_response",
-        groupId: payload.groupId,
-        senderPeerId: payload.senderPeerId,
-        senderPublicKey: payload.senderPublicKey,
-        requestId: payload.requestId,
-        targetPeerId: payload.targetPeerId,
-        requestKnownHash: payload.requestKnownHash,
-        headHash: payload.headHash,
-        nextCursorHash: payload.nextCursorHash,
-        envelopes: payload.envelopes,
-      }),
-    );
-
-  const signSyncRequest = (
-    payload: {
-      readonly groupId: string;
-      readonly senderPeerId: string;
-      readonly senderPublicKey: Uint8Array;
-      readonly requestId?: string;
-      readonly targetPeerId?: string;
-      readonly knownHash?: Uint8Array;
-    },
-  ): Uint8Array =>
-    new Uint8Array([...ed25519.sign(
-      encodeSyncRequestSigningPayload(payload),
-      accountKey.privateKey,
-    )]);
-
-  const verifySyncRequest = (
-    payload: {
-      readonly groupId: string;
-      readonly senderPeerId: string;
-      readonly senderPublicKey: Uint8Array;
-      readonly requestId?: string;
-      readonly targetPeerId?: string;
-      readonly knownHash?: Uint8Array;
-      readonly signature: Uint8Array;
-    },
-  ): boolean =>
-    ed25519.verify(
-      payload.signature,
-      encodeSyncRequestSigningPayload(payload),
-      payload.senderPublicKey,
-    );
-
-  const signSyncResponse = (
-    payload: {
-      readonly groupId: string;
-      readonly senderPeerId: string;
-      readonly senderPublicKey: Uint8Array;
-      readonly requestId?: string;
-      readonly targetPeerId: string;
-      readonly requestKnownHash?: Uint8Array;
-      readonly headHash?: Uint8Array;
-      readonly nextCursorHash?: Uint8Array;
-      readonly envelopes: ReadonlyArray<{
-        readonly signedBytes: Uint8Array;
-        readonly signature: Uint8Array;
-        readonly hash: Uint8Array;
-      }>;
-    },
-  ): Uint8Array =>
-    new Uint8Array([...ed25519.sign(
-      encodeSyncResponseSigningPayload(payload),
-      accountKey.privateKey,
-    )]);
-
-  const verifySyncResponse = (
-    payload: {
-      readonly groupId: string;
-      readonly senderPeerId: string;
-      readonly senderPublicKey: Uint8Array;
-      readonly requestId?: string;
-      readonly targetPeerId: string;
-      readonly requestKnownHash?: Uint8Array;
-      readonly headHash?: Uint8Array;
-      readonly nextCursorHash?: Uint8Array;
-      readonly envelopes: ReadonlyArray<{
-        readonly signedBytes: Uint8Array;
-        readonly signature: Uint8Array;
-        readonly hash: Uint8Array;
-      }>;
-      readonly signature: Uint8Array;
-    },
-  ): boolean =>
-    ed25519.verify(
-      payload.signature,
-      encodeSyncResponseSigningPayload(payload),
-      payload.senderPublicKey,
-    );
 
   const encodeJoinRequestSigningPayload = (
     payload: {
@@ -2326,7 +2188,7 @@ export const createMultiGroupChat = async (
     }
 
     const topic = groupTopic(groupId);
-    const knownHash = knownHashOverride ? Uint8Array.from(knownHashOverride) : getLatestKnownHash(groupId);
+    const knownHash = knownHashOverride ? Uint8Array.from(knownHashOverride) : dagHeadHash(groupId);
     const requestId = targetPeerId ? crypto.randomUUID() : undefined;
     const senderPublicKey = new Uint8Array(accountKey.publicKey);
     const signature = signSyncRequest({
@@ -2336,7 +2198,7 @@ export const createMultiGroupChat = async (
       requestId,
       targetPeerId,
       knownHash,
-    });
+    }, accountKey.privateKey);
     const wireMessage: WireMessage = {
       type: "sync_request",
       payload: {
@@ -2375,9 +2237,9 @@ export const createMultiGroupChat = async (
     requestKnownHash?: Uint8Array,
     requestId?: string,
   ): Promise<void> => {
-    const missing = getMissingEnvelopesForKnownHash(groupId, requestKnownHash);
+    const missing = getMissingEnvelopesForKnownHash(getOrderedEnvelopes(groupId), requestKnownHash);
     const responseEnvelopes = missing.slice(0, MAX_SYNC_ENVELOPES_PER_RESPONSE);
-    const headHash = getLatestKnownHash(groupId);
+    const headHash = dagHeadHash(groupId);
     const nextCursorHash = missing.length > responseEnvelopes.length && responseEnvelopes.length > 0
       ? Uint8Array.from(responseEnvelopes[responseEnvelopes.length - 1].hash)
       : undefined;
@@ -2392,7 +2254,7 @@ export const createMultiGroupChat = async (
       headHash,
       nextCursorHash,
       envelopes: responseEnvelopes,
-    });
+    }, accountKey.privateKey);
     const wireMessage: WireMessage = {
       type: "sync_response",
       payload: {
@@ -3736,7 +3598,7 @@ export const createMultiGroupChat = async (
       }
 
       if (payload.headHash) {
-        const localHead = getLatestKnownHash(matchedGroupId);
+        const localHead = dagHeadHash(matchedGroupId);
         const localHeadHex = localHead ? toHex(localHead) : null;
         const remoteHeadHex = toHex(payload.headHash);
         if (localHeadHex !== remoteHeadHex) {
