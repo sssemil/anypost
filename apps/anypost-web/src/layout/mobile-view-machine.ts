@@ -1,4 +1,4 @@
-export type RightPanel = "none" | "dev-tools" | "group-info" | "contacts" | "profile" | "about";
+export type RightPanel = "none" | "dev-tools" | "group-info" | "contacts" | "settings" | "about";
 
 export type MobileViewState = {
   readonly currentView: "group-list" | "chat";
@@ -12,8 +12,8 @@ export type MobileViewEvent =
   | { readonly type: "dev-drawer-closed" }
   | { readonly type: "contacts-toggled" }
   | { readonly type: "contacts-closed" }
-  | { readonly type: "profile-toggled" }
-  | { readonly type: "profile-closed" }
+  | { readonly type: "settings-toggled" }
+  | { readonly type: "settings-closed" }
   | { readonly type: "about-toggled" }
   | { readonly type: "about-closed" }
   | { readonly type: "group-info-toggled" }
@@ -44,9 +44,9 @@ export const transitionMobileView = (
       return { ...state, rightPanel: togglePanel(state.rightPanel, "contacts") };
     case "contacts-closed":
       return { ...state, rightPanel: "none" };
-    case "profile-toggled":
-      return { ...state, rightPanel: togglePanel(state.rightPanel, "profile") };
-    case "profile-closed":
+    case "settings-toggled":
+      return { ...state, rightPanel: togglePanel(state.rightPanel, "settings") };
+    case "settings-closed":
       return { ...state, rightPanel: "none" };
     case "about-toggled":
       return { ...state, rightPanel: togglePanel(state.rightPanel, "about") };

@@ -2,7 +2,7 @@ import type { JSX } from "solid-js";
 import { Match, Show, Switch } from "solid-js";
 import type { RightPanel } from "./mobile-view-machine.js";
 
-type SidePanelType = "dev-tools" | "contacts" | "profile" | "about";
+type SidePanelType = "dev-tools" | "contacts" | "settings" | "about";
 
 type ChatLayoutProps = {
   readonly sidebar: JSX.Element;
@@ -11,7 +11,7 @@ type ChatLayoutProps = {
   readonly messageInput: JSX.Element;
   readonly devDrawerContent: JSX.Element;
   readonly contactsContent: JSX.Element;
-  readonly profileContent: JSX.Element;
+  readonly settingsContent: JSX.Element;
   readonly aboutContent: JSX.Element;
   readonly hasActiveGroup: boolean;
   readonly mobileView: "group-list" | "chat";
@@ -23,7 +23,7 @@ type ChatLayoutProps = {
 const PANEL_TITLES: Record<SidePanelType, string> = {
   "dev-tools": "Developer Tools",
   "contacts": "Contacts",
-  "profile": "Profile",
+  "settings": "Settings",
   "about": "About",
 };
 
@@ -103,8 +103,8 @@ export const ChatLayout = (props: ChatLayoutProps) => {
                 <Match when={props.rightPanel === "contacts"}>
                   {props.contactsContent}
                 </Match>
-                <Match when={props.rightPanel === "profile"}>
-                  {props.profileContent}
+                <Match when={props.rightPanel === "settings"}>
+                  {props.settingsContent}
                 </Match>
                 <Match when={props.rightPanel === "about"}>
                   {props.aboutContent}

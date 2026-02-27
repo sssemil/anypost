@@ -68,6 +68,7 @@ type NetworkPanelProps = {
   readonly onClearRelayContactBook?: () => void;
   readonly onClearPeerPathCache?: () => void;
   readonly onClearConnectionReasons?: () => void;
+  readonly accountId?: string;
 };
 
 const PEERS_PER_PAGE = 10;
@@ -1011,9 +1012,15 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
 
             <div class="mb-3 pb-3 border-b border-tg-border">
               <div class="mb-1">
-                <span class="text-tg-text-dim">PeerId </span>
-                <code class="text-tg-text">{status().peerId}</code>
+                <span class="text-tg-text-dim">AccountId </span>
+                <code class="text-tg-text">{props.accountId ?? status().peerId}</code>
               </div>
+              <Show when={props.accountId && props.accountId !== status().peerId}>
+                <div class="mb-1">
+                  <span class="text-tg-text-dim">DevicePeerId </span>
+                  <code class="text-tg-text">{status().peerId}</code>
+                </div>
+              </Show>
               <div class="mb-1">
                 <span class="text-tg-text-dim">Topic </span>
                 <code class="text-tg-text">{status().topic}</code>

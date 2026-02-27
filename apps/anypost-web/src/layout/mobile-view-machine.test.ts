@@ -83,10 +83,10 @@ describe("Mobile view machine", () => {
       expect(next.rightPanel).toBe("dev-tools");
     });
 
-    it("should replace profile panel with dev-tools", () => {
+    it("should replace settings panel with dev-tools", () => {
       let state = createMobileViewState();
-      state = transitionMobileView(state, { type: "profile-toggled" });
-      expect(state.rightPanel).toBe("profile");
+      state = transitionMobileView(state, { type: "settings-toggled" });
+      expect(state.rightPanel).toBe("settings");
 
       const next = transitionMobileView(state, { type: "dev-drawer-toggled" });
 
@@ -144,10 +144,10 @@ describe("Mobile view machine", () => {
       expect(next.rightPanel).toBe("group-info");
     });
 
-    it("should replace profile panel with group-info", () => {
+    it("should replace settings panel with group-info", () => {
       let state = createMobileViewState();
-      state = transitionMobileView(state, { type: "profile-toggled" });
-      expect(state.rightPanel).toBe("profile");
+      state = transitionMobileView(state, { type: "settings-toggled" });
+      expect(state.rightPanel).toBe("settings");
 
       const next = transitionMobileView(state, { type: "group-info-toggled" });
 
@@ -196,10 +196,10 @@ describe("Mobile view machine", () => {
       expect(next.rightPanel).toBe("contacts");
     });
 
-    it("should replace profile panel with contacts", () => {
+    it("should replace settings panel with contacts", () => {
       let state = createMobileViewState();
-      state = transitionMobileView(state, { type: "profile-toggled" });
-      expect(state.rightPanel).toBe("profile");
+      state = transitionMobileView(state, { type: "settings-toggled" });
+      expect(state.rightPanel).toBe("settings");
 
       const next = transitionMobileView(state, { type: "contacts-toggled" });
 
@@ -218,43 +218,43 @@ describe("Mobile view machine", () => {
     });
   });
 
-  describe("profile-toggled event", () => {
-    it("should open profile panel when closed", () => {
+  describe("settings-toggled event", () => {
+    it("should open settings panel when closed", () => {
       let state = createMobileViewState();
       state = transitionMobileView(state, { type: "dev-drawer-toggled" });
       expect(state.rightPanel).toBe("none");
 
-      const next = transitionMobileView(state, { type: "profile-toggled" });
+      const next = transitionMobileView(state, { type: "settings-toggled" });
 
-      expect(next.rightPanel).toBe("profile");
+      expect(next.rightPanel).toBe("settings");
     });
 
-    it("should close profile panel when open", () => {
+    it("should close settings panel when open", () => {
       let state = createMobileViewState();
-      state = transitionMobileView(state, { type: "profile-toggled" });
-      expect(state.rightPanel).toBe("profile");
+      state = transitionMobileView(state, { type: "settings-toggled" });
+      expect(state.rightPanel).toBe("settings");
 
-      const next = transitionMobileView(state, { type: "profile-toggled" });
+      const next = transitionMobileView(state, { type: "settings-toggled" });
 
       expect(next.rightPanel).toBe("none");
     });
 
-    it("should replace dev-tools panel with profile", () => {
+    it("should replace dev-tools panel with settings", () => {
       const state = createMobileViewState();
       expect(state.rightPanel).toBe("dev-tools");
 
-      const next = transitionMobileView(state, { type: "profile-toggled" });
+      const next = transitionMobileView(state, { type: "settings-toggled" });
 
-      expect(next.rightPanel).toBe("profile");
+      expect(next.rightPanel).toBe("settings");
     });
   });
 
-  describe("profile-closed event", () => {
+  describe("settings-closed event", () => {
     it("should close the right panel", () => {
       let state = createMobileViewState();
-      state = transitionMobileView(state, { type: "profile-toggled" });
+      state = transitionMobileView(state, { type: "settings-toggled" });
 
-      const next = transitionMobileView(state, { type: "profile-closed" });
+      const next = transitionMobileView(state, { type: "settings-closed" });
 
       expect(next.rightPanel).toBe("none");
     });

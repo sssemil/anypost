@@ -30,7 +30,7 @@ type HeaderBarProps = {
   readonly onDeclineIncomingCall: () => void;
   readonly showBackButton: boolean;
   readonly onBackPress: () => void;
-  readonly onProfileToggle: () => void;
+  readonly onSettingsToggle: () => void;
   readonly onDevDrawerToggle: () => void;
   readonly onAboutToggle: () => void;
   readonly onContactsToggle: () => void;
@@ -153,10 +153,10 @@ export const HeaderBar = (props: HeaderBarProps) => {
               class="w-full text-left px-3 py-2 text-xs text-tg-text hover:bg-tg-hover cursor-pointer"
               onClick={() => {
                 setMenuOpen(false);
-                props.onProfileToggle();
+                props.onSettingsToggle();
               }}
             >
-              Profile
+              Settings
             </button>
             <button
               class="w-full text-left px-3 py-2 text-xs text-tg-text hover:bg-tg-hover cursor-pointer"
