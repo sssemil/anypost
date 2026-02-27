@@ -1,7 +1,9 @@
 # Anypost Protocol Specification
 
-> Version: 1.0 — derived from the reference implementation as of 2026-02-26.
+> Version: 1.1 (protocolVersion: 2) — derived from the reference implementation as of 2026-02-27.
 > Sufficient to build a compatible node from scratch using any libp2p implementation.
+>
+> **Breaking change from v1.0**: v1.1 uses a different topic prefix (`anypost2/group/` vs `anypost/group/`) and `protocolVersion: 2` in wire messages. v1.0 and v1.1 nodes do not interact.
 
 ---
 
@@ -35,6 +37,7 @@ Public keys and action hashes are converted to lowercase hex strings for use as 
 
 ```
 toHex(bytes) = bytes.map(b => b.toString(16).padStart(2, '0')).join('')
+fromHex(hex) = Uint8Array from pairs of hex characters (rejects odd-length or non-hex input)
 ```
 
 ---
@@ -123,18 +126,26 @@ decode: Uint8Array → CBOR → Zod.parse(WireMessageSchema) → WireMessage
 ### 3.2 Topics
 
 ```
-Group topic:            anypost/group/{groupId}        (groupId = UUID)
+Group topic:            anypost2/group/{groupId}       (groupId = UUID)
 Device discovery topic: anypost/account/{pubKeyHex}/devices
 ```
 
+**Note**: The group topic prefix is `anypost2/` (not `anypost/`). This ensures v1.0 and v1.1 nodes operate on separate topics and do not interact.
+
 ### 3.3 Wire Message Types
 
-All messages are a discriminated union on `type`:
+All messages are a discriminated union on `type`. Messages involved in group sync include a `protocolVersion: 2` field for version validation.
 
 #### `signed_action` — Action chain entry
 
 ```
-{ type: "signed_action", signedBytes: Uint8Array, signature: Uint8Array, hash: Uint8Array }
+{
+  type: "signed_action",
+  protocolVersion: 2,
+  signedBytes: Uint8Array,
+  signature: Uint8Array,
+  hash: Uint8Array
+}
 ```
 
 Published on the group topic. This is the primary message type for all group activity (messages, membership changes, etc.). See Section 4.
@@ -144,6 +155,7 @@ Published on the group topic. This is the primary message type for all group act
 ```
 {
   type: "join_request",
+  protocolVersion: 2,
   groupId: UUID,
   senderPeerId: string,
   requesterPublicKey: Uint8Array,
@@ -152,11 +164,32 @@ Published on the group topic. This is the primary message type for all group act
 }
 ```
 
+#### `heads_announce` — DAG frontier announcement
+
+```
+{
+  type: "heads_announce",
+  protocolVersion: 2,
+  payload: {
+    groupId: UUID,
+    heads: Uint8Array[],           // current DAG tips (max 64)
+    approxDagSize?: number,        // approximate action count
+    sentAt: number,                // timestamp
+    senderPeerId: string,
+    senderPublicKey: Uint8Array,
+    signature: Uint8Array
+  }
+}
+```
+
+Published periodically and after state changes. Recipients compare against their local DAG to detect missing actions. See Section 5.
+
 #### `sync_request` — Request missing actions
 
 ```
 {
   type: "sync_request",
+  protocolVersion: 2,
   payload: {
     groupId: UUID,
     senderPeerId: string,
@@ -164,7 +197,7 @@ Published on the group topic. This is the primary message type for all group act
     signature: Uint8Array,
     requestId?: UUID,
     targetPeerId?: string,
-    knownHash?: Uint8Array     // cursor: "I have everything up to this hash"
+    knownHeads: Uint8Array[]       // requester's current DAG tips (max 64)
   }
 }
 ```
@@ -174,6 +207,7 @@ Published on the group topic. This is the primary message type for all group act
 ```
 {
   type: "sync_response",
+  protocolVersion: 2,
   payload: {
     groupId: UUID,
     senderPeerId: string,
@@ -181,15 +215,11 @@ Published on the group topic. This is the primary message type for all group act
     signature: Uint8Array,
     requestId?: UUID,
     targetPeerId: string,
-    requestKnownHash?: Uint8Array,
-    headHash?: Uint8Array,
-    nextCursorHash?: Uint8Array,   // pagination: more data after this hash
-    envelopes: SignedActionEnvelope[]
+    theirHeads: Uint8Array[],      // responder's current DAG tips (max 64)
+    envelopes: SignedActionEnvelope[]  // max 16 envelopes or 64 KiB
   }
 }
 ```
-
-Max 256 envelopes per response. If `nextCursorHash` is present, requester should send another `sync_request` with that as `knownHash`.
 
 #### `dm_request` — Direct message invitation
 
@@ -209,6 +239,7 @@ Max 256 envelopes per response. If `nextCursorHash` is present, requester should
 ```
 {
   type: "join_request_direct",
+  protocolVersion: 2,
   payload: {
     groupId: UUID, senderPeerId, requesterPublicKey, targetPeerId,
     signature: Uint8Array, inviteGrant?: InviteGrantProof
@@ -268,14 +299,17 @@ The core data model. All group state is derived by replaying a cryptographically
 
 ```
 {
+  protocolVersion: 2,              // literal value, always 2
   id:              UUID,
   groupId:         UUID,
-  authorPublicKey: Uint8Array(32),    // Ed25519 public key
-  timestamp:       number,            // ms since epoch
-  parentHashes:    Uint8Array(32)[],  // references to parent action hashes
-  payload:         ActionPayload      // see 4.2
+  authorPublicKey: Uint8Array(32), // Ed25519 public key
+  timestamp:       number,         // ms since epoch
+  parentHashes:    Uint8Array(32)[], // 1-4 references to parent action hashes
+  payload:         ActionPayload   // see 4.2
 }
 ```
+
+**Bounded parents**: `parentHashes` must contain 1 to 4 entries. Actions with more than 4 parents are rejected.
 
 #### SignedActionEnvelope (wire format)
 
@@ -297,7 +331,7 @@ SignableAction & { signature: Uint8Array, hash: Uint8Array }
 
 ### 4.2 Action Payload Types
 
-13 variants, discriminated on `type`:
+14 variants, discriminated on `type`:
 
 | Type | Fields | Purpose |
 |------|--------|---------|
@@ -311,16 +345,19 @@ SignableAction & { signature: Uint8Array, hash: Uint8Array }
 | `group-renamed` | `newName: string` | Admin renames group |
 | `join-policy-changed` | `joinPolicy: "manual"\|"auto_with_invite"` | Admin changes join policy |
 | `message` | `text: string` | Send message |
-| `message-edited` | `targetActionId: UUID`, `newText: string` | Edit previous message |
-| `message-deleted` | `targetActionId: UUID` | Delete previous message |
-| `read-receipt` | `upToActionId: UUID` | Mark messages as read |
+| `message-edited` | `targetHash: Uint8Array`, `newText: string` | Edit previous message (by hash) |
+| `message-deleted` | `targetHash: Uint8Array` | Delete previous message (by hash) |
+| `read-receipt` | `upToHash: Uint8Array` | Mark messages as read (by hash) |
+| `merge` | *(none)* | DAG compaction; must reference ≥2 current tips |
+
+**Hash references**: `message-edited`, `message-deleted`, and `read-receipt` reference target actions by their SHA-256 hash (`Uint8Array`), not by UUID.
 
 ### 4.3 Signing & Verification
 
 #### Create
 
 ```
-1. Build SignableAction object
+1. Build SignableAction object (with protocolVersion: 2)
 2. signedBytes = CBOR.encode(signableAction)
 3. signature   = Ed25519.sign(signedBytes, accountKey.privateKey)
 4. hash        = SHA-256(signedBytes)
@@ -359,7 +396,19 @@ appendAction(state, action):
 
 **Genesis**: The first action's `parentHashes` contains `GENESIS_HASH` (32 zero bytes).
 
-**Tips**: `getTips(state)` returns hashes of all current leaf actions. New actions should reference all current tips as parents.
+**Tips**: `getTips(state)` returns hashes of all current leaf actions.
+
+#### Smart Parent Selection
+
+When creating a new action, parents are selected using `selectParentHashes(dag, lastBuiltHead, maxParents=4)`:
+
+1. Get all current DAG tips
+2. If no tips: return `[GENESIS_HASH]`
+3. Sort tips by `(timestamp ASC, hexHash ASC)`
+4. If `lastBuiltHead` (the hash of the author's most recent action) is still a tip: place it first, then fill remaining slots from other sorted tips (up to `maxParents`)
+5. Otherwise: return first `maxParents` tips from sorted list
+
+This gives priority to continuing the author's own chain, reducing unnecessary branching.
 
 ### 4.5 Topological Ordering
 
@@ -385,11 +434,13 @@ State is derived by replaying actions in topological order. Each action is valid
   joinPolicy: "manual" | "auto_with_invite",
   createdAt, members: Map<hex, GroupMember>,
   pendingJoins: Map<hex, Uint8Array>,
-  readReceipts: Map<hex, UUID>
+  readReceipts: Map<hex, hexHash>
 }
 
 GroupMember = { publicKeyHex, publicKey, role: "owner"|"admin"|"member", joinedAt }
 ```
+
+**Note**: `readReceipts` maps author hex → target hash hex (not UUID).
 
 **Permission Matrix**:
 
@@ -407,17 +458,35 @@ GroupMember = { publicKeyHex, publicKey, role: "owner"|"admin"|"member", joinedA
 | `message-edited` | Author is member; DM handshake must be complete |
 | `message-deleted` | Author is member; DM handshake must be complete |
 | `read-receipt` | Author is member |
+| `merge` | Author is member; must reference ≥2 current tips; rate-limited (1/min per author) |
 
 **Admin** = role is `"admin"` or `"owner"`.
 
-### 4.7 Owner Invariant
+### 4.7 Merge Actions
+
+Merge actions compact the DAG by referencing multiple tips as parents, reducing frontier width.
+
+**Trigger conditions** (automatic, after any action):
+1. DAG has more than 64 tips
+2. At least 60 seconds since this author's last merge
+3. Author has at least 2 tips to reference
+
+**Validation**:
+- Must reference ≥2 current DAG tips as parents
+- Author must be a group member
+- Rate-limited: 1 merge per 60 seconds per author (checked via action timestamp)
+- Max 4 parents (same as all actions)
+
+**Payload**: Empty — the merge carries no data; its value is in the DAG structure via `parentHashes`.
+
+### 4.8 Owner Invariant
 
 After any member removal or departure, `normalizeOwnerInvariant` runs:
 
 - **0 owners**: Promote earliest-joined member to owner (tiebreak: hex key ascending)
 - **2+ owners**: Keep earliest-joined as owner, demote others to admin
 
-### 4.8 DM Handshake
+### 4.9 DM Handshake
 
 For `dm-created` actions:
 - `peerIds` must be a sorted tuple of exactly 2 peer ID strings
@@ -429,52 +498,111 @@ For `dm-created` actions:
 
 ## 5. Sync Protocol
 
-### 5.1 Triggers
+### 5.1 Overview
+
+v1.1 uses **frontier-based sync** with three mechanisms:
+
+1. **Heads announce** — Broadcast DAG tips to detect divergence
+2. **Sync request/response** — Exchange small batches of envelopes inline via GossipSub
+3. **Block fetch** — Stream-based protocol for fetching specific missing actions by hash
+
+### 5.2 Triggers
 
 Sync is event-driven, not timer-based:
 
 1. **`peer:connect`**: Request sync for all joined groups from the new peer
 2. **`subscription-change`**: When a known member subscribes to a group topic, publish all stored envelopes for that group to them
 3. **Member approval**: When becoming a member of a group, request sync from all connected peers
-4. **Periodic reconciliation**: Every 20s, check for stale sync peers (>45s since last contact)
+4. **Heads announce**: When a `heads_announce` message reveals unknown tips, trigger sync
 
-### 5.2 Flow
+### 5.3 Heads Announce
+
+Peers periodically broadcast their DAG tips to detect divergence.
+
+**Signing**: Ed25519 signature over CBOR-encoded fields: `{type: "heads_announce", groupId, heads, sentAt, senderPeerId, senderPublicKey}`
+
+**Processing on receipt**:
+1. Verify signature against `senderPublicKey`
+2. Check membership (sender must be a group member, with DM handshake exception)
+3. Check for any heads not present in local DAG
+4. If missing heads detected → trigger `sync_request` with local `knownHeads`
+
+### 5.4 Sync Request/Response Flow
 
 ```
 Requester                              Responder
     │                                       │
-    │──── sync_request {knownHash} ────────→│
-    │                                       │ find envelopes after knownHash
-    │←── sync_response {envelopes,          │ (up to 256)
-    │     nextCursorHash?, headHash} ───────│
+    │──── sync_request {knownHeads} ──────→│
+    │                                       │ compute envelopes not covered
+    │←── sync_response {envelopes,          │ by requester's known heads
+    │     theirHeads} ────────────────────│ (max 16 envelopes or 64 KiB)
     │                                       │
-    │  (if nextCursorHash present)          │
-    │──── sync_request {knownHash=cursor} ─→│
-    │←── sync_response {more envelopes} ────│
-    │  ... repeat until complete ...         │
+    │  (if theirHeads reveal more missing)  │
+    │──── block fetch stream ─────────────→│
+    │←── block fetch response ─────────────│
+    │  ... chase missing parents ...        │
 ```
 
-### 5.3 Deduplication
+**Inline limits**: Max 16 envelopes or 64 KiB per sync response.
+
+**After receiving sync response**: If the responder's `theirHeads` or newly-received envelopes reveal missing parent hashes, trigger block fetch chase (Section 5.5).
+
+### 5.5 Block Fetch Protocol
+
+A libp2p stream protocol for fetching specific actions by hash.
+
+**Protocol ID**: `/anypost/blocks/1.0.0/get`
+
+**Request**:
+```
+{
+  protocolVersion: 2,
+  type: "getBlocks",
+  groupId: UUID,
+  hashes: Uint8Array[],          // max 256 hashes per request
+  senderPublicKey: Uint8Array,
+  signature: Uint8Array,
+  sentAt: number
+}
+```
+
+**Response**:
+```
+{
+  envelopes: SignedActionEnvelope[],  // max 256 envelopes
+  missing: Uint8Array[]              // hashes not found (max 256)
+}
+```
+
+**Authentication**:
+- Ed25519 signature over CBOR-encoded fields: `{protocolVersion: 2, type: "getBlocks", groupId, hashes, sentAt}`
+- Signer must be a verified group member
+- Clock skew tolerance: ±5 minutes
+
+**Block fetch chase**: After receiving block fetch response, scan new envelopes for parent hashes not in local DAG. If found, add them to fetch queue and repeat. Max 100 rounds.
+
+### 5.6 Deduplication
 
 - **DAG level**: `appendAction` returns same state reference if hash already exists
 - **GossipSub level**: Built-in message cache prevents re-delivery of recent messages
 - **Application level**: `processSignedAction` returns `null` if action already in DAG
 
-### 5.4 Keep-Alive
+### 5.7 Keep-Alive
 
 - Tag group members in libp2p peerStore: `keep-alive-group-member` with value 100
-- Ping every 15s; disconnect after 2 consecutive failures
+- Ping every 15s; trigger reconnect burst after 2 consecutive failures (schedule: 0, 1s, 2s, 4s, 8s, 15s)
 - Fast reconnect (5s) when members are offline; idle check (30s) otherwise
 
-### 5.5 Rate Limits
+### 5.8 Rate Limits
 
 | Direction | Limit |
 |-----------|-------|
-| Incoming sync requests | 40 per 10s |
-| Outgoing sync requests | 60 per 10s |
+| Incoming sync requests | 40 per 10s per peer |
+| Outgoing sync requests | 60 per 10s per peer |
 | Incoming join requests | 8 per 30s |
 | Outgoing join requests | 10 per 30s |
 | Outgoing approvals | 10 per 30s |
+| Merge actions | 1 per 60s per author |
 
 ---
 
@@ -484,8 +612,9 @@ Requester                              Responder
 
 - Circuit Relay v2, 128 max reservations
 - DHT server mode, provides under `anypost-relay` namespace
-- Auto-subscribes to all GossipSub topics its peers use
+- Auto-subscribes to all GossipSub topics its peers use (including `anypost2/group/` topics)
 - `canRelayMessage: true` for GossipSub relay
+- Forwards all v1.1 wire messages: `heads_announce`, `sync_request`, `sync_response`, `signed_action`
 
 ### 6.2 Relay Discovery (Client)
 
@@ -514,22 +643,39 @@ Implementations must support:
 
 ---
 
-## 8. Compatibility Checklist
+## 8. Compatibility
 
-To be compatible with existing nodes, a new implementation must:
+### 8.1 v1.0 / v1.1 Isolation
+
+v1.0 and v1.1 nodes are **fully isolated**:
+- Different topic prefix: `anypost/group/` (v1.0) vs `anypost2/group/` (v1.1)
+- `protocolVersion: 2` in all v1.1 wire messages; v1.0 messages without this field are rejected
+- Action payloads changed: `targetHash`/`upToHash` (v1.1) vs `targetActionId`/`upToActionId` (v1.0)
+- New `merge` action type not recognized by v1.0 nodes
+
+### 8.2 Compatibility Checklist
+
+To be compatible with v1.1 nodes, a new implementation must:
 
 - [ ] Generate Ed25519 account keys (32-byte seed)
-- [ ] CBOR-encode SignableAction, sign with Ed25519, hash with SHA-256
+- [ ] CBOR-encode SignableAction with `protocolVersion: 2`, sign with Ed25519, hash with SHA-256
 - [ ] Verify signatures against exact `signedBytes` (never re-encode)
 - [ ] CBOR-encode/decode WireMessages on GossipSub
-- [ ] Subscribe to `anypost/group/{groupId}` topics
-- [ ] Handle all 11 wire message types (at minimum: `signed_action`, `sync_request`, `sync_response`, `join_request`)
+- [ ] Subscribe to `anypost2/group/{groupId}` topics (note: `anypost2/`, not `anypost/`)
+- [ ] Include `protocolVersion: 2` in all group-scoped wire messages
+- [ ] Handle all wire message types (at minimum: `signed_action`, `sync_request`, `sync_response`, `heads_announce`, `join_request`)
 - [ ] Implement DAG append with idempotent dedup on hash
 - [ ] Implement topological sort with timestamp+hash tiebreaker
 - [ ] Apply authorization rules per Section 4.6
+- [ ] Enforce bounded parents (max 4 per action)
+- [ ] Implement smart parent selection (Section 4.4)
+- [ ] Support `merge` action type with ≥2 tips requirement and rate limiting
+- [ ] Use hash references (`targetHash`, `upToHash`) for message-edited, message-deleted, read-receipt
 - [ ] Enforce owner invariant after member removal/departure
 - [ ] Enforce DM handshake (2 contributors required before messages)
-- [ ] Respond to `sync_request` with stored envelopes
+- [ ] Respond to `heads_announce` by detecting missing heads and triggering sync
+- [ ] Respond to `sync_request` with up to 16 envelopes (or 64 KiB)
+- [ ] Implement block fetch protocol (`/anypost/blocks/1.0.0/get`) with signed, membership-checked requests
 - [ ] Respond to `subscription-change` by publishing stored envelopes
 - [ ] Use DHT provider records for group discovery (namespace: `anypost/group/{groupId}`)
 - [ ] Participate in pubsub peer discovery on `_peer-discovery._p2p._pubsub` and `anypost/_peer-discovery`
