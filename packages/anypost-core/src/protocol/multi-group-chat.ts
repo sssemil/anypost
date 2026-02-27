@@ -648,6 +648,7 @@ export const createMultiGroupChat = async (
   const seenSyncResponses = new Map<string, number>();
   const lastBuiltHeadByGroup = new Map<string, Uint8Array>();
   const lastMergeTimestampByAuthor = new Map<string, number>();
+  const activeBlockFetchChases = new Set<string>();
 
   const isRateLimited = (
     bucket: Map<string, RateWindow>,
@@ -2337,47 +2338,54 @@ export const createMultiGroupChat = async (
     remotePeerId: string,
     initialMissingHexes: ReadonlySet<string>,
   ): Promise<void> => {
-    const peerId = peerIdFromString(remotePeerId);
-    let fetchQueue = new Set(initialMissingHexes);
-    let rounds = 0;
+    const chaseKey = `${groupId}:${remotePeerId}`;
+    if (activeBlockFetchChases.has(chaseKey)) return;
+    activeBlockFetchChases.add(chaseKey);
+    try {
+      const peerId = peerIdFromString(remotePeerId);
+      let fetchQueue = new Set(initialMissingHexes);
+      let rounds = 0;
 
-    while (fetchQueue.size > 0 && rounds < MAX_BLOCK_FETCH_CHASE_ROUNDS) {
-      rounds += 1;
-      const hashesToFetch = [...fetchQueue].map(hexToBytes);
+      while (fetchQueue.size > 0 && rounds < MAX_BLOCK_FETCH_CHASE_ROUNDS) {
+        rounds += 1;
+        const hashesToFetch = [...fetchQueue].map(hexToBytes);
 
-      const response = await fetchBlocks({
-        node,
-        peerId,
-        accountKey,
-        groupId,
-        hashes: hashesToFetch,
-      });
+        const response = await fetchBlocks({
+          node,
+          peerId,
+          accountKey,
+          groupId,
+          hashes: hashesToFetch,
+        });
 
-      if (response.envelopes.length === 0) break;
+        if (response.envelopes.length === 0) break;
 
-      const accepted: SignedAction[] = [];
-      for (const envelope of response.envelopes) {
-        const action = processSignedAction(groupId, envelope, remotePeerId);
-        if (action) {
-          accepted.push(action);
-          emitActionMessage(groupId, action, remotePeerId);
+        const accepted: SignedAction[] = [];
+        for (const envelope of response.envelopes) {
+          const action = processSignedAction(groupId, envelope, remotePeerId);
+          if (action) {
+            accepted.push(action);
+            emitActionMessage(groupId, action, remotePeerId);
+          }
         }
+
+        emit(
+          "sync",
+          `Block fetch round ${rounds}: fetched ${response.envelopes.length}, accepted ${accepted.length} for group ${groupId.slice(0, 8)}...`,
+        );
+
+        const updatedDag = actionDags.get(groupId);
+        if (!updatedDag) break;
+
+        const missingParents = findMissingParentHashes(updatedDag, accepted);
+        fetchQueue = new Set([...response.missing.map((h) => toHex(h)), ...missingParents]);
       }
 
-      emit(
-        "sync",
-        `Block fetch round ${rounds}: fetched ${response.envelopes.length}, accepted ${accepted.length} for group ${groupId.slice(0, 8)}...`,
-      );
-
-      const updatedDag = actionDags.get(groupId);
-      if (!updatedDag) break;
-
-      const missingParents = findMissingParentHashes(updatedDag, accepted);
-      fetchQueue = new Set([...response.missing.map((h) => toHex(h)), ...missingParents]);
-    }
-
-    if (rounds > 0) {
-      emit("sync", `Block fetch chase completed in ${rounds} round(s) for group ${groupId.slice(0, 8)}...`);
+      if (rounds > 0) {
+        emit("sync", `Block fetch chase completed in ${rounds} round(s) for group ${groupId.slice(0, 8)}...`);
+      }
+    } finally {
+      activeBlockFetchChases.delete(chaseKey);
     }
   };
 
@@ -3742,6 +3750,17 @@ export const createMultiGroupChat = async (
       );
       if (!senderPeerId) return;
       if (senderPeerId === ownPeerId) return;
+      if (isMembershipEnforcedGroup(matchedGroupId)) {
+        const groupState = actionChainStates.get(matchedGroupId);
+        const senderPublicKeyHex = toHex(payload.senderPublicKey);
+        const allowDmHandshakeHeadsAnnounce =
+          !!groupState &&
+          groupState.isDirectMessage &&
+          !groupState.dmHandshakeComplete &&
+          !!groupState.directMessagePeerIds &&
+          groupState.directMessagePeerIds.includes(senderPeerId);
+        if (!groupState?.members.has(senderPublicKeyHex) && !allowDmHandshakeHeadsAnnounce) return;
+      }
       const dag = actionDags.get(matchedGroupId);
       if (!dag) return;
       const announcedHeadHexes = new Set(payload.heads.map((h: Uint8Array) => toHex(h)));
@@ -5312,6 +5331,8 @@ export const createMultiGroupChat = async (
       pendingSyncRequests.clear();
       seenSyncResponses.clear();
       lastBuiltHeadByGroup.clear();
+      lastMergeTimestampByAuthor.clear();
+      activeBlockFetchChases.clear();
       try {
         await node.stop();
       } catch {}
