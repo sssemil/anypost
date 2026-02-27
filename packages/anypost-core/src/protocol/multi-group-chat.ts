@@ -2251,8 +2251,7 @@ export const createMultiGroupChat = async (
     targetPeerId: string,
     requestId?: string,
   ): Promise<void> => {
-    const orderedEnvelopes = getOrderedEnvelopes(groupId);
-    const responseEnvelopes = orderedEnvelopes;
+    const responseEnvelopes = getOrderedEnvelopes(groupId);
     const ourHeads = [...getSmartParentHashes(groupId)];
     const senderPublicKey = new Uint8Array(accountKey.publicKey);
     const signature = signSyncResponse({
