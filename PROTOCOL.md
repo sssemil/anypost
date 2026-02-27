@@ -434,7 +434,8 @@ State is derived by replaying actions in topological order. Each action is valid
   joinPolicy: "manual" | "auto_with_invite",
   createdAt, members: Map<hex, GroupMember>,
   pendingJoins: Map<hex, Uint8Array>,
-  readReceipts: Map<hex, hexHash>
+  readReceipts: Map<hex, hexHash>,
+  lastMergeTimestampByAuthor: Map<hex, number>
 }
 
 GroupMember = { publicKeyHex, publicKey, role: "owner"|"admin"|"member", joinedAt }
@@ -450,7 +451,8 @@ GroupMember = { publicKeyHex, publicKey, role: "owner"|"admin"|"member", joinedA
 | `dm-created` | Not overriding a non-DM group; peer IDs sorted ascending |
 | `join-request` | Author not already member; not a DM |
 | `member-approved` | Author is admin or owner; not a DM |
-| `member-removed` | Author is admin; only owner can remove owner; not a DM |
+| `member-left` | Author is member |
+| `member-removed` | Author is admin or owner; only owner can remove owner; not a DM |
 | `role-changed` | Author is owner; cannot change own role; not a DM |
 | `group-renamed` | Author is admin or owner; not a DM |
 | `join-policy-changed` | Author is admin or owner; not a DM |
@@ -545,6 +547,10 @@ Requester                              Responder
 
 **Inline limits**: Max 16 envelopes or 64 KiB per sync response.
 
+**Signing**:
+- `sync_request` signature: Ed25519 over CBOR-encoded `{type: "sync_request", groupId, senderPeerId, senderPublicKey, requestId, targetPeerId, knownHeads}`
+- `sync_response` signature: Ed25519 over CBOR-encoded `{type: "sync_response", groupId, senderPeerId, senderPublicKey, requestId, targetPeerId, theirHeads, envelopes}`
+
 **After receiving sync response**: If the responder's `theirHeads` or newly-received envelopes reveal missing parent hashes, trigger block fetch chase (Section 5.5).
 
 ### 5.5 Block Fetch Protocol
@@ -569,17 +575,19 @@ A libp2p stream protocol for fetching specific actions by hash.
 **Response**:
 ```
 {
-  envelopes: SignedActionEnvelope[],  // max 256 envelopes
-  missing: Uint8Array[]              // hashes not found (max 256)
+  envelopes: SignedActionEnvelope[],  // max 256 envelopes or 1 MiB total
+  missing: Uint8Array[]              // hashes not found or over size limit (max 256)
 }
 ```
 
-**Authentication**:
-- Ed25519 signature over CBOR-encoded fields: `{protocolVersion: 2, type: "getBlocks", groupId, hashes, sentAt}`
-- Signer must be a verified group member
-- Clock skew tolerance: ±5 minutes
+**Wire framing**: Request and response are CBOR-encoded and sent as length-prefixed messages. Maximum frame size: 2 MiB.
 
-**Block fetch chase**: After receiving block fetch response, scan new envelopes for parent hashes not in local DAG. If found, add them to fetch queue and repeat. Max 100 rounds.
+**Authentication** (in order):
+1. Clock skew: reject if `sentAt` is more than ±5 minutes from current time
+2. Membership: verify `senderPublicKey` is a current group member
+3. Signature: Ed25519.verify(signature, CBOR({protocolVersion: 2, type: "getBlocks", groupId, hashes, sentAt}), senderPublicKey)
+
+**Block fetch chase**: After receiving block fetch response, collect (a) hashes reported as `missing` by the responder, and (b) parent hashes from newly-received envelopes not present in local DAG. Add both to the fetch queue and repeat. Max 100 rounds.
 
 ### 5.6 Deduplication
 
