@@ -268,9 +268,9 @@ export type MultiGroupChat = {
   readonly leaveGroup: (groupId: string) => Promise<void>;
   readonly getJoinedGroups: () => readonly string[];
   readonly sendMessage: (groupId: string, text: string, displayName?: string) => Promise<void>;
-  readonly editMessage: (groupId: string, targetActionId: string, newText: string) => Promise<void>;
-  readonly deleteMessage: (groupId: string, targetActionId: string) => Promise<void>;
-  readonly sendReadReceipt: (groupId: string, upToActionId: string) => Promise<void>;
+  readonly editMessage: (groupId: string, targetHash: Uint8Array, newText: string) => Promise<void>;
+  readonly deleteMessage: (groupId: string, targetHash: Uint8Array) => Promise<void>;
+  readonly sendReadReceipt: (groupId: string, upToHash: Uint8Array) => Promise<void>;
   readonly createGroup: (name: string) => Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }>;
   readonly createGroupWithId: (groupId: string, name: string) => Promise<{ groupId: string; genesisEnvelope: SignedActionEnvelope }>;
   readonly createDirectMessageGroupWithId: (
@@ -1378,14 +1378,7 @@ export const createMultiGroupChat = async (
     return dag;
   };
 
-  const findHashByActionId = (groupId: string, actionId: string): Uint8Array | undefined => {
-    const dag = actionDags.get(groupId);
-    if (!dag) return undefined;
-    for (const action of dag.actions.values()) {
-      if (action.id === actionId) return action.hash;
-    }
-    return undefined;
-  };
+
 
   const ownPublicKeyHex = toHex(new Uint8Array(accountKey.publicKey));
   const ownPeerId = node.peerId.toString();
@@ -4573,16 +4566,13 @@ export const createMultiGroupChat = async (
       }
       await publishEnvelope(groupId, envelope);
     },
-    editMessage: async (groupId: string, targetActionId: string, newText: string) => {
-      const trimmedTargetActionId = targetActionId.trim();
+    editMessage: async (groupId: string, targetHash: Uint8Array, newText: string) => {
       const trimmedNewText = newText.trim();
-      if (trimmedTargetActionId.length === 0) throw new Error("Target action ID is required");
+      if (targetHash.length === 0) throw new Error("Target hash is required");
       if (trimmedNewText.length === 0) throw new Error("Edited message cannot be empty");
       if (isMembershipEnforcedGroup(groupId) && !isOwnMemberOfGroup(groupId)) {
         throw new Error("Not a member of this group");
       }
-      const targetHash = findHashByActionId(groupId, trimmedTargetActionId);
-      if (!targetHash) throw new Error("Target action not found in DAG");
       const parentHashes = getSmartParentHashes(groupId);
       const envelope = createSignedActionEnvelope({
         accountKey,
@@ -4598,14 +4588,11 @@ export const createMultiGroupChat = async (
       if (!action) throw new Error("Message edit rejected by local policy");
       await publishEnvelope(groupId, envelope);
     },
-    deleteMessage: async (groupId: string, targetActionId: string) => {
-      const trimmedTargetActionId = targetActionId.trim();
-      if (trimmedTargetActionId.length === 0) throw new Error("Target action ID is required");
+    deleteMessage: async (groupId: string, targetHash: Uint8Array) => {
+      if (targetHash.length === 0) throw new Error("Target hash is required");
       if (isMembershipEnforcedGroup(groupId) && !isOwnMemberOfGroup(groupId)) {
         throw new Error("Not a member of this group");
       }
-      const targetHash = findHashByActionId(groupId, trimmedTargetActionId);
-      if (!targetHash) throw new Error("Target action not found in DAG");
       const parentHashes = getSmartParentHashes(groupId);
       const envelope = createSignedActionEnvelope({
         accountKey,
@@ -4620,16 +4607,13 @@ export const createMultiGroupChat = async (
       if (!action) throw new Error("Message delete rejected by local policy");
       await publishEnvelope(groupId, envelope);
     },
-    sendReadReceipt: async (groupId: string, upToActionId: string) => {
-      const trimmedUpToActionId = upToActionId.trim();
-      if (trimmedUpToActionId.length === 0) {
-        throw new Error("Read receipt action ID is required");
+    sendReadReceipt: async (groupId: string, upToHash: Uint8Array) => {
+      if (upToHash.length === 0) {
+        throw new Error("Read receipt hash is required");
       }
       if (isMembershipEnforcedGroup(groupId) && !isOwnMemberOfGroup(groupId)) {
         throw new Error("Not a member of this group");
       }
-      const upToHash = findHashByActionId(groupId, trimmedUpToActionId);
-      if (!upToHash) throw new Error("Target action not found in DAG");
       const upToHashHex = toHex(upToHash);
       const chainState = actionChainStates.get(groupId);
       if (chainState?.readReceipts.get(ownPublicKeyHex) === upToHashHex) {

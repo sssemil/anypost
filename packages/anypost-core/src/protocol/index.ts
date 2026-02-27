@@ -186,6 +186,7 @@ export {
   SignedActionEnvelopeSchema,
   GENESIS_HASH,
   toHex,
+  fromHex,
 } from "./action-chain.js";
 export type {
   ActionPayload,

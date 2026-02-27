@@ -112,6 +112,17 @@ export const GENESIS_HASH = new Uint8Array(32);
 export const toHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 
+export const fromHex = (hex: string): Uint8Array => {
+  if (hex.length % 2 !== 0) throw new Error("Invalid hex string length");
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    const byte = parseInt(hex.slice(i, i + 2), 16);
+    if (Number.isNaN(byte)) throw new Error(`Invalid hex at position ${i}`);
+    bytes[i / 2] = byte;
+  }
+  return bytes;
+};
+
 export type GroupMember = {
   readonly publicKeyHex: string;
   readonly publicKey: Uint8Array;

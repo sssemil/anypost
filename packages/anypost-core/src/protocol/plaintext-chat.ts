@@ -30,6 +30,7 @@ export type ChatMessageEvent = {
   readonly text: string;
   readonly timestamp: number;
   readonly id: string;
+  readonly hashHex?: string;
 };
 
 type MessageListener = (message: ChatMessageEvent) => void;
