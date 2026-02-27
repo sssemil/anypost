@@ -270,3 +270,22 @@ export type {
   MultiGroupTransportProfile,
   MultiGroupRuntimeAdapter,
 } from "./runtime-adapter.js";
+export {
+  BLOCK_FETCH_PROTOCOL,
+  BlockFetchRequestSchema,
+  BlockFetchResponseSchema,
+  encodeBlockFetchSigningPayload,
+  signBlockFetchRequest,
+  verifyBlockFetchRequest,
+  collectRequestedEnvelopes,
+  validateBlockFetchRequest,
+  createBlockFetchHandler,
+  fetchBlocks,
+} from "./block-fetch.js";
+export type {
+  BlockFetchRequest,
+  BlockFetchResponse,
+  BlockFetchHandlerOptions,
+  BlockFetchHandler,
+  FetchBlocksOptions,
+} from "./block-fetch.js";
