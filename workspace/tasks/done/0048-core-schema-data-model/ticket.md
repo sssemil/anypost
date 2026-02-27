@@ -59,17 +59,17 @@ Must be updated to use `protocolVersion: 2`, hash references, and new schema sha
 
 ## Acceptance Criteria
 
-- [ ] `SignableActionSchema` requires `protocolVersion: z.literal(2)`
-- [ ] `parentHashes` has `.max(4)` constraint; schemas reject >4 parents
-- [ ] `ActionPayloadSchema` has 14 variants including `{ type: "merge" }`
-- [ ] `message-edited`, `message-deleted`, `read-receipt` use `targetHash`/`upToHash` (Uint8Array)
-- [ ] Wire message schemas updated: `sync_request` has `knownHeads`, `sync_response` has `theirHeads`, no cursor fields
-- [ ] `heads_announce` wire message schema exists
-- [ ] `protocolVersion: 2` on all group-scoped wire messages
-- [ ] `groupTopic` returns `anypost2/group/{groupId}`
-- [ ] `ActionChainGroupState` has `lastMergeTimestampByAuthor` field
-- [ ] All existing tests updated and passing
-- [ ] TypeScript strict mode satisfied
+- [x] `SignableActionSchema` requires `protocolVersion: z.literal(2)`
+- [x] `parentHashes` has `.min(1).max(4)` constraint; schemas reject 0 or >4 parents
+- [x] `ActionPayloadSchema` has 14 variants including `{ type: "merge" }`
+- [x] `message-edited`, `message-deleted`, `read-receipt` use `targetHash`/`upToHash` (Uint8Array)
+- [x] Wire message schemas updated: `sync_request` has `knownHeads` (.max(64)), `sync_response` has `theirHeads` (.max(64)), no cursor fields
+- [x] `heads_announce` wire message schema exists
+- [x] `protocolVersion: 2` on all group-scoped wire messages
+- [x] `groupTopic` returns `anypost2/group/{groupId}`
+- [x] `ActionChainGroupState` has `lastMergeTimestampByAuthor` field
+- [x] All existing tests updated and passing (955 tests)
+- [x] TypeScript strict mode satisfied
 
 ## Implementation Notes
 
@@ -87,3 +87,9 @@ Must be updated to use `protocolVersion: 2`, hash references, and new schema sha
 ## History
 
 - 2026-02-26 Created from brutal-plan PLAN-0002
+- 2026-02-27 00:39 Started work on this task
+- 2026-02-27 00:55 Implementation complete, starting code reduction
+- 2026-02-27 00:56 Code reduction complete, starting self-review
+- 2026-02-27 01:00 Self-review #1: 0 CRITICAL, 2 MAJOR, 6 MINOR, 2 NIT
+- 2026-02-27 01:02 Fixed 2 MAJOR findings (parentHashes .min(1), knownHeads/theirHeads .max(64))
+- 2026-02-27 01:03 Task completed. Final review passed with 0 CRITICAL, 0 MAJOR findings.

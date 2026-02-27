@@ -8,6 +8,8 @@ import {
   appendAction,
   topologicalOrder,
   getTips,
+  findMissingHashes,
+  selectParentHashes,
 } from "./action-dag.js";
 
 const DEFAULT_GROUP_ID = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11";
@@ -286,6 +288,163 @@ describe("Action DAG", () => {
 
       expect(mergeIdx).toBeGreaterThan(branch1Idx);
       expect(mergeIdx).toBeGreaterThan(branch2Idx);
+    });
+  });
+
+  describe("findMissingHashes", () => {
+    it("should return all remote heads when local DAG is empty", () => {
+      const dag = createActionDagState();
+      const remoteHeads = new Set(["aabb", "ccdd"]);
+
+      const missing = findMissingHashes(dag, remoteHeads);
+
+      expect(missing).toEqual(new Set(["aabb", "ccdd"]));
+    });
+
+    it("should return empty set when fully synced", () => {
+      const action = createTestAction({ parentHashes: [GENESIS_HASH] });
+      const dag = appendAction(createActionDagState(), action);
+      const remoteHeads = new Set([toHex(action.hash)]);
+
+      const missing = findMissingHashes(dag, remoteHeads);
+
+      expect(missing.size).toBe(0);
+    });
+
+    it("should return only hashes not present in local DAG", () => {
+      const action = createTestAction({ parentHashes: [GENESIS_HASH] });
+      const dag = appendAction(createActionDagState(), action);
+      const remoteHeads = new Set([toHex(action.hash), "unknownhex"]);
+
+      const missing = findMissingHashes(dag, remoteHeads);
+
+      expect(missing).toEqual(new Set(["unknownhex"]));
+    });
+
+    it("should return empty set when remote heads are empty", () => {
+      const dag = createActionDagState();
+      const missing = findMissingHashes(dag, new Set());
+
+      expect(missing.size).toBe(0);
+    });
+  });
+
+  describe("selectParentHashes", () => {
+    it("should return GENESIS_HASH when DAG has no tips", () => {
+      const dag = createActionDagState();
+
+      const parents = selectParentHashes(dag, null);
+
+      expect(parents).toHaveLength(1);
+      expect(toHex(parents[0])).toBe(toHex(GENESIS_HASH));
+    });
+
+    it("should return the single tip when DAG has one tip", () => {
+      const action = createTestAction({
+        parentHashes: [GENESIS_HASH],
+        timestamp: 1000,
+      });
+      const dag = appendAction(createActionDagState(), action);
+
+      const parents = selectParentHashes(dag, null);
+
+      expect(parents).toHaveLength(1);
+      expect(toHex(parents[0])).toBe(toHex(action.hash));
+    });
+
+    it("should include lastBuiltHead first when it is a current tip", () => {
+      const root = createTestAction({
+        parentHashes: [GENESIS_HASH],
+        timestamp: 1000,
+      });
+      const branch1 = createTestAction({
+        parentHashes: [root.hash],
+        text: "a",
+        timestamp: 2000,
+      });
+      const branch2 = createTestAction({
+        parentHashes: [root.hash],
+        text: "b",
+        timestamp: 2000,
+      });
+
+      let dag = createActionDagState();
+      dag = appendAction(dag, root);
+      dag = appendAction(dag, branch1);
+      dag = appendAction(dag, branch2);
+
+      const parents = selectParentHashes(dag, branch2.hash);
+
+      expect(parents).toHaveLength(2);
+      expect(toHex(parents[0])).toBe(toHex(branch2.hash));
+    });
+
+    it("should ignore lastBuiltHead when it is not a current tip", () => {
+      const root = createTestAction({
+        parentHashes: [GENESIS_HASH],
+        timestamp: 1000,
+      });
+      const child = createTestAction({
+        parentHashes: [root.hash],
+        timestamp: 2000,
+      });
+
+      let dag = createActionDagState();
+      dag = appendAction(dag, root);
+      dag = appendAction(dag, child);
+
+      const parents = selectParentHashes(dag, root.hash);
+
+      expect(parents).toHaveLength(1);
+      expect(toHex(parents[0])).toBe(toHex(child.hash));
+    });
+
+    it("should respect maxParents limit", () => {
+      const root = createTestAction({
+        parentHashes: [GENESIS_HASH],
+        timestamp: 1000,
+      });
+      const b1 = createTestAction({ parentHashes: [root.hash], text: "1", timestamp: 2000 });
+      const b2 = createTestAction({ parentHashes: [root.hash], text: "2", timestamp: 3000 });
+      const b3 = createTestAction({ parentHashes: [root.hash], text: "3", timestamp: 4000 });
+
+      let dag = createActionDagState();
+      dag = appendAction(dag, root);
+      dag = appendAction(dag, b1);
+      dag = appendAction(dag, b2);
+      dag = appendAction(dag, b3);
+
+      const parents = selectParentHashes(dag, null, 2);
+
+      expect(parents).toHaveLength(2);
+    });
+
+    it("should fill remaining slots with oldest tips by timestamp", () => {
+      const root = createTestAction({
+        parentHashes: [GENESIS_HASH],
+        timestamp: 1000,
+      });
+      const early = createTestAction({
+        parentHashes: [root.hash],
+        text: "early",
+        timestamp: 2000,
+      });
+      const late = createTestAction({
+        parentHashes: [root.hash],
+        text: "late",
+        timestamp: 5000,
+      });
+
+      let dag = createActionDagState();
+      dag = appendAction(dag, root);
+      dag = appendAction(dag, early);
+      dag = appendAction(dag, late);
+
+      const parents = selectParentHashes(dag, null);
+
+      expect(parents).toHaveLength(2);
+      expect(toHex(parents[0])).toBe(toHex(early.hash));
+      expect(toHex(parents[1])).toBe(toHex(late.hash));
     });
   });
 });

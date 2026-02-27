@@ -95,6 +95,47 @@ export const topologicalOrder = (
   return result;
 };
 
+export const findMissingHashes = (
+  localDag: ActionDagState,
+  remoteHeads: ReadonlySet<string>,
+): ReadonlySet<string> => {
+  const missing = new Set<string>();
+  for (const hashHex of remoteHeads) {
+    if (!localDag.actions.has(hashHex)) {
+      missing.add(hashHex);
+    }
+  }
+  return missing;
+};
+
+export const selectParentHashes = (
+  dag: ActionDagState,
+  lastBuiltHead: Uint8Array | null,
+  maxParents = 4,
+): readonly Uint8Array[] => {
+  const tips = getTips(dag);
+  if (tips.length === 0) return [GENESIS_HASH];
+
+  const lastBuiltHex = lastBuiltHead ? toHex(lastBuiltHead) : null;
+  const isLastBuiltATip = lastBuiltHex !== null && dag.tipHashes.has(lastBuiltHex);
+
+  const sorted = [...tips].sort((a, b) => {
+    const actionA = dag.actions.get(toHex(a));
+    const actionB = dag.actions.get(toHex(b));
+    if (!actionA || !actionB) return 0;
+    const timeDiff = actionA.timestamp - actionB.timestamp;
+    if (timeDiff !== 0) return timeDiff;
+    return toHex(a).localeCompare(toHex(b));
+  });
+
+  if (isLastBuiltATip) {
+    const rest = sorted.filter((t) => toHex(t) !== lastBuiltHex);
+    return [lastBuiltHead!, ...rest].slice(0, maxParents);
+  }
+
+  return sorted.slice(0, maxParents);
+};
+
 const sortByTimestampThenHash = (
   hashes: string[],
   actions: ReadonlyMap<string, SignedAction>,
