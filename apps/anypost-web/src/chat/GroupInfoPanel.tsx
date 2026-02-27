@@ -1,4 +1,5 @@
 import { createSignal, createMemo, createEffect, For, Show, onCleanup } from "solid-js";
+import { useEscapeLayer } from "../layout/use-escape-layer.js";
 import QRCode from "qrcode";
 import {
   toHex,
@@ -222,6 +223,13 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
   const [addMembersOpen, setAddMembersOpen] = createSignal(false);
   const [contactSearchInput, setContactSearchInput] = createSignal("");
   const [leaveConfirmOpen, setLeaveConfirmOpen] = createSignal(false);
+
+  useEscapeLayer("group-info-leave-confirm", () => setLeaveConfirmOpen(false), leaveConfirmOpen);
+  useEscapeLayer("group-info-add-members", () => {
+    setAddMembersOpen(false);
+    setContactSearchInput("");
+    setAddPeerIdError("");
+  }, addMembersOpen);
 
   const nowInterval = setInterval(() => setNowMs(Date.now()), 1000);
   onCleanup(() => clearInterval(nowInterval));

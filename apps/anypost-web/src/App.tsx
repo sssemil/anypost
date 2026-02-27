@@ -92,6 +92,7 @@ import {
   createMobileViewState,
   transitionMobileView,
 } from "./layout/mobile-view-machine.js";
+import { useEscapeLayer } from "./layout/use-escape-layer.js";
 import {
   serializeGroups,
   deserializeGroups,
@@ -829,6 +830,33 @@ export const App = () => {
       return next;
     });
   };
+
+  const closeRightPanel = () => {
+    const panel = mobileView().rightPanel;
+    if (panel === "dev-tools") {
+      dispatchMobileView({ type: "dev-drawer-closed" });
+    } else if (panel === "group-info") {
+      dispatchMobileView({ type: "group-info-closed" });
+    } else if (panel === "contacts") {
+      dispatchMobileView({ type: "contacts-closed" });
+    } else if (panel === "profile") {
+      dispatchMobileView({ type: "profile-closed" });
+    } else if (panel === "about") {
+      dispatchMobileView({ type: "about-closed" });
+    }
+  };
+
+  useEscapeLayer(
+    "right-panel",
+    closeRightPanel,
+    () => mobileView().rightPanel !== "none",
+  );
+
+  useEscapeLayer(
+    "mobile-back",
+    () => dispatchMobileView({ type: "back-pressed" }),
+    () => mobileView().currentView === "chat" && mobileView().rightPanel === "none",
+  );
 
   const persistContactsBook = (contacts: ContactsBook) => {
     void (async () => {
@@ -5345,20 +5373,7 @@ export const App = () => {
             }
             mobileView={mobileView().currentView}
             rightPanel={mobileView().rightPanel}
-            onRightPanelClose={() => {
-              const panel = mobileView().rightPanel;
-              if (panel === "dev-tools") {
-                dispatchMobileView({ type: "dev-drawer-closed" });
-              } else if (panel === "group-info") {
-                dispatchMobileView({ type: "group-info-closed" });
-              } else if (panel === "contacts") {
-                dispatchMobileView({ type: "contacts-closed" });
-              } else if (panel === "profile") {
-                dispatchMobileView({ type: "profile-closed" });
-              } else if (panel === "about") {
-                dispatchMobileView({ type: "about-closed" });
-              }
-            }}
+            onRightPanelClose={closeRightPanel}
           />
         </Show>
       </Match>

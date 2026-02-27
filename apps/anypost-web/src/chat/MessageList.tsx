@@ -1,4 +1,5 @@
 import { For, Show, createEffect, createSignal, onCleanup } from "solid-js";
+import { useEscapeLayer } from "../layout/use-escape-layer.js";
 import { formatPeerIdForDisplay } from "anypost-core/protocol";
 import type { ChatMessageEvent } from "anypost-core/protocol";
 import { parseQuotedMessage } from "./message-quote.js";
@@ -72,18 +73,8 @@ export const MessageList = (props: MessageListProps) => {
     }
   });
 
-  createEffect(() => {
-    const menu = contextMenu();
-    const panel = seenPanel();
-    if (!menu && !panel) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      setContextMenu(null);
-      setSeenPanel(null);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    onCleanup(() => window.removeEventListener("keydown", onKeyDown));
-  });
+  useEscapeLayer("message-context-menu", () => setContextMenu(null), () => contextMenu() !== null);
+  useEscapeLayer("message-seen-panel", () => setSeenPanel(null), () => seenPanel() !== null);
 
   createEffect(() => {
     const menu = contextMenu();

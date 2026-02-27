@@ -1,4 +1,5 @@
 import { createSignal, Show } from "solid-js";
+import { useEscapeLayer } from "./use-escape-layer.js";
 
 type HeaderBarProps = {
   readonly peerId: string;
@@ -52,6 +53,9 @@ export const HeaderBar = (props: HeaderBarProps) => {
   const [menuOpen, setMenuOpen] = createSignal(false);
   const [leaveConfirmOpen, setLeaveConfirmOpen] = createSignal(false);
 
+  useEscapeLayer("header-leave-confirm", () => setLeaveConfirmOpen(false), leaveConfirmOpen);
+  useEscapeLayer("header-menu", () => setMenuOpen(false), menuOpen);
+
   const copyPeerId = () => {
     navigator.clipboard.writeText(props.peerId).then(() => {
       setCopied(true);
@@ -93,7 +97,11 @@ export const HeaderBar = (props: HeaderBarProps) => {
         </Show>
 
         <button
-          class="flex flex-col flex-1 min-w-0 text-left hover:bg-tg-hover rounded-lg px-2 py-1 -mx-2 -my-1 cursor-pointer"
+          class="flex flex-col flex-1 min-w-0 text-left rounded-lg px-2 py-1 -mx-2 -my-1 disabled:opacity-70 disabled:cursor-default"
+          classList={{
+            "hover:bg-tg-hover cursor-pointer": !!props.activeGroupId,
+          }}
+          disabled={!props.activeGroupId}
           onClick={() => props.onGroupInfoToggle()}
         >
           <span class="flex items-center gap-2 min-w-0">
