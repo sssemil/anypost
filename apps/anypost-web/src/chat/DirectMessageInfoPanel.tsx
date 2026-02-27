@@ -7,6 +7,7 @@ import type {
   ActionPayload,
   SignedActionEnvelope,
 } from "anypost-core/protocol";
+import { ConfirmDialog } from "../layout/ConfirmDialog.js";
 
 type DirectMessageInfoPanelProps = {
   readonly groupId: string | null;
@@ -77,10 +78,12 @@ export const DirectMessageInfoPanel = (props: DirectMessageInfoPanelProps) => {
   const [copiedPeerId, setCopiedPeerId] = createSignal(false);
   const [copiedGroupId, setCopiedGroupId] = createSignal(false);
   const [envelopePage, setEnvelopePage] = createSignal(0);
+  const [blockConfirmOpen, setBlockConfirmOpen] = createSignal(false);
 
   createEffect(() => {
     props.groupId;
     setEnvelopePage(0);
+    setBlockConfirmOpen(false);
   });
 
   const envelopeList = createMemo(() => [...props.actionEnvelopes].reverse());
@@ -247,13 +250,31 @@ export const DirectMessageInfoPanel = (props: DirectMessageInfoPanelProps) => {
         <div class="border-t border-tg-border pt-2">
           <button
             class="w-full text-left py-2.5 px-2 rounded hover:bg-tg-hover cursor-pointer"
-            onClick={() => props.onSetBlocked(props.peerId!, !props.blocked)}
+            onClick={() => {
+              if (props.blocked) {
+                props.onSetBlocked(props.peerId!, false);
+              } else {
+                setBlockConfirmOpen(true);
+              }
+            }}
           >
             <span class={props.blocked ? "text-tg-success text-sm" : "text-tg-danger text-sm"}>
               {props.blocked ? "Unblock user" : "Block user"}
             </span>
           </button>
         </div>
+        <ConfirmDialog
+          open={blockConfirmOpen()}
+          title="Block user"
+          description={`${displayName()} will be blocked from sending you direct messages.`}
+          confirmLabel="Block"
+          confirmVariant="danger"
+          onConfirm={() => {
+            setBlockConfirmOpen(false);
+            props.onSetBlocked(props.peerId!, true);
+          }}
+          onCancel={() => setBlockConfirmOpen(false)}
+        />
       </Show>
 
       <details class="border-t border-tg-border pt-2">

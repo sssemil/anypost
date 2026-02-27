@@ -5312,6 +5312,7 @@ export const App = () => {
           <InfoDialog
             open={mobileView().rightPanel === "group-info"}
             title={actionChainState()?.isDirectMessage ? "Chat Info" : "Group Info"}
+            hideHeader
             onClose={closeRightPanel}
           >
             <Show

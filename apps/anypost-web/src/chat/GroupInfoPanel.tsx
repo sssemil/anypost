@@ -1,5 +1,6 @@
 import { createSignal, createMemo, createEffect, For, Show, onCleanup } from "solid-js";
 import { useEscapeLayer } from "../layout/use-escape-layer.js";
+import { ConfirmDialog } from "../layout/ConfirmDialog.js";
 import QRCode from "qrcode";
 import {
   toHex,
@@ -223,8 +224,12 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
   const [addMembersOpen, setAddMembersOpen] = createSignal(false);
   const [contactSearchInput, setContactSearchInput] = createSignal("");
   const [leaveConfirmOpen, setLeaveConfirmOpen] = createSignal(false);
+  const [pendingConfirm, setPendingConfirm] = createSignal<
+    | { readonly type: "promote" | "demote" | "transfer-owner" | "remove"; readonly member: GroupMember; readonly label: string }
+    | { readonly type: "block-dm-peer"; readonly peerId: string; readonly label: string }
+    | null
+  >(null);
 
-  useEscapeLayer("group-info-leave-confirm", () => setLeaveConfirmOpen(false), leaveConfirmOpen);
   useEscapeLayer("group-info-add-members", () => {
     setAddMembersOpen(false);
     setContactSearchInput("");
@@ -245,6 +250,7 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
     setAddMembersOpen(false);
     setContactSearchInput("");
     setLeaveConfirmOpen(false);
+    setPendingConfirm(null);
   });
 
   createEffect(() => {
@@ -1062,7 +1068,7 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
                         <button
                           class="text-[10px] text-tg-accent hover:text-tg-accent/80 px-1.5 py-0.5 rounded hover:bg-tg-accent/10 cursor-pointer disabled:opacity-50"
                           disabled={roleActionPending()}
-                          onClick={() => handleChangeMemberRole(member, "admin")}
+                          onClick={() => setPendingConfirm({ type: "promote", member, label: memberLabel() })}
                         >
                           Promote
                         </button>
@@ -1071,7 +1077,7 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
                         <button
                           class="text-[10px] text-tg-text-dim hover:text-tg-text px-1.5 py-0.5 rounded hover:bg-tg-text-dim/10 cursor-pointer disabled:opacity-50"
                           disabled={roleActionPending()}
-                          onClick={() => handleChangeMemberRole(member, "member")}
+                          onClick={() => setPendingConfirm({ type: "demote", member, label: memberLabel() })}
                         >
                           Demote
                         </button>
@@ -1080,7 +1086,7 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
                         <button
                           class="text-[10px] text-amber-300 hover:text-amber-200 px-1.5 py-0.5 rounded hover:bg-amber-400/10 cursor-pointer disabled:opacity-50"
                           disabled={roleActionPending()}
-                          onClick={() => handleChangeMemberRole(member, "owner")}
+                          onClick={() => setPendingConfirm({ type: "transfer-owner", member, label: memberLabel() })}
                         >
                           Make Owner
                         </button>
@@ -1088,7 +1094,7 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
                       <Show when={canRemove()}>
                         <button
                           class="text-[10px] text-red-400 hover:text-red-300 px-1.5 py-0.5 rounded hover:bg-red-400/10 cursor-pointer"
-                          onClick={() => props.onRemoveMember(member.publicKey)}
+                          onClick={() => setPendingConfirm({ type: "remove", member, label: memberLabel() })}
                         >
                           Remove
                         </button>
@@ -1156,7 +1162,17 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
                     "border-red-500/40 text-red-400 hover:text-red-300": !props.directMessageBlocked,
                     "border-tg-success/40 text-tg-success hover:text-tg-success/80": !!props.directMessageBlocked,
                   }}
-                  onClick={() => props.onSetDirectMessageBlocked?.(props.directMessagePeerId!, !props.directMessageBlocked)}
+                  onClick={() => {
+                    if (props.directMessageBlocked) {
+                      props.onSetDirectMessageBlocked?.(props.directMessagePeerId!, false);
+                    } else {
+                      setPendingConfirm({
+                        type: "block-dm-peer",
+                        peerId: props.directMessagePeerId!,
+                        label: props.directMessagePeerLabel ?? truncatePeerId(props.directMessagePeerId!),
+                      });
+                    }
+                  }}
                 >
                   {props.directMessageBlocked ? "Unblock peer" : "Block peer"}
                 </button>
@@ -1180,33 +1196,79 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
           </button>
         </div>
 
-        <Show when={leaveConfirmOpen()}>
-          <div class="fixed inset-0 z-40 bg-black/70 flex items-center justify-center p-4">
-            <div class="w-full max-w-sm rounded-lg border border-tg-border bg-tg-sidebar p-4 space-y-4">
-              <h4 class="text-sm font-semibold text-tg-text">Leave group</h4>
-              <p class="text-xs text-tg-text-dim">
-                You will be removed from this group and lose access to its messages.
-              </p>
-              <div class="flex gap-2 justify-end">
-                <button
-                  class="px-3 py-1.5 rounded-lg border border-tg-border text-xs text-tg-text hover:bg-tg-hover cursor-pointer"
-                  onClick={() => setLeaveConfirmOpen(false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  class="px-3 py-1.5 rounded-lg bg-tg-danger text-white text-xs hover:bg-tg-danger/80 cursor-pointer"
-                  onClick={() => {
-                    setLeaveConfirmOpen(false);
-                    props.onLeaveGroup();
-                  }}
-                >
-                  Leave group
-                </button>
-              </div>
-            </div>
-          </div>
-        </Show>
+        <ConfirmDialog
+          open={leaveConfirmOpen()}
+          title="Leave group"
+          description="You will be removed from this group and lose access to its messages."
+          confirmLabel="Leave group"
+          confirmVariant="danger"
+          onConfirm={() => {
+            setLeaveConfirmOpen(false);
+            props.onLeaveGroup();
+          }}
+          onCancel={() => setLeaveConfirmOpen(false)}
+        />
+
+        <ConfirmDialog
+          open={pendingConfirm() !== null}
+          title={(() => {
+            const p = pendingConfirm();
+            if (!p) return "";
+            switch (p.type) {
+              case "promote": return "Promote to admin";
+              case "demote": return "Demote to member";
+              case "transfer-owner": return "Transfer ownership";
+              case "remove": return "Remove member";
+              case "block-dm-peer": return "Block peer";
+            }
+          })()}
+          description={(() => {
+            const p = pendingConfirm();
+            if (!p) return "";
+            switch (p.type) {
+              case "promote": return `${p.label} will be able to approve members and manage the group.`;
+              case "demote": return `${p.label} will lose admin privileges.`;
+              case "transfer-owner": return `${p.label} will become the group owner. You will be demoted to admin.`;
+              case "remove": return `${p.label} will be removed from the group.`;
+              case "block-dm-peer": return `${p.label} will be blocked from sending you direct messages.`;
+            }
+          })()}
+          confirmLabel={(() => {
+            const p = pendingConfirm();
+            if (!p) return "";
+            switch (p.type) {
+              case "promote": return "Promote";
+              case "demote": return "Demote";
+              case "transfer-owner": return "Transfer";
+              case "remove": return "Remove";
+              case "block-dm-peer": return "Block";
+            }
+          })()}
+          confirmVariant={(() => {
+            const p = pendingConfirm();
+            if (!p) return "danger" as const;
+            switch (p.type) {
+              case "promote": return "default" as const;
+              case "demote": return "warning" as const;
+              case "transfer-owner": return "warning" as const;
+              case "remove": return "danger" as const;
+              case "block-dm-peer": return "danger" as const;
+            }
+          })()}
+          onConfirm={() => {
+            const p = pendingConfirm();
+            setPendingConfirm(null);
+            if (!p) return;
+            switch (p.type) {
+              case "promote": handleChangeMemberRole(p.member, "admin"); break;
+              case "demote": handleChangeMemberRole(p.member, "member"); break;
+              case "transfer-owner": handleChangeMemberRole(p.member, "owner"); break;
+              case "remove": props.onRemoveMember(p.member.publicKey); break;
+              case "block-dm-peer": props.onSetDirectMessageBlocked?.(p.peerId, true); break;
+            }
+          }}
+          onCancel={() => setPendingConfirm(null)}
+        />
 
         <details class="border-t border-tg-border pt-2">
           <summary class="text-xs text-tg-text-dim cursor-pointer px-2 py-1.5 hover:bg-tg-hover rounded">
