@@ -36,6 +36,7 @@ type HeaderBarProps = {
   readonly onGroupInfoToggle: () => void;
   readonly onFocusComposer: () => void;
   readonly onToggleComposerKeyboard: () => void;
+  readonly onLeaveGroup: () => void;
 };
 
 const statusLabel = (status: HeaderBarProps["connectionStatus"]): string => {
@@ -49,6 +50,7 @@ const statusLabel = (status: HeaderBarProps["connectionStatus"]): string => {
 export const HeaderBar = (props: HeaderBarProps) => {
   const [copied, setCopied] = createSignal(false);
   const [menuOpen, setMenuOpen] = createSignal(false);
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = createSignal(false);
 
   const copyPeerId = () => {
     navigator.clipboard.writeText(props.peerId).then(() => {
@@ -193,6 +195,49 @@ export const HeaderBar = (props: HeaderBarProps) => {
             >
               About
             </button>
+            <Show when={props.activeGroupId}>
+              <button
+                class="w-full text-left px-3 py-2 text-xs text-tg-danger hover:bg-tg-hover cursor-pointer border-t border-tg-border"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setLeaveConfirmOpen(true);
+                }}
+              >
+                {props.activeGroupIsDirectMessage ? "Delete chat" : "Leave group"}
+              </button>
+            </Show>
+          </div>
+        </Show>
+
+        <Show when={leaveConfirmOpen()}>
+          <div class="fixed inset-0 z-40 bg-black/70 flex items-center justify-center p-4">
+            <div class="w-full max-w-sm rounded-lg border border-tg-border bg-tg-sidebar p-4 space-y-4">
+              <h4 class="text-sm font-semibold text-tg-text">
+                {props.activeGroupIsDirectMessage ? "Delete chat" : "Leave group"}
+              </h4>
+              <p class="text-xs text-tg-text-dim">
+                {props.activeGroupIsDirectMessage
+                  ? "This will delete the chat and remove all local messages. This cannot be undone."
+                  : "You will be removed from this group and lose access to its messages."}
+              </p>
+              <div class="flex gap-2 justify-end">
+                <button
+                  class="px-3 py-1.5 rounded-lg border border-tg-border text-xs text-tg-text hover:bg-tg-hover cursor-pointer"
+                  onClick={() => setLeaveConfirmOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  class="px-3 py-1.5 rounded-lg bg-tg-danger text-white text-xs hover:bg-tg-danger/80 cursor-pointer"
+                  onClick={() => {
+                    setLeaveConfirmOpen(false);
+                    props.onLeaveGroup();
+                  }}
+                >
+                  {props.activeGroupIsDirectMessage ? "Delete chat" : "Leave group"}
+                </button>
+              </div>
+            </div>
           </div>
         </Show>
       </div>

@@ -4934,6 +4934,10 @@ export const App = () => {
                 onGroupInfoToggle={() => dispatchMobileView({ type: "group-info-toggled" })}
                 onFocusComposer={focusComposerFromMenu}
                 onToggleComposerKeyboard={toggleComposerKeyboardFromMenu}
+                onLeaveGroup={() => {
+                  const gid = groupState().activeGroupId;
+                  if (gid) handleLeaveGroup(gid);
+                }}
               />
             }
             sidebar={
@@ -4962,7 +4966,6 @@ export const App = () => {
                 pendingDirectMessageRequests={pendingDirectMessageRequestRows()}
                 onAcceptDirectMessageRequest={handleAcceptDirectMessageRequest}
                 onDeclineDirectMessageRequest={handleDeclineDirectMessageRequest}
-                onLeaveGroup={handleLeaveGroup}
               />
             }
             messageList={
@@ -5296,6 +5299,10 @@ export const App = () => {
                         ? handleRenameGroup
                         : null
                     }
+                    onLeaveGroup={() => {
+                      const gid = groupState().activeGroupId;
+                      if (gid) handleLeaveGroup(gid);
+                    }}
                   />
                 }
               >

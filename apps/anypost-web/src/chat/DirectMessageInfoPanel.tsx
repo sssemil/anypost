@@ -21,6 +21,17 @@ type DirectMessageInfoPanelProps = {
   readonly onSetBlocked: (peerId: string, blocked: boolean) => void;
 };
 
+const AVATAR_COLORS = [
+  "bg-red-600", "bg-blue-600", "bg-green-600", "bg-purple-600",
+  "bg-orange-600", "bg-teal-600", "bg-pink-600", "bg-indigo-600",
+];
+
+const avatarColor = (id: string): string => {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0;
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+};
+
 const truncatePeerId = (peerId: string): string =>
   peerId.length > 20 ? `${peerId.slice(0, 12)}...${peerId.slice(-6)}` : peerId;
 
@@ -63,6 +74,7 @@ const summarizePayload = (payload: ActionPayload): string => {
 };
 
 export const DirectMessageInfoPanel = (props: DirectMessageInfoPanelProps) => {
+  const [copiedPeerId, setCopiedPeerId] = createSignal(false);
   const [copiedGroupId, setCopiedGroupId] = createSignal(false);
   const [envelopePage, setEnvelopePage] = createSignal(0);
 
@@ -115,6 +127,20 @@ export const DirectMessageInfoPanel = (props: DirectMessageInfoPanelProps) => {
       });
   });
 
+  const displayName = () =>
+    props.peerLabel ?? (props.peerId ? truncatePeerId(props.peerId) : "Direct Message");
+
+  const avatarLetter = () => displayName().charAt(0).toUpperCase();
+  const avatarBg = () => avatarColor(props.peerId ?? props.groupId ?? "dm");
+
+  const copyPeerId = () => {
+    if (!props.peerId) return;
+    navigator.clipboard.writeText(props.peerId).then(() => {
+      setCopiedPeerId(true);
+      setTimeout(() => setCopiedPeerId(false), 2000);
+    }).catch(() => {});
+  };
+
   const copyGroupId = () => {
     if (!props.groupId) return;
     navigator.clipboard.writeText(props.groupId).then(() => {
@@ -125,64 +151,82 @@ export const DirectMessageInfoPanel = (props: DirectMessageInfoPanelProps) => {
 
   return (
     <div class="space-y-4">
-      <div>
-        <h3 class="text-lg font-semibold text-tg-text">
-          {props.peerLabel ?? (props.peerId ? truncatePeerId(props.peerId) : "Direct Message")}
-        </h3>
-      </div>
-
-      <Show when={props.groupId}>
-        <button
-          class="flex items-center gap-2 w-full text-left py-1.5 px-2 rounded hover:bg-tg-hover cursor-pointer"
-          onClick={copyGroupId}
-        >
-          <span class="text-xs text-tg-text-dim shrink-0">DM ID</span>
-          <span class="font-mono text-xs text-tg-text truncate">{props.groupId}</span>
-          <span class="text-tg-accent text-[10px] shrink-0 ml-auto">
-            {copiedGroupId() ? "Copied!" : "Copy"}
-          </span>
-        </button>
-      </Show>
-
-      <div class="rounded border border-tg-border bg-tg-hover px-2 py-2 space-y-2">
-        <h4 class="text-xs font-medium text-tg-text-dim uppercase tracking-wider">
-          Direct Peer
-        </h4>
-        <div class="text-xs text-tg-text">
-          <span class="text-tg-text-dim">Peer:</span>{" "}
-          <span class="font-mono">{props.peerLabel ?? (props.peerId ? truncatePeerId(props.peerId) : "--")}</span>
+      <div class="flex flex-col items-center pt-2 pb-1">
+        <div class={`w-16 h-16 rounded-full flex items-center justify-center text-white font-semibold text-xl ${avatarBg()}`}>
+          {avatarLetter()}
         </div>
-        <Show when={props.peerPresenceLabel}>
-          <div
-            class="text-[11px]"
+        <h3 class="text-lg font-semibold text-tg-text mt-3 text-center">
+          {displayName()}
+        </h3>
+        <div class="flex items-center gap-1.5 mt-1">
+          <span
+            class="inline-block w-2 h-2 rounded-full"
+            classList={{
+              "bg-tg-success": props.peerPresenceTone === "online",
+              "bg-amber-400": props.peerPresenceTone === "pending",
+              "bg-gray-500": !props.peerPresenceTone || props.peerPresenceTone === "offline",
+            }}
+          />
+          <span
+            class="text-xs"
             classList={{
               "text-tg-success": props.peerPresenceTone === "online",
               "text-amber-300": props.peerPresenceTone === "pending",
               "text-tg-text-dim": !props.peerPresenceTone || props.peerPresenceTone === "offline",
             }}
           >
-            {props.peerPresenceLabel}
-          </div>
-        </Show>
+            {props.peerPresenceLabel ?? "offline"}
+          </span>
+        </div>
+      </div>
+
+      <div class="space-y-0.5">
         <Show when={props.peerId}>
           <button
-            class="text-xs px-2.5 py-1 rounded border cursor-pointer"
-            classList={{
-              "border-red-500/40 text-red-400 hover:text-red-300": !props.blocked,
-              "border-tg-success/40 text-tg-success hover:text-tg-success/80": props.blocked,
-            }}
-            onClick={() => props.onSetBlocked(props.peerId!, !props.blocked)}
+            class="flex items-center gap-2 w-full text-left py-2 px-2 rounded hover:bg-tg-hover cursor-pointer"
+            onClick={copyPeerId}
           >
-            {props.blocked ? "Unblock peer" : "Block peer"}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="w-4 h-4 text-tg-text-dim shrink-0">
+              <path d="M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM12 14a7 7 0 0 0-7 7h14a7 7 0 0 0-7-7Z" />
+            </svg>
+            <div class="flex-1 min-w-0">
+              <div class="text-[10px] text-tg-text-dim">Peer ID</div>
+              <div class="font-mono text-xs text-tg-text truncate">{props.peerId}</div>
+            </div>
+            <span class="text-tg-accent text-[10px] shrink-0">
+              {copiedPeerId() ? "Copied!" : "Copy"}
+            </span>
+          </button>
+        </Show>
+
+        <Show when={props.groupId}>
+          <button
+            class="flex items-center gap-2 w-full text-left py-2 px-2 rounded hover:bg-tg-hover cursor-pointer"
+            onClick={copyGroupId}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="w-4 h-4 text-tg-text-dim shrink-0">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" />
+            </svg>
+            <div class="flex-1 min-w-0">
+              <div class="text-[10px] text-tg-text-dim">DM ID</div>
+              <div class="font-mono text-xs text-tg-text truncate">{props.groupId}</div>
+            </div>
+            <span class="text-tg-accent text-[10px] shrink-0">
+              {copiedGroupId() ? "Copied!" : "Copy"}
+            </span>
           </button>
         </Show>
       </div>
 
-      <div class="rounded border border-tg-border bg-tg-hover px-2 py-2 space-y-1 text-[11px]">
-        <div class="flex justify-between gap-2">
+      <div class="px-2 space-y-1.5 text-[11px]">
+        <div class="flex items-center justify-between gap-2">
           <span class="text-tg-text-dim">Handshake</span>
-          <span class={props.handshakeComplete ? "text-tg-success" : "text-amber-300"}>
-            {props.handshakeComplete ? "Complete" : "Waiting"}
+          <span class="flex items-center gap-1.5">
+            <Show when={props.handshakeComplete} fallback={
+              <span class="text-amber-300">Waiting...</span>
+            }>
+              <span class="text-tg-success">Complete</span>
+            </Show>
           </span>
         </div>
         <Show when={!props.handshakeComplete && props.missingPeerIds.length > 0}>
@@ -199,75 +243,90 @@ export const DirectMessageInfoPanel = (props: DirectMessageInfoPanelProps) => {
         </Show>
       </div>
 
-      <div>
-        <h4 class="text-xs font-medium text-tg-text-dim uppercase tracking-wider mb-2">
-          Event Envelopes ({props.actionEnvelopes.length})
-        </h4>
-        <Show
-          when={props.actionEnvelopes.length > 0}
-          fallback={<p class="text-sm text-tg-text-dim">No envelopes yet.</p>}
-        >
-          <div class="space-y-2">
-            <For each={envelopeRows()}>
-              {(row) => (
-                <div class="rounded border border-tg-border bg-tg-hover px-2 py-2">
-                  <div class="flex items-center justify-between gap-2">
-                    <span
-                      class="text-[10px] uppercase tracking-wide"
-                      classList={{
-                        "text-tg-accent": row.valid,
-                        "text-red-400": !row.valid,
-                      }}
-                    >
-                      {row.actionType}
-                    </span>
-                    <code class="text-[10px] text-tg-text">
-                      {truncateHex(row.hashHex)}
-                    </code>
-                  </div>
-                  <p class="text-xs text-tg-text mt-1">{row.summary}</p>
-                  <p class="text-[10px] text-tg-text-dim mt-1">
-                    {row.timestampLabel} • Author {row.authorLabel}
-                  </p>
-                  <details class="mt-1">
-                    <summary class="text-[10px] text-tg-text-dim cursor-pointer">Raw envelope</summary>
-                    <div class="mt-1 space-y-1">
-                      <p class="text-[10px] text-tg-text-dim">
-                        Signature bytes: {row.signatureLength} • Signed bytes: {row.signedBytesLength}
-                      </p>
-                      <code class="block break-all text-[10px] text-tg-text">{row.hashHex}</code>
-                    </div>
-                  </details>
-                </div>
-              )}
-            </For>
-          </div>
+      <Show when={props.peerId}>
+        <div class="border-t border-tg-border pt-2">
+          <button
+            class="w-full text-left py-2.5 px-2 rounded hover:bg-tg-hover cursor-pointer"
+            onClick={() => props.onSetBlocked(props.peerId!, !props.blocked)}
+          >
+            <span class={props.blocked ? "text-tg-success text-sm" : "text-tg-danger text-sm"}>
+              {props.blocked ? "Unblock user" : "Block user"}
+            </span>
+          </button>
+        </div>
+      </Show>
 
-          <Show when={envelopePageCount() > 1}>
-            <div class="flex items-center justify-between mt-2">
-              <span class="text-[10px] text-tg-text-dim">
-                Page {currentEnvelopePage() + 1} of {envelopePageCount()}
-              </span>
-              <div class="flex gap-2">
-                <button
-                  class="text-[10px] px-2 py-1 rounded border border-tg-border text-tg-text-dim hover:text-tg-text cursor-pointer disabled:opacity-50"
-                  disabled={currentEnvelopePage() === 0}
-                  onClick={() => setEnvelopePage((p) => Math.max(0, p - 1))}
-                >
-                  Prev
-                </button>
-                <button
-                  class="text-[10px] px-2 py-1 rounded border border-tg-border text-tg-text-dim hover:text-tg-text cursor-pointer disabled:opacity-50"
-                  disabled={currentEnvelopePage() >= envelopePageCount() - 1}
-                  onClick={() => setEnvelopePage((p) => Math.min(envelopePageCount() - 1, p + 1))}
-                >
-                  Next
-                </button>
-              </div>
+      <details class="border-t border-tg-border pt-2">
+        <summary class="text-xs text-tg-text-dim cursor-pointer px-2 py-1.5 hover:bg-tg-hover rounded">
+          Developer Info ({props.actionEnvelopes.length} envelopes)
+        </summary>
+        <div class="mt-2 space-y-2">
+          <Show
+            when={props.actionEnvelopes.length > 0}
+            fallback={<p class="text-sm text-tg-text-dim px-2">No envelopes yet.</p>}
+          >
+            <div class="space-y-2">
+              <For each={envelopeRows()}>
+                {(row) => (
+                  <div class="rounded border border-tg-border bg-tg-hover px-2 py-2">
+                    <div class="flex items-center justify-between gap-2">
+                      <span
+                        class="text-[10px] uppercase tracking-wide"
+                        classList={{
+                          "text-tg-accent": row.valid,
+                          "text-red-400": !row.valid,
+                        }}
+                      >
+                        {row.actionType}
+                      </span>
+                      <code class="text-[10px] text-tg-text">
+                        {truncateHex(row.hashHex)}
+                      </code>
+                    </div>
+                    <p class="text-xs text-tg-text mt-1">{row.summary}</p>
+                    <p class="text-[10px] text-tg-text-dim mt-1">
+                      {row.timestampLabel} • Author {row.authorLabel}
+                    </p>
+                    <details class="mt-1">
+                      <summary class="text-[10px] text-tg-text-dim cursor-pointer">Raw envelope</summary>
+                      <div class="mt-1 space-y-1">
+                        <p class="text-[10px] text-tg-text-dim">
+                          Signature bytes: {row.signatureLength} • Signed bytes: {row.signedBytesLength}
+                        </p>
+                        <code class="block break-all text-[10px] text-tg-text">{row.hashHex}</code>
+                      </div>
+                    </details>
+                  </div>
+                )}
+              </For>
             </div>
+
+            <Show when={envelopePageCount() > 1}>
+              <div class="flex items-center justify-between mt-2">
+                <span class="text-[10px] text-tg-text-dim">
+                  Page {currentEnvelopePage() + 1} of {envelopePageCount()}
+                </span>
+                <div class="flex gap-2">
+                  <button
+                    class="text-[10px] px-2 py-1 rounded border border-tg-border text-tg-text-dim hover:text-tg-text cursor-pointer disabled:opacity-50"
+                    disabled={currentEnvelopePage() === 0}
+                    onClick={() => setEnvelopePage((p) => Math.max(0, p - 1))}
+                  >
+                    Prev
+                  </button>
+                  <button
+                    class="text-[10px] px-2 py-1 rounded border border-tg-border text-tg-text-dim hover:text-tg-text cursor-pointer disabled:opacity-50"
+                    disabled={currentEnvelopePage() >= envelopePageCount() - 1}
+                    onClick={() => setEnvelopePage((p) => Math.min(envelopePageCount() - 1, p + 1))}
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </Show>
           </Show>
-        </Show>
-      </div>
+        </div>
+      </details>
     </div>
   );
 };

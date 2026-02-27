@@ -36,7 +36,6 @@ type GroupSidebarProps = {
   }[];
   readonly onAcceptDirectMessageRequest: (requestId: string) => Promise<string | null>;
   readonly onDeclineDirectMessageRequest: (requestId: string) => void;
-  readonly onLeaveGroup: (groupId: string) => void;
 };
 
 const AVATAR_COLORS = [
@@ -375,13 +374,10 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
           </div>
         }>
           {(group) => {
-            const [hovered, setHovered] = createSignal(false);
             const isActive = () => props.activeGroupId === group.groupId;
 
             return (
               <div
-                onMouseEnter={() => setHovered(true)}
-                onMouseLeave={() => setHovered(false)}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => props.onSelectGroup(group.groupId)}
                 class="flex items-center gap-3 px-3 py-2.5 cursor-pointer border-l-3 select-none"
@@ -438,18 +434,6 @@ export const GroupSidebar = (props: GroupSidebarProps) => {
                   </div>
                 </div>
 
-                <Show when={hovered()}>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      props.onLeaveGroup(group.groupId);
-                    }}
-                    class="text-tg-text-dim hover:text-tg-danger text-sm p-0.5 shrink-0"
-                    title="Leave group"
-                  >
-                    &times;
-                  </button>
-                </Show>
               </div>
             );
           }}
