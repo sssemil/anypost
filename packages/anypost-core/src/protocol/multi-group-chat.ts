@@ -330,6 +330,7 @@ export type MultiGroupChat = {
   readonly removeMember: (groupId: string, memberPublicKey: Uint8Array) => Promise<void>;
   readonly requestJoin: (groupId: string) => Promise<void>;
   readonly getActionChainState: (groupId: string) => ActionChainGroupState | null;
+  readonly getDecodedActions: (groupId: string) => readonly SignedAction[];
   readonly getActionChainEnvelopes: (groupId: string) => readonly SignedActionEnvelope[];
   readonly getAllActionChainEnvelopes: () => ReadonlyMap<string, readonly SignedActionEnvelope[]>;
   readonly loadActionChain: (groupId: string, envelopes: readonly SignedActionEnvelope[]) => void;
@@ -5125,6 +5126,11 @@ export const createMultiGroupChat = async (
       new Map(connectionReasonCounts),
     clearConnectionReasonCounts: () => {
       connectionReasonCounts.clear();
+    },
+    getDecodedActions: (groupId: string): readonly SignedAction[] => {
+      const dag = actionDags.get(groupId);
+      if (!dag) return [];
+      return topologicalOrder(dag);
     },
     getActionChainEnvelopes: (groupId: string): readonly SignedActionEnvelope[] =>
       getOrderedEnvelopes(groupId),

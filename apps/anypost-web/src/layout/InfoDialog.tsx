@@ -13,11 +13,11 @@ export const InfoDialog = (props: InfoDialogProps) => {
     <Show when={props.open}>
       <div class="fixed inset-0 z-30 flex items-start justify-center">
         <div
-          class="absolute inset-0 bg-black/50 hidden sm:block"
+          class="absolute inset-0 hidden sm:block"
           onClick={() => props.onClose()}
         />
 
-        <div class="fixed inset-0 flex flex-col bg-tg-sidebar sm:static sm:mt-[7vh] sm:w-full sm:max-w-lg sm:max-h-[85vh] sm:rounded-xl sm:border sm:border-tg-border sm:shadow-2xl sm:flex-col">
+        <div class="relative z-10 fixed inset-0 flex flex-col bg-tg-sidebar sm:static sm:mt-[7vh] sm:w-full sm:max-w-lg sm:max-h-[85vh] sm:rounded-xl sm:border sm:border-tg-border sm:shadow-2xl sm:flex-col">
           <div
             class="flex items-center justify-between px-4 py-3 border-b border-tg-border shrink-0"
             style={{ "padding-top": "calc(env(safe-area-inset-top, 0px) + 0.75rem)" }}

@@ -39,7 +39,6 @@ import type {
   RelayContactBook,
   PinnedPeerWatchdogState,
   ChatMessageEvent,
-  SignedAction,
   CallState,
   MediaSignalEvent,
 } from "anypost-core/protocol";
@@ -1449,8 +1448,8 @@ export const App = () => {
     const historical = options?.historical ?? false;
     const eventType = historical ? "message-sent" : "message-received";
     const chainState = currentChat.getActionChainState(groupId);
-    const envelopes = currentChat.getActionChainEnvelopes(groupId);
-    if (envelopes.length === 0) return;
+    const decodedActions = currentChat.getDecodedActions(groupId);
+    if (decodedActions.length === 0) return;
     const ownKeyHex = ownPublicKeyHex();
     const canHydrateMessages = chainState
       ? (chainState.isDirectMessage
@@ -1508,17 +1507,6 @@ export const App = () => {
       readonly deleterPublicKeyHex: string;
       readonly deletedAt: number;
     }>();
-    const decodedActions: SignedAction[] = [];
-    for (const envelope of envelopes) {
-      const decoded = verifyAndDecodeAction(envelope);
-      if (!decoded.success) continue;
-      decodedActions.push(decoded.data);
-    }
-    decodedActions
-      .sort((left, right) => {
-        if (left.timestamp !== right.timestamp) return left.timestamp - right.timestamp;
-        return left.id.localeCompare(right.id);
-      });
 
     for (const action of decodedActions) {
       if (action.payload.type === "message") {
@@ -1720,9 +1708,9 @@ export const App = () => {
           messages: nextMessages,
         });
         const nextState: MultiGroupState = { ...state, groups };
-        savePersistedGroups(nextState, chat);
         return nextState;
       });
+      schedulePersist();
     }
   };
 
@@ -1773,6 +1761,16 @@ export const App = () => {
     });
   });
 
+  let persistScheduled = false;
+  const schedulePersist = () => {
+    if (persistScheduled) return;
+    persistScheduled = true;
+    queueMicrotask(() => {
+      persistScheduled = false;
+      savePersistedGroups(groupState(), chat);
+    });
+  };
+
   const dispatchGroupEvent = (event: Parameters<typeof transitionMultiGroup>[1]) => {
     setGroupState((s) => {
       const next = transitionMultiGroup(s, event);
@@ -1783,9 +1781,9 @@ export const App = () => {
         prevGroupCount: s.groups.size,
         nextGroupCount: next.groups.size,
       });
-      savePersistedGroups(next, chat);
       return next;
     });
+    schedulePersist();
   };
 
   const setCallErrorForGroup = (groupId: string, error: string | null) => {

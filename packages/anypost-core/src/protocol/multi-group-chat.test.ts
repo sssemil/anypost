@@ -505,6 +505,24 @@ describe("MultiGroupChat", () => {
     expect(envelopes[0].hash).toBeInstanceOf(Uint8Array);
   });
 
+  it("should return decoded actions in topological order via getDecodedActions", async () => {
+    const { chat } = await createTestNode();
+
+    const { groupId } = await chat.createGroup("Test Group");
+    await chat.renameGroup(groupId, "New Name");
+
+    const decoded = chat.getDecodedActions(groupId);
+    expect(decoded.length).toBe(2);
+    expect(decoded[0].payload.type).toBe("group-created");
+    expect(decoded[1].payload.type).toBe("group-renamed");
+  });
+
+  it("should return empty array for unknown group from getDecodedActions", async () => {
+    const { chat } = await createTestNode();
+
+    expect(chat.getDecodedActions("nonexistent-group")).toEqual([]);
+  });
+
   it("should rename a group via action chain", async () => {
     const { chat } = await createTestNode();
     const { groupId } = await chat.createGroup("Old Name");
