@@ -137,13 +137,22 @@ export {
   signSyncResponse,
   verifySyncResponse,
   getMissingEnvelopesForKnownHash,
+  encodeHeadsAnnounceSigningPayload,
+  signHeadsAnnounce,
+  verifyHeadsAnnounce,
+  collectInlineEnvelopes,
+  shouldTriggerMerge,
   INCOMING_SYNC_REQUEST_MAX,
   OUTGOING_SYNC_REQUEST_MAX,
   FULL_SYNC_FALLBACK_COOLDOWN_MS,
+  MAX_INLINE_ENVELOPES,
+  MAX_INLINE_BYTES,
+  MERGE_TIP_THRESHOLD,
 } from "./sync-protocol.js";
 export type {
   SyncRequestPayload,
   SyncResponsePayload,
+  HeadsAnnouncePayload,
 } from "./sync-protocol.js";
 export { createMultiGroupChat } from "./multi-group-chat.js";
 export type {
@@ -200,6 +209,7 @@ export {
   getTips,
   findMissingHashes,
   selectParentHashes,
+  findMissingParentHashes,
 } from "./action-dag.js";
 export type { ActionDagState } from "./action-dag.js";
 export {
