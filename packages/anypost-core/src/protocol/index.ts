@@ -198,12 +198,17 @@ export {
   appendAction,
   topologicalOrder,
   getTips,
+  findMissingHashes,
+  selectParentHashes,
 } from "./action-dag.js";
 export type { ActionDagState } from "./action-dag.js";
 export {
   createActionChainGroupState,
   applyAction,
   deriveGroupState,
+  processBulkSignedActions,
+  validateMergePreConditions,
+  validateParentHashCount,
 } from "./action-chain-state.js";
 export { encodeGroupInvite, decodeGroupInvite } from "./group-invite.js";
 export type { GroupInvite } from "./group-invite.js";

@@ -3,7 +3,11 @@ import { toHex } from "./action-chain.js";
 import type {
   ActionChainGroupState,
   SignedAction,
+  SignedActionEnvelope,
 } from "./action-chain.js";
+import { verifyAndDecodeAction } from "./action-signing.js";
+import type { ActionDagState } from "./action-dag.js";
+import { appendAction, topologicalOrder } from "./action-dag.js";
 
 export const createActionChainGroupState = (
   groupId: string,
@@ -410,6 +414,79 @@ const applyMerge = (
   lastMergeTimestampByAuthor.set(authorHex, action.timestamp);
 
   return Result.success({ ...state, lastMergeTimestampByAuthor });
+};
+
+const MERGE_RATE_LIMIT_MS = 60_000;
+const MAX_PARENT_HASHES = 4;
+
+export const validateMergePreConditions = (
+  action: SignedAction,
+  dag: ActionDagState,
+  groupState: ActionChainGroupState,
+): Result<void, Error> => {
+  const tipReferenceCount = action.parentHashes.filter(
+    (ph) => dag.tipHashes.has(toHex(ph)),
+  ).length;
+  if (tipReferenceCount < 2) {
+    return Result.failure(new Error("Merge must reference at least 2 current tips"));
+  }
+
+  const authorHex = toHex(action.authorPublicKey);
+  const lastMerge = groupState.lastMergeTimestampByAuthor.get(authorHex);
+  if (lastMerge !== undefined && action.timestamp - lastMerge < MERGE_RATE_LIMIT_MS) {
+    return Result.failure(new Error("Merge rate limit exceeded"));
+  }
+
+  return Result.success(undefined);
+};
+
+export const validateParentHashCount = (
+  action: SignedAction,
+): Result<void, Error> => {
+  if (action.parentHashes.length > MAX_PARENT_HASHES) {
+    return Result.failure(
+      new Error(`Action has ${action.parentHashes.length} parent hashes, max is ${MAX_PARENT_HASHES}`),
+    );
+  }
+  return Result.success(undefined);
+};
+
+export const processBulkSignedActions = (
+  envelopes: readonly SignedActionEnvelope[],
+  dag: ActionDagState,
+  groupState: ActionChainGroupState,
+): {
+  readonly dag: ActionDagState;
+  readonly groupState: ActionChainGroupState;
+  readonly accepted: readonly SignedAction[];
+} => {
+  let currentDag = dag;
+  const accepted: SignedAction[] = [];
+
+  for (const envelope of envelopes) {
+    const result = verifyAndDecodeAction(envelope);
+    if (!result.success) continue;
+
+    const action = result.data;
+    const newDag = appendAction(currentDag, action);
+    if (newDag !== currentDag) {
+      currentDag = newDag;
+      accepted.push(action);
+    }
+  }
+
+  if (accepted.length === 0) {
+    return { dag, groupState, accepted: [] };
+  }
+
+  const ordered = topologicalOrder(currentDag);
+  const derived = deriveGroupState(groupState.groupId, ordered);
+
+  return {
+    dag: currentDag,
+    groupState: derived.success ? derived.data : groupState,
+    accepted,
+  };
 };
 
 const isAdmin = (state: ActionChainGroupState, publicKeyHex: string): boolean => {

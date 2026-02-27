@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { generateAccountKey } from "../crypto/identity.js";
 import { GENESIS_HASH, toHex } from "./action-chain.js";
-import type { SignedAction, ActionPayload } from "./action-chain.js";
+import type { SignedAction, ActionPayload, SignedActionEnvelope } from "./action-chain.js";
 import {
   createSignedActionEnvelope,
   verifyAndDecodeAction,
@@ -10,6 +10,9 @@ import {
   createActionChainGroupState,
   applyAction,
   deriveGroupState,
+  processBulkSignedActions,
+  validateMergePreConditions,
+  validateParentHashCount,
 } from "./action-chain-state.js";
 import { createActionDagState, appendAction, topologicalOrder } from "./action-dag.js";
 import type { AccountKey } from "../crypto/identity.js";
@@ -23,19 +26,27 @@ const pubKey = (key: AccountKey): Uint8Array<ArrayBuffer> => {
   return view;
 };
 
-const makeAction = (options: {
+const makeEnvelope = (options: {
   readonly accountKey: AccountKey;
   readonly parentHashes: readonly Uint8Array[];
   readonly payload: ActionPayload;
   readonly timestamp?: number;
-}): SignedAction => {
-  const envelope = createSignedActionEnvelope({
+}): SignedActionEnvelope =>
+  createSignedActionEnvelope({
     accountKey: options.accountKey,
     groupId: DEFAULT_GROUP_ID,
     parentHashes: options.parentHashes,
     payload: options.payload,
     timestamp: options.timestamp ?? Date.now(),
   });
+
+const makeAction = (options: {
+  readonly accountKey: AccountKey;
+  readonly parentHashes: readonly Uint8Array[];
+  readonly payload: ActionPayload;
+  readonly timestamp?: number;
+}): SignedAction => {
+  const envelope = makeEnvelope(options);
   const result = verifyAndDecodeAction(envelope);
   if (!result.success) throw new Error("Failed to create test action");
   return result.data;
@@ -1372,6 +1383,358 @@ describe("Action chain state", () => {
       if (!result.success) return;
 
       expect(result.data.members.size).toBe(1);
+    });
+  });
+
+  describe("processBulkSignedActions", () => {
+    it("should return unchanged state for empty batch", () => {
+      const dag = createActionDagState();
+      const groupState = createActionChainGroupState(DEFAULT_GROUP_ID);
+
+      const result = processBulkSignedActions([], dag, groupState);
+
+      expect(result.dag).toBe(dag);
+      expect(result.groupState).toBe(groupState);
+      expect(result.accepted).toEqual([]);
+    });
+
+    it("should process a single valid envelope", () => {
+      const creator = generateAccountKey();
+      const envelope = makeEnvelope({
+        accountKey: creator,
+        parentHashes: [GENESIS_HASH],
+        payload: { type: "group-created", groupName: "Bulk Test" },
+        timestamp: 1000,
+      });
+
+      const result = processBulkSignedActions(
+        [envelope],
+        createActionDagState(),
+        createActionChainGroupState(DEFAULT_GROUP_ID),
+      );
+
+      expect(result.accepted).toHaveLength(1);
+      expect(result.dag.actions.size).toBe(1);
+      expect(result.groupState.groupName).toBe("Bulk Test");
+      expect(result.groupState.members.size).toBe(1);
+    });
+
+    it("should skip duplicate envelopes", () => {
+      const creator = generateAccountKey();
+      const envelope = makeEnvelope({
+        accountKey: creator,
+        parentHashes: [GENESIS_HASH],
+        payload: { type: "group-created", groupName: "Dup Test" },
+        timestamp: 1000,
+      });
+
+      const result = processBulkSignedActions(
+        [envelope, envelope],
+        createActionDagState(),
+        createActionChainGroupState(DEFAULT_GROUP_ID),
+      );
+
+      expect(result.accepted).toHaveLength(1);
+      expect(result.dag.actions.size).toBe(1);
+    });
+
+    it("should skip envelopes with invalid signatures", () => {
+      const creator = generateAccountKey();
+      const validEnvelope = makeEnvelope({
+        accountKey: creator,
+        parentHashes: [GENESIS_HASH],
+        payload: { type: "group-created", groupName: "Valid" },
+        timestamp: 1000,
+      });
+
+      const invalidEnvelope: SignedActionEnvelope = {
+        signedBytes: new Uint8Array([1, 2, 3]),
+        signature: new Uint8Array(64),
+        hash: new Uint8Array(32),
+      };
+
+      const result = processBulkSignedActions(
+        [invalidEnvelope, validEnvelope],
+        createActionDagState(),
+        createActionChainGroupState(DEFAULT_GROUP_ID),
+      );
+
+      expect(result.accepted).toHaveLength(1);
+      expect(result.groupState.groupName).toBe("Valid");
+    });
+
+    it("should produce same final state as sequential processing", () => {
+      const creator = generateAccountKey();
+      const joiner = generateAccountKey();
+
+      const genesisEnv = makeEnvelope({
+        accountKey: creator,
+        parentHashes: [GENESIS_HASH],
+        payload: { type: "group-created", groupName: "Sequential Test" },
+        timestamp: 1000,
+      });
+      const genesis = verifyAndDecodeAction(genesisEnv);
+      if (!genesis.success) throw new Error("Setup failed");
+
+      const joinReqEnv = makeEnvelope({
+        accountKey: joiner,
+        parentHashes: [genesis.data.hash],
+        payload: {
+          type: "join-request",
+          requesterPublicKey: pubKey(joiner),
+        },
+        timestamp: 2000,
+      });
+      const joinReq = verifyAndDecodeAction(joinReqEnv);
+      if (!joinReq.success) throw new Error("Setup failed");
+
+      const approveEnv = makeEnvelope({
+        accountKey: creator,
+        parentHashes: [joinReq.data.hash],
+        payload: {
+          type: "member-approved",
+          memberPublicKey: pubKey(joiner),
+          role: "member",
+        },
+        timestamp: 3000,
+      });
+      const approve = verifyAndDecodeAction(approveEnv);
+      if (!approve.success) throw new Error("Setup failed");
+
+      const msgEnv = makeEnvelope({
+        accountKey: joiner,
+        parentHashes: [approve.data.hash],
+        payload: { type: "message", text: "Hello from bulk" },
+        timestamp: 4000,
+      });
+
+      const envelopes = [genesisEnv, joinReqEnv, approveEnv, msgEnv];
+
+      let seqDag = createActionDagState();
+      for (const env of envelopes) {
+        const decoded = verifyAndDecodeAction(env);
+        if (!decoded.success) continue;
+        seqDag = appendAction(seqDag, decoded.data);
+      }
+      const seqOrdered = topologicalOrder(seqDag);
+      const seqState = deriveGroupState(DEFAULT_GROUP_ID, seqOrdered);
+      if (!seqState.success) throw new Error("Sequential derivation failed");
+
+      const bulkResult = processBulkSignedActions(
+        envelopes,
+        createActionDagState(),
+        createActionChainGroupState(DEFAULT_GROUP_ID),
+      );
+
+      expect(bulkResult.dag.actions.size).toBe(seqDag.actions.size);
+      expect(bulkResult.groupState.groupName).toBe(seqState.data.groupName);
+      expect(bulkResult.groupState.members.size).toBe(seqState.data.members.size);
+      expect(bulkResult.accepted).toHaveLength(4);
+
+      for (const [hex] of seqDag.actions) {
+        expect(bulkResult.dag.actions.has(hex)).toBe(true);
+      }
+    });
+  });
+
+  describe("validateMergePreConditions", () => {
+    it("should reject merge referencing fewer than 2 current tips", () => {
+      const creator = generateAccountKey();
+      const genesis = makeAction({
+        accountKey: creator,
+        parentHashes: [GENESIS_HASH],
+        payload: { type: "group-created", groupName: "Group" },
+        timestamp: 1000,
+      });
+
+      let dag = createActionDagState();
+      dag = appendAction(dag, genesis);
+
+      const merge = makeAction({
+        accountKey: creator,
+        parentHashes: [genesis.hash],
+        payload: { type: "merge" },
+        timestamp: 2000,
+      });
+
+      const groupState = createActionChainGroupState(DEFAULT_GROUP_ID);
+      const withMember = applyAction(groupState, genesis);
+      if (!withMember.success) throw new Error("Setup failed");
+
+      const result = validateMergePreConditions(merge, dag, withMember.data);
+
+      expect(result.success).toBe(false);
+    });
+
+    it("should reject merge when rate limit is violated", () => {
+      const creator = generateAccountKey();
+      const genesis = makeAction({
+        accountKey: creator,
+        parentHashes: [GENESIS_HASH],
+        payload: { type: "group-created", groupName: "Group" },
+        timestamp: 1000,
+      });
+
+      const branch1 = makeAction({
+        accountKey: creator,
+        parentHashes: [genesis.hash],
+        payload: { type: "message", text: "a" },
+        timestamp: 2000,
+      });
+      const branch2 = makeAction({
+        accountKey: creator,
+        parentHashes: [genesis.hash],
+        payload: { type: "message", text: "b" },
+        timestamp: 2000,
+      });
+
+      let dag = createActionDagState();
+      dag = appendAction(dag, genesis);
+      dag = appendAction(dag, branch1);
+      dag = appendAction(dag, branch2);
+
+      const merge = makeAction({
+        accountKey: creator,
+        parentHashes: [branch1.hash, branch2.hash],
+        payload: { type: "merge" },
+        timestamp: 2030_000,
+      });
+
+      let groupState = createActionChainGroupState(DEFAULT_GROUP_ID);
+      const s1 = applyAction(groupState, genesis);
+      if (!s1.success) throw new Error("Setup failed");
+      groupState = s1.data;
+
+      const lastMergeTimestampByAuthor = new Map(groupState.lastMergeTimestampByAuthor);
+      lastMergeTimestampByAuthor.set(toHex(creator.publicKey), 2000_000);
+      groupState = { ...groupState, lastMergeTimestampByAuthor };
+
+      const result = validateMergePreConditions(merge, dag, groupState);
+
+      expect(result.success).toBe(false);
+    });
+
+    it("should accept merge referencing 2+ current tips within rate limit", () => {
+      const creator = generateAccountKey();
+      const genesis = makeAction({
+        accountKey: creator,
+        parentHashes: [GENESIS_HASH],
+        payload: { type: "group-created", groupName: "Group" },
+        timestamp: 1000,
+      });
+
+      const branch1 = makeAction({
+        accountKey: creator,
+        parentHashes: [genesis.hash],
+        payload: { type: "message", text: "a" },
+        timestamp: 2000,
+      });
+      const branch2 = makeAction({
+        accountKey: creator,
+        parentHashes: [genesis.hash],
+        payload: { type: "message", text: "b" },
+        timestamp: 2000,
+      });
+
+      let dag = createActionDagState();
+      dag = appendAction(dag, genesis);
+      dag = appendAction(dag, branch1);
+      dag = appendAction(dag, branch2);
+
+      const merge = makeAction({
+        accountKey: creator,
+        parentHashes: [branch1.hash, branch2.hash],
+        payload: { type: "merge" },
+        timestamp: 100_000,
+      });
+
+      let groupState = createActionChainGroupState(DEFAULT_GROUP_ID);
+      const s1 = applyAction(groupState, genesis);
+      if (!s1.success) throw new Error("Setup failed");
+
+      const result = validateMergePreConditions(merge, dag, s1.data);
+
+      expect(result.success).toBe(true);
+    });
+
+    it("should accept first merge from author with no rate limit history", () => {
+      const creator = generateAccountKey();
+      const genesis = makeAction({
+        accountKey: creator,
+        parentHashes: [GENESIS_HASH],
+        payload: { type: "group-created", groupName: "Group" },
+        timestamp: 1000,
+      });
+
+      const branch1 = makeAction({
+        accountKey: creator,
+        parentHashes: [genesis.hash],
+        payload: { type: "message", text: "a" },
+        timestamp: 2000,
+      });
+      const branch2 = makeAction({
+        accountKey: creator,
+        parentHashes: [genesis.hash],
+        payload: { type: "message", text: "b" },
+        timestamp: 2000,
+      });
+
+      let dag = createActionDagState();
+      dag = appendAction(dag, genesis);
+      dag = appendAction(dag, branch1);
+      dag = appendAction(dag, branch2);
+
+      const merge = makeAction({
+        accountKey: creator,
+        parentHashes: [branch1.hash, branch2.hash],
+        payload: { type: "merge" },
+        timestamp: 3000,
+      });
+
+      const s1 = applyAction(createActionChainGroupState(DEFAULT_GROUP_ID), genesis);
+      if (!s1.success) throw new Error("Setup failed");
+
+      const result = validateMergePreConditions(merge, dag, s1.data);
+
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe("validateParentHashCount", () => {
+    it("should reject action with more than 4 parent hashes", () => {
+      const fakeAction: SignedAction = {
+        protocolVersion: 2,
+        id: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+        groupId: DEFAULT_GROUP_ID,
+        authorPublicKey: new Uint8Array(new ArrayBuffer(32)),
+        timestamp: Date.now(),
+        parentHashes: [
+          new Uint8Array(32),
+          new Uint8Array(32),
+          new Uint8Array(32),
+          new Uint8Array(32),
+          new Uint8Array(32),
+        ],
+        payload: { type: "message", text: "test" },
+        signature: new Uint8Array(new ArrayBuffer(64)),
+        hash: new Uint8Array(new ArrayBuffer(32)),
+      };
+
+      const result = validateParentHashCount(fakeAction);
+
+      expect(result.success).toBe(false);
+    });
+
+    it("should accept action with 4 or fewer parent hashes", () => {
+      const action = makeAction({
+        accountKey: generateAccountKey(),
+        parentHashes: [GENESIS_HASH],
+        payload: { type: "message", text: "test" },
+      });
+
+      const result = validateParentHashCount(action);
+
+      expect(result.success).toBe(true);
     });
   });
 });
