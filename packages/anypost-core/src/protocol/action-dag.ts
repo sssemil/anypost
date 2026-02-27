@@ -119,21 +119,24 @@ export const selectParentHashes = (
   const lastBuiltHex = lastBuiltHead ? toHex(lastBuiltHead) : null;
   const isLastBuiltATip = lastBuiltHex !== null && dag.tipHashes.has(lastBuiltHex);
 
-  const sorted = [...tips].sort((a, b) => {
-    const actionA = dag.actions.get(toHex(a));
-    const actionB = dag.actions.get(toHex(b));
+  const tipsWithHex = tips.map((t) => ({ hash: t, hex: toHex(t) }));
+  tipsWithHex.sort((a, b) => {
+    const actionA = dag.actions.get(a.hex);
+    const actionB = dag.actions.get(b.hex);
     if (!actionA || !actionB) return 0;
     const timeDiff = actionA.timestamp - actionB.timestamp;
     if (timeDiff !== 0) return timeDiff;
-    return toHex(a).localeCompare(toHex(b));
+    return a.hex.localeCompare(b.hex);
   });
 
   if (isLastBuiltATip) {
-    const rest = sorted.filter((t) => toHex(t) !== lastBuiltHex);
+    const rest = tipsWithHex
+      .filter((t) => t.hex !== lastBuiltHex)
+      .map((t) => t.hash);
     return [lastBuiltHead!, ...rest].slice(0, maxParents);
   }
 
-  return sorted.slice(0, maxParents);
+  return tipsWithHex.map((t) => t.hash).slice(0, maxParents);
 };
 
 const sortByTimestampThenHash = (

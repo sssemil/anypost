@@ -464,6 +464,8 @@ export const processBulkSignedActions = (
   const accepted: SignedAction[] = [];
 
   for (const envelope of envelopes) {
+    if (currentDag.actions.has(toHex(envelope.hash))) continue;
+
     const result = verifyAndDecodeAction(envelope);
     if (!result.success) continue;
 
@@ -481,10 +483,13 @@ export const processBulkSignedActions = (
 
   const ordered = topologicalOrder(currentDag);
   const derived = deriveGroupState(groupState.groupId, ordered);
+  if (!derived.success) {
+    return { dag, groupState, accepted: [] };
+  }
 
   return {
     dag: currentDag,
-    groupState: derived.success ? derived.data : groupState,
+    groupState: derived.data,
     accepted,
   };
 };
