@@ -6,6 +6,7 @@ export {
   generateDeviceKey,
   createDeviceCertificate,
   verifyDeviceCertificate,
+  accountIdFromPublicKeyHex,
 } from "./identity.js";
 
 export type { AccountKey, ExportedAccountKey } from "./identity.js";

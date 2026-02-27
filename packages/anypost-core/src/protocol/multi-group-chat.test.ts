@@ -1505,6 +1505,163 @@ describe("MultiGroupChat", () => {
     );
   });
 
+  it("should derive deterministic peer ID from account key", async () => {
+    const sharedAccountKey = generateAccountKey();
+    const node1 = await createTestNode(sharedAccountKey);
+    const firstPeerId = node1.peerId;
+    await node1.chat.stop();
+    instances.splice(instances.indexOf(node1.chat), 1);
+
+    const node2 = await createTestNode(sharedAccountKey);
+
+    expect(node2.peerId).toBe(firstPeerId);
+  });
+
+  it("should expose accountId matching peerId for primary device", async () => {
+    const node = await createTestNode();
+
+    expect(node.chat.accountId).toBe(node.peerId);
+  });
+
+  it("should register device in registry on startup", async () => {
+    const node = await createTestNode();
+
+    const devices = node.chat.getRegisteredDevices();
+
+    expect(devices).toHaveLength(1);
+    expect(devices[0].devicePeerId).toBe(node.peerId);
+  });
+
+  it("should use random peer ID when isSecondaryDevice is true", async () => {
+    const sharedAccountKey = generateAccountKey();
+    const primary = await createTestNode(sharedAccountKey);
+    const secondary = await createTestNode(sharedAccountKey, undefined, { isSecondaryDevice: true });
+
+    expect(secondary.chat.accountId).toBe(primary.chat.accountId);
+    expect(secondary.peerId).not.toBe(primary.peerId);
+  });
+
+  it("should deliver group messages to both primary and secondary devices of the same account", async () => {
+    const ownerKey = generateAccountKey();
+    const memberKey = generateAccountKey();
+    const owner = await createTestNode(ownerKey);
+    const primaryDevice = await createTestNode(memberKey);
+    const secondaryDevice = await createTestNode(memberKey, undefined, { isSecondaryDevice: true });
+
+    expect(primaryDevice.chat.accountId).toBe(secondaryDevice.chat.accountId);
+
+    const { groupId, genesisEnvelope } = await owner.chat.createGroup("Multi Device Group");
+    const invite = buildInvite(owner, genesisEnvelope);
+
+    await primaryDevice.chat.connectTo(owner.chat.multiaddrs[0]);
+    await waitFor(400);
+    await primaryDevice.chat.joinViaInvite(invite);
+    const joinReq = await waitForJoinRequestFrom(owner, groupId, primaryDevice.peerId);
+    await owner.chat.approveJoin(groupId, joinReq.requesterPublicKey);
+    await waitUntil(() => primaryDevice.chat.getActionChainState(groupId)!.members.size === 2);
+
+    await secondaryDevice.chat.connectTo(owner.chat.multiaddrs[0]);
+    await secondaryDevice.chat.connectTo(primaryDevice.chat.multiaddrs[0]);
+    await waitFor(400);
+
+    secondaryDevice.chat.joinGroup(groupId);
+    secondaryDevice.chat.loadActionChain(groupId, primaryDevice.chat.getActionChainEnvelopes(groupId));
+    await waitFor(200);
+
+    await owner.chat.sendMessage(groupId, "hello both devices");
+
+    await waitUntil(() =>
+      primaryDevice.messages.some((m) => m.groupId === groupId && m.text === "hello both devices"),
+    );
+    await waitUntil(() =>
+      secondaryDevice.messages.some((m) => m.groupId === groupId && m.text === "hello both devices"),
+    );
+
+    expect(
+      primaryDevice.messages.find((m) => m.text === "hello both devices")!.senderPeerId,
+    ).toBe(owner.chat.accountId);
+    expect(
+      secondaryDevice.messages.find((m) => m.text === "hello both devices")!.senderPeerId,
+    ).toBe(owner.chat.accountId);
+  });
+
+  it("should deliver targeted DM request to secondary device via accountId", async () => {
+    const senderKey = generateAccountKey();
+    const receiverKey = generateAccountKey();
+    const sender = await createTestNode(senderKey);
+    const secondaryReceiver = await createTestNode(receiverKey, undefined, { isSecondaryDevice: true });
+
+    await sender.chat.connectTo(secondaryReceiver.chat.multiaddrs[0]);
+    await waitFor(400);
+
+    const accountId = secondaryReceiver.chat.accountId;
+    const groupId = crypto.randomUUID();
+    const { genesisEnvelope } = await sender.chat.createDirectMessageGroupWithId(groupId, [
+      sender.chat.accountId,
+      accountId,
+    ].sort() as [string, string]);
+
+    const inviteCode = encodeGroupInvite({
+      genesisEnvelope,
+      adminPeerId: sender.peerId,
+      relayAddr: sender.chat.multiaddrs[0].toString(),
+    });
+
+    await sender.chat.sendDirectMessageRequest({
+      targetPeerId: accountId,
+      groupId,
+      groupName: "DM to secondary",
+      inviteCode,
+    });
+
+    await waitUntil(() => secondaryReceiver.directMessageRequests.length >= 1);
+
+    expect(secondaryReceiver.directMessageRequests[0].groupId).toBe(groupId);
+  });
+
+  it("should show consistent accountId-based senderPeerId on messages from both devices", async () => {
+    const ownerKey = generateAccountKey();
+    const memberKey = generateAccountKey();
+    const owner = await createTestNode(ownerKey);
+    const primaryDevice = await createTestNode(memberKey);
+    const secondaryDevice = await createTestNode(memberKey, undefined, { isSecondaryDevice: true });
+
+    const { groupId, genesisEnvelope } = await owner.chat.createGroup("Sender Identity Group");
+    const invite = buildInvite(owner, genesisEnvelope);
+
+    await primaryDevice.chat.connectTo(owner.chat.multiaddrs[0]);
+    await waitFor(400);
+    await primaryDevice.chat.joinViaInvite(invite);
+    const joinReq = await waitForJoinRequestFrom(owner, groupId, primaryDevice.peerId);
+    await owner.chat.approveJoin(groupId, joinReq.requesterPublicKey);
+    await waitUntil(() => primaryDevice.chat.getActionChainState(groupId)!.members.size === 2);
+
+    await secondaryDevice.chat.connectTo(owner.chat.multiaddrs[0]);
+    await secondaryDevice.chat.connectTo(primaryDevice.chat.multiaddrs[0]);
+    await waitFor(400);
+
+    secondaryDevice.chat.joinGroup(groupId);
+    secondaryDevice.chat.loadActionChain(groupId, primaryDevice.chat.getActionChainEnvelopes(groupId));
+    await waitFor(200);
+
+    await primaryDevice.chat.sendMessage(groupId, "from-primary");
+    await waitUntil(() =>
+      owner.messages.some((m) => m.groupId === groupId && m.text === "from-primary"),
+    );
+
+    await secondaryDevice.chat.sendMessage(groupId, "from-secondary");
+    await waitUntil(() =>
+      owner.messages.some((m) => m.groupId === groupId && m.text === "from-secondary"),
+    );
+
+    const primaryMsg = owner.messages.find((m) => m.text === "from-primary")!;
+    const secondaryMsg = owner.messages.find((m) => m.text === "from-secondary")!;
+
+    expect(primaryMsg.senderPeerId).toBe(primaryDevice.chat.accountId);
+    expect(secondaryMsg.senderPeerId).toBe(secondaryDevice.chat.accountId);
+    expect(primaryMsg.senderPeerId).toBe(secondaryMsg.senderPeerId);
+  });
+
   it("should produce a stable peer ID when given the same peerPrivateKey", async () => {
     const node1 = await createTestNode();
     const peerPrivateKey = node1.chat.getPeerPrivateKey();

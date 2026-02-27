@@ -7,6 +7,7 @@ import {
   verifyAndDecodeAction,
   decodeGroupInvite,
 } from "anypost-core/protocol";
+import { accountIdFromPublicKeyHex } from "anypost-core/crypto";
 import type {
   ActionPayload,
   ActionRole,
@@ -986,6 +987,7 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
               {(member) => {
                 const isOwn = () => member.publicKeyHex === props.ownPublicKeyHex;
                 const peerId = () => props.publicKeyToPeerId.get(member.publicKeyHex);
+                const accountId = () => accountIdFromPublicKeyHex(member.publicKeyHex);
                 const memberLabel = () => {
                   if (isOwn() && props.ownDisplayName) return props.ownDisplayName;
                   const pid = peerId();
@@ -993,9 +995,8 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
                     const contact = props.contactsBook?.get(pid);
                     if (contact?.nickname?.trim()) return contact.nickname.trim();
                     if (contact?.selfName?.trim()) return contact.selfName.trim();
-                    return truncatePeerId(pid);
                   }
-                  return truncateHex(member.publicKeyHex);
+                  return truncatePeerId(accountId());
                 };
                 const isConnected = () => {
                   const pid = peerId();
@@ -1017,7 +1018,7 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
                       : false;
                 const roleActionPending = () => roleActionTargetHex() === member.publicKeyHex;
                 const canStartDirectMessage = () => !!peerId() && !isOwn() && !!props.onStartDirectMessage;
-                const memberAvatarId = () => peerId() ?? member.publicKeyHex;
+                const memberAvatarId = () => accountId();
 
                 return (
                   <div class="flex items-center gap-2.5 py-1.5 px-2 rounded hover:bg-tg-hover">
@@ -1122,9 +1123,7 @@ export const GroupInfoPanel = (props: GroupInfoPanelProps) => {
               <For each={props.pendingJoins}>
                 {(request) => {
                   const requestLabel = () => {
-                    const peerId = props.publicKeyToPeerId.get(request.publicKeyHex);
-                    if (peerId) return truncatePeerId(peerId);
-                    return truncateHex(request.publicKeyHex);
+                    return truncatePeerId(accountIdFromPublicKeyHex(request.publicKeyHex));
                   };
 
                   return (

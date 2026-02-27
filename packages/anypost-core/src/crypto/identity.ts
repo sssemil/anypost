@@ -3,7 +3,10 @@ import { randomBytes } from "@noble/hashes/utils.js";
 import { mnemonicToEntropy, entropyToMnemonic, validateMnemonic } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english.js";
 import { encode } from "cbor-x";
+import { publicKeyFromRaw } from "@libp2p/crypto/keys";
+import { peerIdFromPublicKey } from "@libp2p/peer-id";
 import type { DeviceCertificate } from "../shared/schemas.js";
+import { fromHex } from "../protocol/action-chain.js";
 
 export type AccountKey = {
   readonly publicKey: Uint8Array;
@@ -44,6 +47,12 @@ export const exportAccountKey = (key: AccountKey): ExportedAccountKey => {
 
 export const importAccountKey = (seedPhrase: string): AccountKey =>
   accountKeyFromSeed(seedPhrase);
+
+export const accountIdFromPublicKeyHex = (publicKeyHex: string): string => {
+  const rawBytes = fromHex(publicKeyHex);
+  const libp2pPublicKey = publicKeyFromRaw(rawBytes);
+  return peerIdFromPublicKey(libp2pPublicKey).toString();
+};
 
 const DEFAULT_CERTIFICATE_MAX_AGE_MS = 365 * 24 * 60 * 60 * 1000;
 const CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000;

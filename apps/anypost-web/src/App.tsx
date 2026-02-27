@@ -49,6 +49,7 @@ import {
   generateAccountKey,
   exportAccountKey,
   importAccountKey,
+  accountIdFromPublicKeyHex,
 } from "anypost-core/crypto";
 import type { AccountKey } from "anypost-core/crypto";
 import {
@@ -1477,14 +1478,14 @@ export const App = () => {
         const contact = contactsBook().get(memberPeerId);
         const knownName = contact?.nickname ?? contact?.selfName;
         if (knownName) return knownName;
-        return `${memberPeerId.slice(0, 12)}...${memberPeerId.slice(-6)}`;
       }
-      return `${memberHex.slice(0, 8)}...${memberHex.slice(-8)}`;
+      const memberAccountId = accountIdFromPublicKeyHex(memberHex);
+      return `${memberAccountId.slice(0, 12)}...${memberAccountId.slice(-6)}`;
     };
     const resolveAuthorPeerId = (publicKey: Uint8Array): string => {
       const memberHex = toHex(publicKey);
-      if (memberHex === ownKeyHex && currentChat) return currentChat.peerId;
-      return pubKeyMap.get(memberHex) ?? `pk:${memberHex}`;
+      if (memberHex === ownKeyHex && currentChat) return currentChat.accountId;
+      return accountIdFromPublicKeyHex(memberHex);
     };
     type CanonicalMessage = {
       readonly id: string;
@@ -2653,6 +2654,7 @@ export const App = () => {
       };
 
       const store = await openAccountStore();
+      const isPrimary = await store.isPrimaryDevice();
       let peerPrivateKey: Uint8Array | undefined;
       let initialPeerPathCache: ReadonlyMap<string, readonly string[]> = new Map();
       let initialRelayContactBook: RelayContactBook = new Map();
@@ -2661,8 +2663,10 @@ export const App = () => {
       let initialContactsBook: ContactsBook = new Map();
       let initialBlockedPeerIds: ReadonlySet<string> = new Set();
       try {
-        const savedKey = await store.getPeerPrivateKey();
-        if (savedKey) peerPrivateKey = savedKey;
+        if (!isPrimary) {
+          const savedKey = await store.getPeerPrivateKey();
+          if (savedKey) peerPrivateKey = savedKey;
+        }
         const compatStore = store as AccountStore & PeerPathCacheStoreCompat;
         if (typeof compatStore.getPeerPathCache === "function") {
           initialPeerPathCache = await compatStore.getPeerPathCache();
@@ -2822,7 +2826,7 @@ export const App = () => {
       setChatStatus("connected");
       setChatError(null);
 
-      if (!peerPrivateKey) {
+      if (!isPrimary && !peerPrivateKey) {
         const saveStore = await openAccountStore();
         try {
           await saveStore.savePeerPrivateKey(chat.getPeerPrivateKey());
@@ -4640,16 +4644,16 @@ export const App = () => {
       const upToIndex = hashToMessageIndex.get(receipt.upToHashHex);
       if (upToIndex === undefined) continue;
       const mappedPeerId = publicKeyToPeerIdMap().get(authorHex);
-      const readerPeerId = mappedPeerId ?? `pk:${authorHex.slice(0, 10)}...`;
+      const readerAccountId = accountIdFromPublicKeyHex(authorHex);
       const contact = mappedPeerId ? contactsBook().get(mappedPeerId) : null;
       const label = contact?.nickname?.trim()
         || contact?.selfName?.trim()
-        || (mappedPeerId ? formatPeerIdForDisplay(mappedPeerId) : readerPeerId);
+        || formatPeerIdForDisplay(readerAccountId);
       for (let index = 0; index <= upToIndex; index += 1) {
         const messageId = allMessages[index].id;
         const rows = readersByMessageId.get(messageId) ?? [];
         rows.push({
-          peerId: readerPeerId,
+          peerId: readerAccountId,
           label,
           readAt: receipt.readAt,
         });
@@ -4915,7 +4919,7 @@ export const App = () => {
             messageInputInsetPx={(hasAndroidBridge() ? 14 : 8) + keyboardInsetPx()}
             header={
               <HeaderBar
-                peerId={chat!.peerId}
+                peerId={chat!.accountId}
                 connectionStatus={chatStatus()}
                 activeGroupId={groupState().activeGroupId}
                 activeGroupName={activeGroupName()}
@@ -5101,7 +5105,7 @@ export const App = () => {
                 <div class="flex-1 min-h-0">
                   <MessageList
                     messages={getActiveMessages(groupState())}
-                    ownPeerId={chat!.peerId}
+                    ownPeerId={chat!.accountId}
                     resolveSenderLabel={resolveMessageSenderLabel}
                     readByMessageId={activeMessageReadersByMessageId()}
                     editedAtByMessageId={activeEditedAtByMessageId()}
@@ -5165,7 +5169,7 @@ export const App = () => {
             devDrawerContent={
               <>
                 <PeerSharingPanel
-                  ownPeerId={chat!.peerId}
+                  ownPeerId={chat!.accountId}
                   networkStatus={networkStatus()}
                   onConnect={(targetPeerId) => chat!.connectToPeerId(targetPeerId)}
                 />
@@ -5284,7 +5288,7 @@ export const App = () => {
             contactsContent={
               <ContactsBookPage
                 contactsBook={contactsBook()}
-                ownPeerId={chat!.peerId}
+                ownPeerId={chat!.accountId}
                 connectedPeerIds={connectedPeerIds()}
                 latencyMap={latencyMap()}
                 onSetNickname={handleSetContactNickname}
@@ -5293,7 +5297,7 @@ export const App = () => {
             }
             profileContent={
               <ProfilePage
-                peerId={chat!.peerId}
+                peerId={chat!.accountId}
                 displayName={displayName()}
                 onSaveDisplayName={handleProfileDisplayNameSave}
               />

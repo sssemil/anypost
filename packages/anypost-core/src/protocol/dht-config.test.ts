@@ -3,9 +3,11 @@ import {
   ANYPOST_RELAY_NAMESPACE,
   ANYPOST_CHAT_NAMESPACE,
   ANYPOST_GROUP_NAMESPACE_PREFIX,
+  ANYPOST_ACCOUNT_NAMESPACE_PREFIX,
   DEFAULT_TARGET_RELAY_POOL_SIZE,
   createProviderCid,
   createGroupProviderNamespace,
+  createAccountProviderNamespace,
   createBrowserDhtConfig,
   createRelayDhtConfig,
 } from "./dht-config.js";
@@ -80,6 +82,34 @@ describe("createGroupProviderNamespace", () => {
     const cid2 = await createProviderCid(ns2);
 
     expect(cid1.toString()).not.toBe(cid2.toString());
+  });
+});
+
+describe("createAccountProviderNamespace", () => {
+  it("should concatenate the account prefix with the account ID", () => {
+    const namespace = createAccountProviderNamespace("12D3KooWFake");
+
+    expect(namespace).toBe("anypost/account/12D3KooWFake");
+  });
+
+  it("should produce different namespaces for different account IDs", () => {
+    const ns1 = createAccountProviderNamespace("account-1");
+    const ns2 = createAccountProviderNamespace("account-2");
+
+    expect(ns1).not.toBe(ns2);
+  });
+
+  it("should produce different CIDs for different accounts when used with createProviderCid", async () => {
+    const cid1 = await createProviderCid(createAccountProviderNamespace("account-1"));
+    const cid2 = await createProviderCid(createAccountProviderNamespace("account-2"));
+
+    expect(cid1.toString()).not.toBe(cid2.toString());
+  });
+});
+
+describe("DHT config constants — account namespace", () => {
+  it("should define the account namespace prefix", () => {
+    expect(ANYPOST_ACCOUNT_NAMESPACE_PREFIX).toBe("anypost/account/");
   });
 });
 

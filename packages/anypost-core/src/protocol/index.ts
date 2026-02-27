@@ -78,9 +78,11 @@ export {
   ANYPOST_RELAY_NAMESPACE,
   ANYPOST_CHAT_NAMESPACE,
   ANYPOST_GROUP_NAMESPACE_PREFIX,
+  ANYPOST_ACCOUNT_NAMESPACE_PREFIX,
   DEFAULT_TARGET_RELAY_POOL_SIZE,
   createProviderCid,
   createGroupProviderNamespace,
+  createAccountProviderNamespace,
   createBrowserDhtConfig,
   createRelayDhtConfig,
 } from "./dht-config.js";
@@ -158,6 +160,7 @@ export { createMultiGroupChat } from "./multi-group-chat.js";
 export type {
   MultiGroupChat,
   MultiGroupChatMessageEvent,
+  AccountDeviceInfo,
   JoinRequestEvent,
   DirectMessageRequestEvent,
   DirectMessageHandshakeState,

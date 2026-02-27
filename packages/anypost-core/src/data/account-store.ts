@@ -415,6 +415,8 @@ export type AccountStore = {
   readonly saveRelayContactBook: (book: RelayContactBook) => Promise<void>;
   readonly getBlockedPeerIds: () => Promise<ReadonlySet<string>>;
   readonly saveBlockedPeerIds: (blockedPeerIds: ReadonlySet<string>) => Promise<void>;
+  readonly isPrimaryDevice: () => Promise<boolean>;
+  readonly setIsPrimaryDevice: (primary: boolean) => Promise<void>;
   readonly destroy: () => Promise<void>;
   readonly close: () => void;
 };
@@ -557,6 +559,16 @@ export const openAccountStore = async (): Promise<AccountStore> => {
 
     saveBlockedPeerIds: async (blockedPeerIds: ReadonlySet<string>) => {
       await db.put("account", encodeBlockedPeerIds(blockedPeerIds), BLOCKED_PEERS_KEY);
+    },
+
+    isPrimaryDevice: async () => {
+      const value = await db.get("account", "isPrimaryDevice");
+      if (typeof value !== "boolean") return true;
+      return value;
+    },
+
+    setIsPrimaryDevice: async (primary: boolean) => {
+      await db.put("account", primary, "isPrimaryDevice");
     },
 
     destroy: async () => {

@@ -158,6 +158,40 @@ describe("Account Store", () => {
     });
   });
 
+  describe("primary device flag", () => {
+    it("should default to true when not set", async () => {
+      const store = await openAccountStore();
+      try {
+        expect(await store.isPrimaryDevice()).toBe(true);
+      } finally {
+        await store.destroy();
+      }
+    });
+
+    it("should persist primary device flag", async () => {
+      const store = await openAccountStore();
+      try {
+        await store.setIsPrimaryDevice(false);
+
+        expect(await store.isPrimaryDevice()).toBe(false);
+      } finally {
+        await store.destroy();
+      }
+    });
+
+    it("should allow toggling primary device flag", async () => {
+      const store = await openAccountStore();
+      try {
+        await store.setIsPrimaryDevice(false);
+        await store.setIsPrimaryDevice(true);
+
+        expect(await store.isPrimaryDevice()).toBe(true);
+      } finally {
+        await store.destroy();
+      }
+    });
+  });
+
   describe("peer path cache persistence", () => {
     it("should return empty cache when no peer path cache exists", async () => {
       const store = await openAccountStore();

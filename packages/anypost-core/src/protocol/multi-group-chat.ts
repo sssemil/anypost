@@ -1,5 +1,6 @@
 import { createLibp2p } from "libp2p";
-import { privateKeyFromRaw, generateKeyPair } from "@libp2p/crypto/keys";
+import { privateKeyFromRaw, generateKeyPair, generateKeyPairFromSeed } from "@libp2p/crypto/keys";
+import { peerIdFromPrivateKey } from "@libp2p/peer-id";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { encode } from "cbor-x";
 import type { PubSub } from "@libp2p/interface";
@@ -23,7 +24,7 @@ import type { Multiaddr } from "@multiformats/multiaddr";
 import { groupTopic } from "./router.js";
 import { encodeWireMessage, decodeWireMessage } from "./codec.js";
 import { buildCircuitRelayAddresses, extractRelayBaseAddress } from "./peer-id-sharing.js";
-import { createProviderCid, ANYPOST_CHAT_NAMESPACE } from "./dht-config.js";
+import { createProviderCid, ANYPOST_CHAT_NAMESPACE, createAccountProviderNamespace } from "./dht-config.js";
 import { startRelayPoolManager } from "./relay-discovery.js";
 import type { RelayPoolState } from "./relay-pool.js";
 import { pubsubPeerDiscovery } from "@libp2p/pubsub-peer-discovery";
@@ -37,6 +38,13 @@ import type {
 } from "../shared/schemas.js";
 import type { ChatMessageEvent, PeerInfo, NetworkStatus, NetworkEvent } from "./plaintext-chat.js";
 import type { AccountKey } from "../crypto/identity.js";
+import { createDeviceCertificate, accountIdFromPublicKeyHex } from "../crypto/identity.js";
+import {
+  createDeviceRegistryDocument,
+  addDeviceToRegistry,
+  getRegisteredDevices as getRegisteredDevicesFromDoc,
+} from "../data/device-registry.js";
+import type { RegisteredDevice } from "../data/device-registry.js";
 import { GENESIS_HASH, toHex } from "./action-chain.js";
 import type { ActionChainGroupState, SignedActionEnvelope, SignedAction, JoinPolicy, ActionRole } from "./action-chain.js";
 import { createSignedActionEnvelope, verifyAndDecodeAction } from "./action-signing.js";
@@ -260,7 +268,13 @@ export type {
   JoinRetryEntry,
 } from "./join-retry-queue.js";
 
+export type AccountDeviceInfo = {
+  readonly peerId: string;
+  readonly multiaddrs: readonly string[];
+};
+
 export type MultiGroupChat = {
+  readonly accountId: string;
   readonly peerId: string;
   readonly multiaddrs: readonly Multiaddr[];
   readonly getPeerPrivateKey: () => Uint8Array;
@@ -352,11 +366,14 @@ export type MultiGroupChat = {
   readonly retryJoinNow: (groupId: string) => Promise<void>;
   readonly cancelJoinRetry: (groupId: string) => void;
   readonly addRelay: (addr: string) => void;
+  readonly getRegisteredDevices: () => readonly RegisteredDevice[];
+  readonly findAccountDevices: (targetAccountId: string) => AsyncIterable<AccountDeviceInfo>;
   readonly stop: () => Promise<void>;
 };
 
 type CreateMultiGroupChatOptions = {
   readonly accountKey: AccountKey;
+  readonly isSecondaryDevice?: boolean;
   readonly peerPrivateKey?: Uint8Array;
   readonly initialPublicKeyToPeerId?: ReadonlyMap<string, string>;
   readonly initialPeerPathCache?: ReadonlyMap<string, readonly string[]>;
@@ -447,6 +464,7 @@ export const createMultiGroupChat = async (
 ): Promise<MultiGroupChat> => {
   const {
     accountKey,
+    isSecondaryDevice = false,
     peerPrivateKey: rawPeerPrivateKey,
     initialPublicKeyToPeerId,
     initialPeerPathCache,
@@ -478,9 +496,17 @@ export const createMultiGroupChat = async (
     onProfileAnnounce,
   } = options;
 
+  const accountPrivateKey = await generateKeyPairFromSeed(
+    "Ed25519",
+    new Uint8Array(accountKey.privateKey),
+  );
+  const accountId = peerIdFromPrivateKey(accountPrivateKey).toString();
+
   const privateKey = rawPeerPrivateKey
     ? privateKeyFromRaw(new Uint8Array(rawPeerPrivateKey))
-    : await generateKeyPair("Ed25519");
+    : isSecondaryDevice
+      ? await generateKeyPair("Ed25519")
+      : accountPrivateKey;
 
   const relayPeers = [...initialBootstrapPeers];
   const runtimeAdapter = providedRuntimeAdapter
@@ -1382,6 +1408,16 @@ export const createMultiGroupChat = async (
   const ownPublicKeyHex = toHex(new Uint8Array(accountKey.publicKey));
   const ownPeerId = node.peerId.toString();
 
+  const isTargetedAtThisDevice = (targetPeerId: string): boolean =>
+    targetPeerId === ownPeerId || targetPeerId === accountId;
+
+  const deviceRegistryDoc = createDeviceRegistryDocument(accountKey.publicKey);
+  const ownDeviceCertificate = createDeviceCertificate({
+    accountKey,
+    devicePeerId: ownPeerId,
+  });
+  addDeviceToRegistry({ doc: deviceRegistryDoc, certificate: ownDeviceCertificate });
+
   const collectRecentEnvelopeAuthorPeerIds = (
     groupId: string,
     limit = 50,
@@ -1952,7 +1988,7 @@ export const createMultiGroupChat = async (
 
     if (
       payload.targetPeerId &&
-      payload.targetPeerId !== ownPeerId &&
+      !isTargetedAtThisDevice(payload.targetPeerId) &&
       payload.action !== "call-ring" &&
       payload.action !== "call-nudge"
     ) {
@@ -2357,7 +2393,7 @@ export const createMultiGroupChat = async (
           const action = processSignedAction(groupId, envelope, remotePeerId);
           if (action) {
             accepted.push(action);
-            emitActionMessage(groupId, action, remotePeerId);
+            emitActionMessage(groupId, action);
           }
         }
 
@@ -3252,7 +3288,6 @@ export const createMultiGroupChat = async (
   const emitActionMessage = (
     groupId: string,
     action: SignedAction,
-    senderPeerIdFallback: string,
   ) => {
     if (action.payload.type !== "message") return;
     if (!canLocalPeerConsumeGroupUpdates(groupId)) return;
@@ -3260,7 +3295,7 @@ export const createMultiGroupChat = async (
     const authorHex = toHex(action.authorPublicKey);
     const chatMessage: MultiGroupChatMessageEvent = {
       id: action.id,
-      senderPeerId: publicKeyToPeerId.get(authorHex) ?? senderPeerIdFallback,
+      senderPeerId: accountIdFromPublicKeyHex(authorHex),
       senderDisplayName: undefined,
       text: action.payload.text,
       timestamp: action.timestamp,
@@ -3414,7 +3449,7 @@ export const createMultiGroupChat = async (
         detail.topic !== DIRECT_JOIN_REQUEST_TOPIC &&
         matchedGroupId === undefined
       ) return;
-      if (payload.targetPeerId !== ownPeerId) return;
+      if (!isTargetedAtThisDevice(payload.targetPeerId)) return;
       if (!verifyDirectMessageRequest(payload)) {
         emit(
           "info",
@@ -3458,7 +3493,7 @@ export const createMultiGroupChat = async (
     if (wireMessage.type === "profile_request") {
       const payload = wireMessage.payload;
       if (detail.topic !== PROFILE_SYNC_TOPIC) return;
-      if (payload.targetPeerId !== ownPeerId) return;
+      if (!isTargetedAtThisDevice(payload.targetPeerId)) return;
       if (!verifyProfileRequest(payload)) return;
 
       const senderPeerId = resolveSignedSenderPeerId(
@@ -3475,7 +3510,7 @@ export const createMultiGroupChat = async (
     if (wireMessage.type === "profile_announce") {
       const payload = wireMessage.payload;
       if (detail.topic !== PROFILE_SYNC_TOPIC) return;
-      if (payload.targetPeerId && payload.targetPeerId !== ownPeerId) return;
+      if (payload.targetPeerId && !isTargetedAtThisDevice(payload.targetPeerId)) return;
       if (!verifyProfileAnnounce(payload)) return;
 
       const senderPeerId = resolveSignedSenderPeerId(
@@ -3492,7 +3527,7 @@ export const createMultiGroupChat = async (
     if (wireMessage.type === "join_request_direct") {
       const payload = wireMessage.payload;
       if (detail.topic !== DIRECT_JOIN_REQUEST_TOPIC) return;
-      if (payload.targetPeerId !== ownPeerId) return;
+      if (!isTargetedAtThisDevice(payload.targetPeerId)) return;
       if (!verifyDirectJoinRequest(payload)) {
         emit(
           "info",
@@ -3546,7 +3581,7 @@ export const createMultiGroupChat = async (
 
     if (wireMessage.type === "sync_request") {
       const payload = wireMessage.payload;
-      if (payload.targetPeerId && payload.targetPeerId !== ownPeerId) return;
+      if (payload.targetPeerId && !isTargetedAtThisDevice(payload.targetPeerId)) return;
       if (!verifySyncRequest(payload)) {
         emit(
           "sync",
@@ -3611,7 +3646,7 @@ export const createMultiGroupChat = async (
 
     if (wireMessage.type === "sync_response") {
       const payload = wireMessage.payload;
-      if (payload.targetPeerId !== ownPeerId) return;
+      if (!isTargetedAtThisDevice(payload.targetPeerId)) return;
       if (!verifySyncResponse(payload)) {
         connectionMetrics.syncResponsesRejected += 1;
         emitConnectionMetrics();
@@ -3699,7 +3734,7 @@ export const createMultiGroupChat = async (
         if (!action) continue;
         accepted += 1;
         lastAcceptedHashHex = toHex(action.hash);
-        emitActionMessage(matchedGroupId, action, senderPeerId);
+        emitActionMessage(matchedGroupId, action);
       }
 
       patchSyncProgress(matchedGroupId, senderPeerId, {
@@ -3775,7 +3810,7 @@ export const createMultiGroupChat = async (
       );
       if (action) {
         emit("pubsub-message", `Signed action accepted in group ${matchedGroupId.slice(0, 8)}...`);
-        emitActionMessage(matchedGroupId, action, transportSenderPeerId);
+        emitActionMessage(matchedGroupId, action);
       }
       return;
     }
@@ -3945,11 +3980,18 @@ export const createMultiGroupChat = async (
 
   void publishProfileAnnounce().catch(() => {});
 
+  const deviceMeshTopic = `anypost/account/${accountId}/devices`;
+  pubsub.subscribe(deviceMeshTopic);
+
   if (isRelayCapableRuntime) {
     createProviderCid(ANYPOST_CHAT_NAMESPACE).then((chatCid) => {
       node.contentRouting.provide(chatCid).catch(() => {});
     }).catch(() => {});
   }
+
+  createProviderCid(createAccountProviderNamespace(accountId)).then((accountCid) => {
+    node.contentRouting.provide(accountCid).catch(() => {});
+  }).catch(() => {});
 
   const relayPoolManager = isRelayCapableRuntime
     ? startRelayPoolManager({
@@ -4504,6 +4546,7 @@ export const createMultiGroupChat = async (
   };
 
   return {
+    accountId,
     peerId: node.peerId.toString(),
     getPeerPrivateKey: () => new Uint8Array(privateKey.raw),
     get multiaddrs() {
@@ -5253,6 +5296,18 @@ export const createMultiGroupChat = async (
       relayReservationManager.ingestRelayAddress(addr);
       ingestRelayContact(addr, "manual");
     },
+    getRegisteredDevices: () => getRegisteredDevicesFromDoc(deviceRegistryDoc),
+    findAccountDevices: (targetAccountId: string) => ({
+      async *[Symbol.asyncIterator]() {
+        const cid = await createProviderCid(createAccountProviderNamespace(targetAccountId));
+        for await (const provider of node.contentRouting.findProviders(cid)) {
+          yield {
+            peerId: provider.id.toString(),
+            multiaddrs: provider.multiaddrs.map((ma: Multiaddr) => ma.toString()),
+          };
+        }
+      },
+    }),
     stop: async () => {
       if (stopped) return;
       stopped = true;

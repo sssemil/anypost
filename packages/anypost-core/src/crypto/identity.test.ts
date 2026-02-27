@@ -8,7 +8,11 @@ import {
   generateDeviceKey,
   createDeviceCertificate,
   verifyDeviceCertificate,
+  accountIdFromPublicKeyHex,
 } from "./identity.js";
+import { generateKeyPairFromSeed } from "@libp2p/crypto/keys";
+import { peerIdFromPrivateKey } from "@libp2p/peer-id";
+import { toHex } from "../protocol/action-chain.js";
 
 const TEST_SEED_1 =
   "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
@@ -111,6 +115,42 @@ describe("Device Key Generation", () => {
     expect(key1.privateKey.length).toBe(32);
     expect(key1.publicKey).not.toEqual(key2.publicKey);
     expect(key1.privateKey).not.toEqual(key2.privateKey);
+  });
+});
+
+describe("accountIdFromPublicKeyHex", () => {
+  it("should derive the same AccountId as generateKeyPairFromSeed for a given key", async () => {
+    const accountKey = generateAccountKey();
+    const libp2pKey = await generateKeyPairFromSeed(
+      "Ed25519",
+      new Uint8Array(accountKey.privateKey),
+    );
+    const expectedAccountId = peerIdFromPrivateKey(libp2pKey).toString();
+    const publicKeyHex = toHex(new Uint8Array(accountKey.publicKey));
+
+    const accountId = accountIdFromPublicKeyHex(publicKeyHex);
+
+    expect(accountId).toBe(expectedAccountId);
+  });
+
+  it("should produce different AccountIds for different keys", () => {
+    const key1 = generateAccountKey();
+    const key2 = generateAccountKey();
+    const hex1 = toHex(new Uint8Array(key1.publicKey));
+    const hex2 = toHex(new Uint8Array(key2.publicKey));
+
+    expect(accountIdFromPublicKeyHex(hex1)).not.toBe(
+      accountIdFromPublicKeyHex(hex2),
+    );
+  });
+
+  it("should be deterministic for the same public key hex", () => {
+    const key = generateAccountKey();
+    const hex = toHex(new Uint8Array(key.publicKey));
+
+    expect(accountIdFromPublicKeyHex(hex)).toBe(
+      accountIdFromPublicKeyHex(hex),
+    );
   });
 });
 
