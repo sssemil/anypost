@@ -335,8 +335,8 @@ describe("MultiGroupChat", () => {
 
     const groupId = crypto.randomUUID();
     const { genesisEnvelope } = await alice.chat.createDirectMessageGroupWithId(groupId, [
-      alice.peerId,
-      bob.peerId,
+      alice.chat.accountId,
+      bob.chat.accountId,
     ]);
     const inviteCode = encodeGroupInvite({
       genesisEnvelope,
@@ -381,12 +381,12 @@ describe("MultiGroupChat", () => {
 
     const groupId = crypto.randomUUID();
     await alice.chat.createDirectMessageGroupWithId(groupId, [
-      alice.peerId,
-      bob.peerId,
+      alice.chat.accountId,
+      bob.chat.accountId,
     ]);
     await bob.chat.createDirectMessageGroupWithId(groupId, [
-      bob.peerId,
-      alice.peerId,
+      bob.chat.accountId,
+      alice.chat.accountId,
     ]);
     await waitForDmHandshakeComplete(alice, bob, groupId, 15_000);
 
@@ -1018,8 +1018,8 @@ describe("MultiGroupChat", () => {
 
     const groupId = crypto.randomUUID();
     const { genesisEnvelope } = await alice.chat.createDirectMessageGroupWithId(groupId, [
-      alice.peerId,
-      bob.peerId,
+      alice.chat.accountId,
+      bob.chat.accountId,
     ]);
     const inviteCode = encodeGroupInvite({
       genesisEnvelope,
@@ -1051,8 +1051,8 @@ describe("MultiGroupChat", () => {
 
     const groupId = crypto.randomUUID();
     const { genesisEnvelope } = await alice.chat.createDirectMessageGroupWithId(groupId, [
-      alice.peerId,
-      bob.peerId,
+      alice.chat.accountId,
+      bob.chat.accountId,
     ]);
 
     const invite = buildInvite(alice, genesisEnvelope);
@@ -1097,8 +1097,8 @@ describe("MultiGroupChat", () => {
     const bob = await createTestNode();
     const groupId = crypto.randomUUID();
 
-    await alice.chat.createDirectMessageGroupWithId(groupId, [alice.peerId, bob.peerId]);
-    await bob.chat.createDirectMessageGroupWithId(groupId, [bob.peerId, alice.peerId]);
+    await alice.chat.createDirectMessageGroupWithId(groupId, [alice.chat.accountId, bob.chat.accountId]);
+    await bob.chat.createDirectMessageGroupWithId(groupId, [bob.chat.accountId, alice.chat.accountId]);
 
     await alice.chat.connectTo(bob.chat.multiaddrs[0]);
     await waitFor(400);
@@ -1505,22 +1505,19 @@ describe("MultiGroupChat", () => {
     );
   });
 
-  it("should derive deterministic peer ID from account key", async () => {
+  it("should use different peerIds for same account key", async () => {
     const sharedAccountKey = generateAccountKey();
     const node1 = await createTestNode(sharedAccountKey);
-    const firstPeerId = node1.peerId;
-    await node1.chat.stop();
-    instances.splice(instances.indexOf(node1.chat), 1);
-
     const node2 = await createTestNode(sharedAccountKey);
 
-    expect(node2.peerId).toBe(firstPeerId);
+    expect(node1.chat.accountId).toBe(node2.chat.accountId);
+    expect(node1.peerId).not.toBe(node2.peerId);
   });
 
-  it("should expose accountId matching peerId for primary device", async () => {
+  it("should expose accountId different from peerId", async () => {
     const node = await createTestNode();
 
-    expect(node.chat.accountId).toBe(node.peerId);
+    expect(node.chat.accountId).not.toBe(node.peerId);
   });
 
   it("should register device in registry on startup", async () => {
@@ -1532,13 +1529,13 @@ describe("MultiGroupChat", () => {
     expect(devices[0].devicePeerId).toBe(node.peerId);
   });
 
-  it("should use random peer ID when isSecondaryDevice is true", async () => {
+  it("should share accountId across devices with same account key", async () => {
     const sharedAccountKey = generateAccountKey();
-    const primary = await createTestNode(sharedAccountKey);
-    const secondary = await createTestNode(sharedAccountKey, undefined, { isSecondaryDevice: true });
+    const device1 = await createTestNode(sharedAccountKey);
+    const device2 = await createTestNode(sharedAccountKey);
 
-    expect(secondary.chat.accountId).toBe(primary.chat.accountId);
-    expect(secondary.peerId).not.toBe(primary.peerId);
+    expect(device2.chat.accountId).toBe(device1.chat.accountId);
+    expect(device2.peerId).not.toBe(device1.peerId);
   });
 
   it("should deliver group messages to both primary and secondary devices of the same account", async () => {
@@ -1546,7 +1543,7 @@ describe("MultiGroupChat", () => {
     const memberKey = generateAccountKey();
     const owner = await createTestNode(ownerKey);
     const primaryDevice = await createTestNode(memberKey);
-    const secondaryDevice = await createTestNode(memberKey, undefined, { isSecondaryDevice: true });
+    const secondaryDevice = await createTestNode(memberKey);
 
     expect(primaryDevice.chat.accountId).toBe(secondaryDevice.chat.accountId);
 
@@ -1589,7 +1586,7 @@ describe("MultiGroupChat", () => {
     const senderKey = generateAccountKey();
     const receiverKey = generateAccountKey();
     const sender = await createTestNode(senderKey);
-    const secondaryReceiver = await createTestNode(receiverKey, undefined, { isSecondaryDevice: true });
+    const secondaryReceiver = await createTestNode(receiverKey);
 
     await sender.chat.connectTo(secondaryReceiver.chat.multiaddrs[0]);
     await waitFor(400);
@@ -1624,7 +1621,7 @@ describe("MultiGroupChat", () => {
     const memberKey = generateAccountKey();
     const owner = await createTestNode(ownerKey);
     const primaryDevice = await createTestNode(memberKey);
-    const secondaryDevice = await createTestNode(memberKey, undefined, { isSecondaryDevice: true });
+    const secondaryDevice = await createTestNode(memberKey);
 
     const { groupId, genesisEnvelope } = await owner.chat.createGroup("Sender Identity Group");
     const invite = buildInvite(owner, genesisEnvelope);

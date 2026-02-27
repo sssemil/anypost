@@ -56,9 +56,11 @@ import {
   createPersistedSettingsDocument,
   setDisplayName,
   getDisplayName,
+  setNotificationPreference,
+  getNotificationPreferences,
 } from "anypost-core/data";
 import { openAccountStore } from "anypost-core/data";
-import type { AccountStore, ContactsBook } from "anypost-core/data";
+import type { AccountStore, ContactsBook, NotificationPreferenceKey, NotificationPreferences, RegisteredDevice } from "anypost-core/data";
 import {
   createInitialState,
   transition,
@@ -82,7 +84,7 @@ import { GroupInfoPanel } from "./chat/GroupInfoPanel.js";
 import { DirectMessageInfoPanel } from "./chat/DirectMessageInfoPanel.js";
 import { encodeQuotedMessage, parseQuotedMessage } from "./chat/message-quote.js";
 import { ContactsBookPage } from "./contacts/ContactsBookPage.js";
-import { ProfilePage } from "./profile/ProfilePage.js";
+import { SettingsPage } from "./settings/SettingsPage.js";
 import { AboutPage } from "./about/AboutPage.js";
 import type {
   PendingJoinRequest,
@@ -590,6 +592,9 @@ export const App = () => {
   const [backgroundNodeBusy, setBackgroundNodeBusy] = createSignal(false);
   const [replyTargetMessage, setReplyTargetMessage] = createSignal<ChatMessageEvent | null>(null);
   const [editTargetMessage, setEditTargetMessage] = createSignal<ChatMessageEvent | null>(null);
+  const [isBackedUp, setIsBackedUp] = createSignal(false);
+  const [notificationPreferences, setNotificationPreferences] = createSignal<NotificationPreferences>({ messages: true, mentions: true, sounds: true });
+  const [registeredDevices, setRegisteredDevices] = createSignal<readonly RegisteredDevice[]>([]);
   const [profileSyncDebugTick, setProfileSyncDebugTick] = createSignal(0);
   const [diagnosticsRecorder, setDiagnosticsRecorder] = createSignal<DiagnosticsRecorderState>({
     status: "idle",
@@ -840,8 +845,8 @@ export const App = () => {
       dispatchMobileView({ type: "group-info-closed" });
     } else if (panel === "contacts") {
       dispatchMobileView({ type: "contacts-closed" });
-    } else if (panel === "profile") {
-      dispatchMobileView({ type: "profile-closed" });
+    } else if (panel === "settings") {
+      dispatchMobileView({ type: "settings-closed" });
     } else if (panel === "about") {
       dispatchMobileView({ type: "about-closed" });
     }
@@ -2372,12 +2377,15 @@ export const App = () => {
         const existingKey = await store.getAccountKey();
         if (existingKey) {
           const backedUp = await store.isBackedUp();
+          setIsBackedUp(backedUp);
           const exported = exportAccountKey(existingKey);
           setSeedPhrase(exported.seedPhrase);
 
           const persistedSettings = await createPersistedSettingsDocument(existingKey.publicKey);
           const name = getDisplayName(persistedSettings.doc);
           if (name) setDisplayNameState(name);
+          const prefs = getNotificationPreferences(persistedSettings.doc);
+          setNotificationPreferences(prefs);
           await persistedSettings.destroy();
 
           setOnboardingState(
@@ -2473,7 +2481,7 @@ export const App = () => {
         setDisplayName(persistedSettings.doc, name);
         setDisplayNameState(name);
         if (chat) {
-          upsertContact(chat.peerId, { selfName: name });
+          upsertContact(chat.accountId, { selfName: name });
         }
       } finally {
         await persistedSettings.destroy();
@@ -2508,7 +2516,7 @@ export const App = () => {
         setDisplayName(persistedSettings.doc, trimmed);
         setDisplayNameState(trimmed);
         if (chat) {
-          upsertContact(chat.peerId, { selfName: trimmed });
+          upsertContact(chat.accountId, { selfName: trimmed });
         }
       } finally {
         await persistedSettings.destroy();
@@ -2526,6 +2534,26 @@ export const App = () => {
     }
   };
 
+  const handleNotificationPreferenceChange = async (key: NotificationPreferenceKey, value: boolean) => {
+    setNotificationPreferences((prev) => ({ ...prev, [key]: value }));
+    const accountKey = getCurrentAccountKey();
+    if (!accountKey) return;
+    try {
+      const persistedSettings = await createPersistedSettingsDocument(accountKey.publicKey);
+      try {
+        setNotificationPreference(persistedSettings.doc, key, value);
+      } finally {
+        await persistedSettings.destroy();
+      }
+    } catch {
+      setNotificationPreferences((prev) => ({ ...prev, [key]: !value }));
+    }
+  };
+
+  const handleRemoveDevice = (_devicePeerId: string) => {
+    // TODO: expose removeDevice on MultiGroupChat
+  };
+
   const handleBackupConfirmed = async () => {
     try {
       const store = await openAccountStore();
@@ -2535,6 +2563,7 @@ export const App = () => {
         store.close();
       }
 
+      setIsBackedUp(true);
       setOnboardingState(
         transition(onboardingState(), { type: "backup-completed" }),
       );
@@ -2654,7 +2683,6 @@ export const App = () => {
       };
 
       const store = await openAccountStore();
-      const isPrimary = await store.isPrimaryDevice();
       let peerPrivateKey: Uint8Array | undefined;
       let initialPeerPathCache: ReadonlyMap<string, readonly string[]> = new Map();
       let initialRelayContactBook: RelayContactBook = new Map();
@@ -2663,10 +2691,8 @@ export const App = () => {
       let initialContactsBook: ContactsBook = new Map();
       let initialBlockedPeerIds: ReadonlySet<string> = new Set();
       try {
-        if (!isPrimary) {
-          const savedKey = await store.getPeerPrivateKey();
-          if (savedKey) peerPrivateKey = savedKey;
-        }
+        const savedKey = await store.getPeerPrivateKey();
+        if (savedKey) peerPrivateKey = savedKey;
         const compatStore = store as AccountStore & PeerPathCacheStoreCompat;
         if (typeof compatStore.getPeerPathCache === "function") {
           initialPeerPathCache = await compatStore.getPeerPathCache();
@@ -2822,11 +2848,12 @@ export const App = () => {
       setRelayContactBook(chat.getRelayContactBook());
       setPinnedPeerWatchdogState(chat.getPinnedPeerWatchdogState());
       setConnectionReasonCounts(chat.getConnectionReasonCounts());
+      setRegisteredDevices(chat.getRegisteredDevices());
 
       setChatStatus("connected");
       setChatError(null);
 
-      if (!isPrimary && !peerPrivateKey) {
+      if (!peerPrivateKey) {
         const saveStore = await openAccountStore();
         try {
           await saveStore.savePeerPrivateKey(chat.getPeerPrivateKey());
@@ -2839,7 +2866,7 @@ export const App = () => {
         setPendingJoinsMap(initialPendingJoins);
       }
 
-      upsertContact(chat.peerId, { selfName: displayName() || null });
+      upsertContact(chat.accountId, { selfName: displayName() || null });
 
       restorePersistedGroups();
       refreshNetworkStatus();
@@ -2883,7 +2910,7 @@ export const App = () => {
         });
         const liveChat = chat;
         if (liveChat) {
-          void deriveDirectMessageGroupId(liveChat.peerId, msg.senderPeerId).then((dmGroupId) => {
+          void deriveDirectMessageGroupId(liveChat.accountId, msg.senderPeerId).then((dmGroupId) => {
             if (dmGroupId === msg.groupId) {
               setDirectMessagePeerForGroup(msg.groupId, msg.senderPeerId);
             }
@@ -3236,7 +3263,7 @@ export const App = () => {
 
     const name = displayName() || undefined;
     if (editTarget) {
-      if (editTarget.senderPeerId !== currentChat.peerId) return;
+      if (editTarget.senderPeerId !== currentChat.accountId) return;
       if (!editTarget.hashHex) return;
       const existing = parseQuotedMessage(editTarget.text);
       const editedText = existing.quote
@@ -3271,7 +3298,7 @@ export const App = () => {
 
     currentChat.sendMessage(groupId, outgoingText, name).then(() => {
       appendDiagnosticsEntry("message-send-succeeded", { groupId, repliedToActionId: replyTarget?.id ?? null });
-      upsertContact(currentChat.peerId, {
+      upsertContact(currentChat.accountId, {
         selfName: name ?? null,
         groupId,
       });
@@ -3296,7 +3323,7 @@ export const App = () => {
   const handleEditMessage = (message: ChatMessageEvent) => {
     const currentChat = chat;
     if (!currentChat) return;
-    if (message.senderPeerId !== currentChat.peerId) return;
+    if (message.senderPeerId !== currentChat.accountId) return;
     setReplyTargetMessage(null);
     setEditTargetMessage(message);
     setMessageDraft(parseQuotedMessage(message.text).body);
@@ -3306,7 +3333,7 @@ export const App = () => {
     const currentChat = chat;
     const activeGroup = getActiveGroup(groupState());
     if (!currentChat || !activeGroup) return;
-    if (message.senderPeerId !== currentChat.peerId) return;
+    if (message.senderPeerId !== currentChat.accountId) return;
     if (!message.hashHex) return;
     const groupId = activeGroup.groupId;
     appendDiagnosticsEntry("message-delete-requested", {
@@ -3685,7 +3712,7 @@ export const App = () => {
     const currentChat = chat;
     if (!currentChat) return;
     const target = peerId.trim();
-    if (target.length === 0 || target === currentChat.peerId) return;
+    if (target.length === 0 || target === currentChat.accountId) return;
 
     const now = Date.now();
     const lastRequestedAt = profileSyncLastRequestAtByPeer.get(target) ?? 0;
@@ -3719,12 +3746,12 @@ export const App = () => {
     if (!currentChat) return "Not connected";
     const trimmedTarget = targetPeerId.trim();
     if (!isValidPeerId(trimmedTarget)) return "Invalid peer ID";
-    if (trimmedTarget === currentChat.peerId) return "Cannot DM yourself";
+    if (trimmedTarget === currentChat.accountId) return "Cannot DM yourself";
     appendDiagnosticsEntry("dm-start-requested", { targetPeerId: trimmedTarget });
     maybeRequestProfileSync(trimmedTarget);
 
     try {
-      const dmGroupId = await deriveDirectMessageGroupId(currentChat.peerId, trimmedTarget);
+      const dmGroupId = await deriveDirectMessageGroupId(currentChat.accountId, trimmedTarget);
       setDirectMessagePeerForGroup(dmGroupId, trimmedTarget);
       upsertContact(trimmedTarget, { groupId: dmGroupId });
 
@@ -3735,7 +3762,7 @@ export const App = () => {
         !!ownKeyHex &&
         !chainState.dmGenesisContributorPublicKeys.has(ownKeyHex);
       if (!chainState || chainState.createdAt <= 0 || localDmGenesisMissing) {
-        await currentChat.createDirectMessageGroupWithId(dmGroupId, [currentChat.peerId, trimmedTarget]);
+        await currentChat.createDirectMessageGroupWithId(dmGroupId, [currentChat.accountId, trimmedTarget]);
         chainState = currentChat.getActionChainState(dmGroupId);
         if (existingGroup) {
           dispatchGroupEvent({
@@ -4560,7 +4587,7 @@ export const App = () => {
     for (let index = activeGroup.messages.length - 1; index >= 0; index -= 1) {
       const message = activeGroup.messages[index];
       if (message.senderPeerId === SYSTEM_SENDER_ID) continue;
-      if (message.senderPeerId === currentChat.peerId) continue;
+      if (message.senderPeerId === currentChat.accountId) continue;
       if (!message.hashHex) continue;
       return message.hashHex;
     }
@@ -4958,7 +4985,7 @@ export const App = () => {
                 onDeclineIncomingCall={() => void handleDeclineIncomingCall()}
                 showBackButton={mobileView().currentView === "chat"}
                 onBackPress={() => dispatchMobileView({ type: "back-pressed" })}
-                onProfileToggle={() => dispatchMobileView({ type: "profile-toggled" })}
+                onSettingsToggle={() => dispatchMobileView({ type: "settings-toggled" })}
                 onDevDrawerToggle={() => dispatchMobileView({ type: "dev-drawer-toggled" })}
                 onAboutToggle={() => dispatchMobileView({ type: "about-toggled" })}
                 onContactsToggle={() => dispatchMobileView({ type: "contacts-toggled" })}
@@ -5278,6 +5305,7 @@ export const App = () => {
                   onClearRelayContactBook={handleClearRelayContactBook}
                   onClearPeerPathCache={handleClearPeerPathCache}
                   onClearConnectionReasons={handleClearConnectionReasons}
+                  accountId={chat!.accountId}
                 />
                 <EventLog
                   events={eventLog()}
@@ -5295,11 +5323,17 @@ export const App = () => {
                 onStartDirectMessage={handleStartDirectMessageFromContacts}
               />
             }
-            profileContent={
-              <ProfilePage
-                peerId={chat!.accountId}
+            settingsContent={
+              <SettingsPage
+                accountId={chat!.accountId}
+                peerId={chat!.peerId}
                 displayName={displayName()}
+                isBackedUp={isBackedUp()}
+                notificationPreferences={notificationPreferences()}
+                registeredDevices={registeredDevices()}
                 onSaveDisplayName={handleProfileDisplayNameSave}
+                onNotificationPreferenceChange={(key, value) => void handleNotificationPreferenceChange(key, value)}
+                onRemoveDevice={(devicePeerId) => void handleRemoveDevice(devicePeerId)}
               />
             }
             aboutContent={

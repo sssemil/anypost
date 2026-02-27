@@ -373,7 +373,6 @@ export type MultiGroupChat = {
 
 type CreateMultiGroupChatOptions = {
   readonly accountKey: AccountKey;
-  readonly isSecondaryDevice?: boolean;
   readonly peerPrivateKey?: Uint8Array;
   readonly initialPublicKeyToPeerId?: ReadonlyMap<string, string>;
   readonly initialPeerPathCache?: ReadonlyMap<string, readonly string[]>;
@@ -464,7 +463,6 @@ export const createMultiGroupChat = async (
 ): Promise<MultiGroupChat> => {
   const {
     accountKey,
-    isSecondaryDevice = false,
     peerPrivateKey: rawPeerPrivateKey,
     initialPublicKeyToPeerId,
     initialPeerPathCache,
@@ -504,9 +502,7 @@ export const createMultiGroupChat = async (
 
   const privateKey = rawPeerPrivateKey
     ? privateKeyFromRaw(new Uint8Array(rawPeerPrivateKey))
-    : isSecondaryDevice
-      ? await generateKeyPair("Ed25519")
-      : accountPrivateKey;
+    : await generateKeyPair("Ed25519");
 
   const relayPeers = [...initialBootstrapPeers];
   const runtimeAdapter = providedRuntimeAdapter
@@ -1601,11 +1597,26 @@ export const createMultiGroupChat = async (
     return topics;
   };
 
+  const resolveAccountIdForPeerId = (transportPeerId: string): string | undefined => {
+    for (const [pubKeyHex, mappedPeerId] of publicKeyToPeerId) {
+      if (mappedPeerId === transportPeerId) {
+        return accountIdFromPublicKeyHex(pubKeyHex);
+      }
+    }
+    return undefined;
+  };
+
   const isPeerMemberOfGroup = (groupId: string, peerIdValue: string): boolean => {
     const state = actionChainStates.get(groupId);
     if (!state) return true;
-    if (state.isDirectMessage && state.directMessagePeerIds?.includes(peerIdValue)) {
+    if (state.isDirectMessage && !state.dmHandshakeComplete) {
       return true;
+    }
+    if (state.isDirectMessage && state.directMessagePeerIds) {
+      const remoteAccountId = resolveAccountIdForPeerId(peerIdValue);
+      if (remoteAccountId && state.directMessagePeerIds.includes(remoteAccountId)) {
+        return true;
+      }
     }
     for (const member of state.members.values()) {
       if (publicKeyToPeerId.get(member.publicKeyHex) === peerIdValue) {
@@ -1978,12 +1989,16 @@ export const createMultiGroupChat = async (
     }
 
     const dmPeers = actionChainStates.get(payload.groupId)?.directMessagePeerIds;
-    if (dmPeers && !dmPeers.includes(payload.senderPeerId)) {
-      emit(
-        "info",
-        `Rejected call control from non-DM peer ${payload.senderPeerId.slice(0, 12)}...`,
-      );
-      return;
+    if (dmPeers) {
+      const senderAccountIdForCall = resolveAccountIdForPeerId(payload.senderPeerId);
+      if (!dmPeers.includes(payload.senderPeerId) &&
+          !(senderAccountIdForCall && dmPeers.includes(senderAccountIdForCall))) {
+        emit(
+          "info",
+          `Rejected call control from non-DM peer ${payload.senderPeerId.slice(0, 12)}...`,
+        );
+        return;
+      }
     }
 
     if (
@@ -3614,12 +3629,13 @@ export const createMultiGroupChat = async (
       if (isMembershipEnforcedGroup(matchedGroupId)) {
         if (!isOwnMemberOfGroup(matchedGroupId)) return;
         const syncReqGroupState = actionChainStates.get(matchedGroupId);
+        const syncReqSenderAccountId = accountIdFromPublicKeyHex(senderPublicKeyHex);
         const allowDmHandshakeSyncRequest =
           !!syncReqGroupState &&
           syncReqGroupState.isDirectMessage &&
           !syncReqGroupState.dmHandshakeComplete &&
           !!syncReqGroupState.directMessagePeerIds &&
-          syncReqGroupState.directMessagePeerIds.includes(senderPeerId);
+          syncReqGroupState.directMessagePeerIds.includes(syncReqSenderAccountId);
         if (!syncReqGroupState?.members.has(senderPublicKeyHex) && !allowDmHandshakeSyncRequest) {
           if (isOwnAdminOfGroup(matchedGroupId)) {
             processIncomingJoinRequest({
@@ -3692,12 +3708,13 @@ export const createMultiGroupChat = async (
 
       const senderPublicKeyHex = toHex(payload.senderPublicKey);
       const groupState = actionChainStates.get(matchedGroupId);
+      const syncRespSenderAccountId = accountIdFromPublicKeyHex(senderPublicKeyHex);
       const allowDirectMessageHandshakeSender =
         !!groupState &&
         groupState.isDirectMessage &&
         !groupState.dmHandshakeComplete &&
         !!groupState.directMessagePeerIds &&
-        groupState.directMessagePeerIds.includes(senderPeerId);
+        groupState.directMessagePeerIds.includes(syncRespSenderAccountId);
       if (
         isMembershipEnforcedGroup(matchedGroupId) &&
         !groupState?.members.has(senderPublicKeyHex) &&
@@ -3780,12 +3797,13 @@ export const createMultiGroupChat = async (
       if (isMembershipEnforcedGroup(matchedGroupId)) {
         const groupState = actionChainStates.get(matchedGroupId);
         const senderPublicKeyHex = toHex(payload.senderPublicKey);
+        const senderAccountIdFromPayload = accountIdFromPublicKeyHex(senderPublicKeyHex);
         const allowDmHandshakeHeadsAnnounce =
           !!groupState &&
           groupState.isDirectMessage &&
           !groupState.dmHandshakeComplete &&
           !!groupState.directMessagePeerIds &&
-          groupState.directMessagePeerIds.includes(senderPeerId);
+          groupState.directMessagePeerIds.includes(senderAccountIdFromPayload);
         if (!groupState?.members.has(senderPublicKeyHex) && !allowDmHandshakeHeadsAnnounce) return;
       }
       const dag = actionDags.get(matchedGroupId);
@@ -4493,7 +4511,7 @@ export const createMultiGroupChat = async (
     if (groupId.trim().length === 0) throw new Error("Group ID cannot be empty");
 
     const normalizedPeerIds = normalizeDirectMessagePeerIds(peerIds);
-    if (!normalizedPeerIds.includes(ownPeerId)) {
+    if (!normalizedPeerIds.includes(accountId)) {
       throw new Error("Local peer must be one of the DM peers");
     }
 
