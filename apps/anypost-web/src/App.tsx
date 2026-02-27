@@ -70,6 +70,7 @@ import { BackupBanner } from "./onboarding/BackupBanner.js";
 import { decideAutoConnect } from "./auto-connect.js";
 import { PeerSharingPanel } from "./PeerSharingPanel.js";
 import { ChatLayout } from "./layout/ChatLayout.js";
+import { InfoDialog } from "./layout/InfoDialog.js";
 import { HeaderBar } from "./layout/HeaderBar.js";
 import { GroupSidebar } from "./sidebar/GroupSidebar.js";
 import { MessageList } from "./chat/MessageList.js";
@@ -5282,72 +5283,6 @@ export const App = () => {
                 />
               </>
             }
-            groupInfoContent={
-              <Show
-                when={actionChainState()?.isDirectMessage}
-                fallback={
-                  <GroupInfoPanel
-                    groupId={groupState().activeGroupId}
-                    groupName={activeGroupName() ?? "Unknown Group"}
-                    members={actionChainState()?.members ?? new Map()}
-                    actionEnvelopes={chat?.getActionChainEnvelopes(groupState().activeGroupId ?? "") ?? []}
-                    connectionMetrics={connectionMetrics()}
-                    activeGroupDiscoveryMetrics={activeGroupDiscoveryMetrics()}
-                    joinRetryEntry={activeJoinRetryEntry()}
-                    syncProgressByPeer={activeSyncProgressByPeer()}
-                    pendingJoins={pendingJoinsMap().get(groupState().activeGroupId ?? "") ?? []}
-                    joinPolicy={actionChainState()?.joinPolicy ?? "manual"}
-                    isAdmin={isCurrentUserAdmin()}
-                    ownRole={ownRole()}
-                    ownPublicKeyHex={ownPublicKeyHex()}
-                    ownDisplayName={displayName()}
-                    publicKeyToPeerId={publicKeyToPeerIdMap()}
-                    contactsBook={contactsBook()}
-                    connectedPeerIds={connectedPeerIds()}
-                    latencyMap={latencyMap()}
-                    directMessagePeerId={activeDirectMessagePeerId()}
-                    directMessagePeerLabel={directMessagePeerLabel(activeDirectMessagePeerId())}
-                    directMessageBlocked={isDirectMessageBlocked(activeDirectMessagePeerId())}
-                    onSetDirectMessageBlocked={(peerId, blocked) => setPeerBlocked(peerId, blocked)}
-                    onStartDirectMessage={handleStartDirectMessageFromGroupInfo}
-                    onApproveJoin={handleApproveJoin}
-                    onRemoveMember={handleRemoveMember}
-                    onChangeMemberRole={isCurrentUserAdmin() ? handleChangeMemberRole : null}
-                    onAddByPeerId={handleAddByPeerId}
-                    onRetryJoinNow={handleRetryJoinNow}
-                    onCancelJoinRetry={handleCancelJoinRetry}
-                    onCreateInvite={
-                      (chat?.getActionChainEnvelopes(groupState().activeGroupId ?? "")?.length ?? 0) > 0
-                        ? handleCreateInvite
-                        : null
-                    }
-                    onSetJoinPolicy={isCurrentUserAdmin() ? handleSetJoinPolicy : null}
-                    onRenameGroup={
-                      isCurrentUserAdmin() && !(actionChainState()?.isDirectMessage ?? false)
-                        ? handleRenameGroup
-                        : null
-                    }
-                    onLeaveGroup={() => {
-                      const gid = groupState().activeGroupId;
-                      if (gid) handleLeaveGroup(gid);
-                    }}
-                  />
-                }
-              >
-                <DirectMessageInfoPanel
-                  groupId={groupState().activeGroupId}
-                  peerId={activeDirectMessagePeerId()}
-                  peerLabel={directMessagePeerLabel(activeDirectMessagePeerId())}
-                  peerPresenceLabel={activeDirectMessagePresence()?.label}
-                  peerPresenceTone={activeDirectMessagePresence()?.tone}
-                  blocked={isDirectMessageBlocked(activeDirectMessagePeerId())}
-                  handshakeComplete={actionChainState()?.dmHandshakeComplete ?? false}
-                  missingPeerIds={chat?.getDirectMessageHandshakeState(groupState().activeGroupId ?? "")?.missingPeerIds ?? []}
-                  actionEnvelopes={chat?.getActionChainEnvelopes(groupState().activeGroupId ?? "") ?? []}
-                  onSetBlocked={(peerId, blocked) => setPeerBlocked(peerId, blocked)}
-                />
-              </Show>
-            }
             contactsContent={
               <ContactsBookPage
                 contactsBook={contactsBook()}
@@ -5375,6 +5310,76 @@ export const App = () => {
             rightPanel={mobileView().rightPanel}
             onRightPanelClose={closeRightPanel}
           />
+          <InfoDialog
+            open={mobileView().rightPanel === "group-info"}
+            title={actionChainState()?.isDirectMessage ? "Chat Info" : "Group Info"}
+            onClose={closeRightPanel}
+          >
+            <Show
+              when={actionChainState()?.isDirectMessage}
+              fallback={
+                <GroupInfoPanel
+                  groupId={groupState().activeGroupId}
+                  groupName={activeGroupName() ?? "Unknown Group"}
+                  members={actionChainState()?.members ?? new Map()}
+                  actionEnvelopes={chat?.getActionChainEnvelopes(groupState().activeGroupId ?? "") ?? []}
+                  connectionMetrics={connectionMetrics()}
+                  activeGroupDiscoveryMetrics={activeGroupDiscoveryMetrics()}
+                  joinRetryEntry={activeJoinRetryEntry()}
+                  syncProgressByPeer={activeSyncProgressByPeer()}
+                  pendingJoins={pendingJoinsMap().get(groupState().activeGroupId ?? "") ?? []}
+                  joinPolicy={actionChainState()?.joinPolicy ?? "manual"}
+                  isAdmin={isCurrentUserAdmin()}
+                  ownRole={ownRole()}
+                  ownPublicKeyHex={ownPublicKeyHex()}
+                  ownDisplayName={displayName()}
+                  publicKeyToPeerId={publicKeyToPeerIdMap()}
+                  contactsBook={contactsBook()}
+                  connectedPeerIds={connectedPeerIds()}
+                  latencyMap={latencyMap()}
+                  directMessagePeerId={activeDirectMessagePeerId()}
+                  directMessagePeerLabel={directMessagePeerLabel(activeDirectMessagePeerId())}
+                  directMessageBlocked={isDirectMessageBlocked(activeDirectMessagePeerId())}
+                  onSetDirectMessageBlocked={(peerId, blocked) => setPeerBlocked(peerId, blocked)}
+                  onStartDirectMessage={handleStartDirectMessageFromGroupInfo}
+                  onApproveJoin={handleApproveJoin}
+                  onRemoveMember={handleRemoveMember}
+                  onChangeMemberRole={isCurrentUserAdmin() ? handleChangeMemberRole : null}
+                  onAddByPeerId={handleAddByPeerId}
+                  onRetryJoinNow={handleRetryJoinNow}
+                  onCancelJoinRetry={handleCancelJoinRetry}
+                  onCreateInvite={
+                    (chat?.getActionChainEnvelopes(groupState().activeGroupId ?? "")?.length ?? 0) > 0
+                      ? handleCreateInvite
+                      : null
+                  }
+                  onSetJoinPolicy={isCurrentUserAdmin() ? handleSetJoinPolicy : null}
+                  onRenameGroup={
+                    isCurrentUserAdmin() && !(actionChainState()?.isDirectMessage ?? false)
+                      ? handleRenameGroup
+                      : null
+                  }
+                  onLeaveGroup={() => {
+                    const gid = groupState().activeGroupId;
+                    if (gid) handleLeaveGroup(gid);
+                  }}
+                />
+              }
+            >
+              <DirectMessageInfoPanel
+                groupId={groupState().activeGroupId}
+                peerId={activeDirectMessagePeerId()}
+                peerLabel={directMessagePeerLabel(activeDirectMessagePeerId())}
+                peerPresenceLabel={activeDirectMessagePresence()?.label}
+                peerPresenceTone={activeDirectMessagePresence()?.tone}
+                blocked={isDirectMessageBlocked(activeDirectMessagePeerId())}
+                handshakeComplete={actionChainState()?.dmHandshakeComplete ?? false}
+                missingPeerIds={chat?.getDirectMessageHandshakeState(groupState().activeGroupId ?? "")?.missingPeerIds ?? []}
+                actionEnvelopes={chat?.getActionChainEnvelopes(groupState().activeGroupId ?? "") ?? []}
+                onSetBlocked={(peerId, blocked) => setPeerBlocked(peerId, blocked)}
+              />
+            </Show>
+          </InfoDialog>
         </Show>
       </Match>
     </Switch>

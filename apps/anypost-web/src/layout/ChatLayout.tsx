@@ -2,13 +2,14 @@ import type { JSX } from "solid-js";
 import { Match, Show, Switch } from "solid-js";
 import type { RightPanel } from "./mobile-view-machine.js";
 
+type SidePanelType = "dev-tools" | "contacts" | "profile" | "about";
+
 type ChatLayoutProps = {
   readonly sidebar: JSX.Element;
   readonly header: JSX.Element;
   readonly messageList: JSX.Element;
   readonly messageInput: JSX.Element;
   readonly devDrawerContent: JSX.Element;
-  readonly groupInfoContent: JSX.Element;
   readonly contactsContent: JSX.Element;
   readonly profileContent: JSX.Element;
   readonly aboutContent: JSX.Element;
@@ -18,13 +19,15 @@ type ChatLayoutProps = {
   readonly messageInputInsetPx?: number;
 };
 
-const PANEL_TITLES: Record<Exclude<RightPanel, "none">, string> = {
+const PANEL_TITLES: Record<SidePanelType, string> = {
   "dev-tools": "Developer Tools",
-  "group-info": "Group Info",
   "contacts": "Contacts",
   "profile": "Profile",
   "about": "About",
 };
+
+const isSidePanel = (panel: RightPanel): panel is SidePanelType =>
+  panel !== "none" && panel !== "group-info";
 
 export const ChatLayout = (props: ChatLayoutProps) => {
   return (
@@ -35,8 +38,8 @@ export const ChatLayout = (props: ChatLayoutProps) => {
         <div
           class="w-full sm:w-80 sm:min-w-80 sm:!flex flex-col border-r border-tg-border"
           classList={{
-            flex: props.mobileView === "group-list" && props.rightPanel === "none",
-            hidden: props.mobileView !== "group-list" || props.rightPanel !== "none",
+            flex: props.mobileView === "group-list" && !isSidePanel(props.rightPanel),
+            hidden: props.mobileView !== "group-list" || isSidePanel(props.rightPanel),
           }}
         >
           {props.sidebar}
@@ -45,8 +48,8 @@ export const ChatLayout = (props: ChatLayoutProps) => {
         <div
           class="flex-1 sm:!flex flex-col min-w-0"
           classList={{
-            flex: props.mobileView === "chat" && props.rightPanel === "none",
-            hidden: props.mobileView !== "chat" || props.rightPanel !== "none",
+            flex: props.mobileView === "chat" && !isSidePanel(props.rightPanel),
+            hidden: props.mobileView !== "chat" || isSidePanel(props.rightPanel),
           }}
         >
           <div class="flex-1 min-h-0">
@@ -64,14 +67,14 @@ export const ChatLayout = (props: ChatLayoutProps) => {
           </div>
         </div>
 
-        <Show when={props.rightPanel !== "none"}>
+        <Show when={isSidePanel(props.rightPanel)}>
           <div class="fixed inset-0 z-20 w-full flex flex-col bg-tg-sidebar sm:static sm:z-auto sm:w-[420px] sm:min-w-[420px] sm:border-l sm:border-tg-border">
             <div
               class="flex items-center justify-between px-4 py-3 border-b border-tg-border shrink-0"
               style={{ "padding-top": "calc(env(safe-area-inset-top, 0px) + 0.75rem)" }}
             >
               <span class="font-semibold text-tg-text">
-                {PANEL_TITLES[props.rightPanel as Exclude<RightPanel, "none">]}
+                {PANEL_TITLES[props.rightPanel as SidePanelType]}
               </span>
               <button
                 class="text-tg-text-dim hover:text-tg-text text-xl leading-none p-1 cursor-pointer"
@@ -84,9 +87,6 @@ export const ChatLayout = (props: ChatLayoutProps) => {
               <Switch>
                 <Match when={props.rightPanel === "dev-tools"}>
                   {props.devDrawerContent}
-                </Match>
-                <Match when={props.rightPanel === "group-info"}>
-                  {props.groupInfoContent}
                 </Match>
                 <Match when={props.rightPanel === "contacts"}>
                   {props.contactsContent}
