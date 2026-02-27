@@ -1378,8 +1378,6 @@ export const createMultiGroupChat = async (
     return dag;
   };
 
-
-
   const ownPublicKeyHex = toHex(new Uint8Array(accountKey.publicKey));
   const ownPeerId = node.peerId.toString();
 

@@ -1458,7 +1458,7 @@ export const App = () => {
       if (memberHex === ownKeyHex && currentChat) return currentChat.peerId;
       return pubKeyMap.get(memberHex) ?? `pk:${memberHex}`;
     };
-    const canonicalMessagesById = new Map<string, {
+    type CanonicalMessage = {
       readonly id: string;
       readonly hashHex: string;
       readonly senderPeerId: string;
@@ -1467,17 +1467,9 @@ export const App = () => {
       text: string;
       readonly timestamp: number;
       deleted: boolean;
-    }>();
-    const canonicalMessagesByHash = new Map<string, {
-      readonly id: string;
-      readonly hashHex: string;
-      readonly senderPeerId: string;
-      readonly authorPublicKeyHex: string;
-      readonly senderDisplayName: string | undefined;
-      text: string;
-      readonly timestamp: number;
-      deleted: boolean;
-    }>();
+    };
+    const canonicalMessagesById = new Map<string, CanonicalMessage>();
+    const canonicalMessagesByHash = new Map<string, CanonicalMessage>();
     const latestEditByTargetHash = new Map<string, {
       readonly newText: string;
       readonly editorPublicKeyHex: string;
