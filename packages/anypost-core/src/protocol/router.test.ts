@@ -177,7 +177,7 @@ describe("groupTopic", () => {
   it("should return a topic string for a group ID", () => {
     const topic = groupTopic("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11");
 
-    expect(topic).toBe("anypost2/group/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11");
+    expect(topic).toBe("anypost/group/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11");
   });
 
   it("should produce different topics for different group IDs", () => {

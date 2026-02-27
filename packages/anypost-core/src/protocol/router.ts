@@ -72,7 +72,7 @@ export const createRouter = (handlers: MessageHandler): Router => ({
 });
 
 export const groupTopic = (groupId: GroupId): string =>
-  `anypost2/group/${groupId}`;
+  `anypost/group/${groupId}`;
 
 export const deviceDiscoveryTopic = (accountPublicKeyHex: string): string =>
   `anypost/account/${accountPublicKeyHex}/devices`;

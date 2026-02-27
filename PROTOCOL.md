@@ -1,9 +1,9 @@
 # Anypost Protocol Specification
 
-> Version: 1.1 (protocolVersion: 2) — derived from the reference implementation as of 2026-02-27.
+> Version: 1.2 (protocolVersion: 2) — derived from the reference implementation as of 2026-02-27.
 > Sufficient to build a compatible node from scratch using any libp2p implementation.
 >
-> **Breaking change from v1.0**: v1.1 uses a different topic prefix (`anypost2/group/` vs `anypost/group/`) and `protocolVersion: 2` in wire messages. v1.0 and v1.1 nodes do not interact.
+> **v1.2 additions**: Identity architecture — AccountId = PeerId derived deterministically from the account key seed. Multi-device support via device certificates and device mesh topics. Account DHT advertising.
 
 ---
 
@@ -20,6 +20,33 @@
 AccountKey = { publicKey: Uint8Array(32), privateKey: Uint8Array(32) }
 ```
 
+### AccountId
+
+The **AccountId** is the libp2p PeerId derived deterministically from the account key seed. It serves as the stable, shareable user identity ("phone number").
+
+```
+libp2pKey  = generateKeyPairFromSeed("Ed25519", accountKey.privateKey)
+accountId  = peerIdFromPrivateKey(libp2pKey).toString()    // e.g. "12D3KooW..."
+```
+
+**Critical**: Do NOT use `privateKeyFromRaw(seed)` — that produces a secp256k1 key, not Ed25519. Must use `generateKeyPairFromSeed("Ed25519", seed)`.
+
+Given any member's Ed25519 public key (e.g. from `authorPublicKey` in a signed action), the AccountId can be derived:
+
+```
+accountIdFromPublicKeyHex(hex):
+  rawBytes     = fromHex(hex)
+  libp2pPubKey = publicKeyFromRaw(rawBytes)    // auto-detects Ed25519 from 32-byte length
+  return peerIdFromPublicKey(libp2pPubKey).toString()
+```
+
+### Multi-Device Model
+
+- **Primary device**: Uses the account key as the libp2p node key. Its PeerId = AccountId.
+- **Secondary devices**: Use a random libp2p key. Their PeerId differs from AccountId. They are bound to the account via device certificates.
+- **All devices** share the same AccountKey for signing actions.
+- **Identity in the action chain**: `authorPublicKey` identifies the account, regardless of which device created the action.
+
 ### Device Certificates
 
 Binds a libp2p PeerId to an account public key.
@@ -30,6 +57,8 @@ signature = Ed25519.sign(CertificatePayload, accountPrivateKey)
 ```
 
 Verification: reject if `timestamp > now + 5min` or `now - timestamp > 365 days`.
+
+Each device registers itself on startup via a Yjs-based device registry document, creating a certificate that binds its PeerId to the account.
 
 ### Hex Encoding Convention
 
@@ -91,6 +120,7 @@ cid = CID.createV1(raw.code, hash)
 |-----------|---------|
 | `anypost-relay` | Discover relay servers |
 | `anypost/group/{groupId}` | Per-group peer discovery |
+| `anypost/account/{accountId}` | Account device discovery (find any online device for an account) |
 
 ### 2.5 Peer Discovery (Multi-Layer)
 
@@ -110,6 +140,11 @@ cid = CID.createV1(raw.code, hash)
 - Parse `self:peer:update` multiaddrs for circuit relay addresses
 - Extract relay base address from `/p2p/{relayPeerId}/p2p-circuit/...` patterns
 
+**Layer E — Account DHT Advertising**:
+- On startup: `contentRouting.provide(CID("anypost/account/{accountId}"))` (fire-and-forget)
+- To find a user: `contentRouting.findProviders(CID("anypost/account/{targetAccountId}"))` — returns any online device for that account
+- Each device (primary or secondary) advertises under the same AccountId
+
 ---
 
 ## 3. Wire Protocol
@@ -126,11 +161,11 @@ decode: Uint8Array → CBOR → Zod.parse(WireMessageSchema) → WireMessage
 ### 3.2 Topics
 
 ```
-Group topic:            anypost2/group/{groupId}       (groupId = UUID)
-Device discovery topic: anypost/account/{pubKeyHex}/devices
+Group topic:            anypost/group/{groupId}        (groupId = UUID)
+Device mesh topic:      anypost/account/{accountId}/devices
 ```
 
-**Note**: The group topic prefix is `anypost2/` (not `anypost/`). This ensures v1.0 and v1.1 nodes operate on separate topics and do not interact.
+**Note**: The group topic prefix is `anypost/`.
 
 ### 3.3 Wire Message Types
 
@@ -620,7 +655,7 @@ A libp2p stream protocol for fetching specific actions by hash.
 
 - Circuit Relay v2, 128 max reservations
 - DHT server mode, provides under `anypost-relay` namespace
-- Auto-subscribes to all GossipSub topics its peers use (including `anypost2/group/` topics)
+- Auto-subscribes to all GossipSub topics its peers use (including `anypost/group/` topics)
 - `canRelayMessage: true` for GossipSub relay
 - Forwards all v1.1 wire messages: `heads_announce`, `sync_request`, `sync_response`, `signed_action`
 
@@ -651,25 +686,16 @@ Implementations must support:
 
 ---
 
-## 8. Compatibility
+## 8. Compatibility Checklist
 
-### 8.1 v1.0 / v1.1 Isolation
-
-v1.0 and v1.1 nodes are **fully isolated**:
-- Different topic prefix: `anypost/group/` (v1.0) vs `anypost2/group/` (v1.1)
-- `protocolVersion: 2` in all v1.1 wire messages; v1.0 messages without this field are rejected
-- Action payloads changed: `targetHash`/`upToHash` (v1.1) vs `targetActionId`/`upToActionId` (v1.0)
-- New `merge` action type not recognized by v1.0 nodes
-
-### 8.2 Compatibility Checklist
-
-To be compatible with v1.1 nodes, a new implementation must:
+To be compatible with v1.2 nodes, a new implementation must:
 
 - [ ] Generate Ed25519 account keys (32-byte seed)
+- [ ] Derive AccountId from account key using `generateKeyPairFromSeed("Ed25519", seed)` → PeerId
 - [ ] CBOR-encode SignableAction with `protocolVersion: 2`, sign with Ed25519, hash with SHA-256
 - [ ] Verify signatures against exact `signedBytes` (never re-encode)
 - [ ] CBOR-encode/decode WireMessages on GossipSub
-- [ ] Subscribe to `anypost2/group/{groupId}` topics (note: `anypost2/`, not `anypost/`)
+- [ ] Subscribe to `anypost/group/{groupId}` topics
 - [ ] Include `protocolVersion: 2` in all group-scoped wire messages
 - [ ] Handle all wire message types (at minimum: `signed_action`, `sync_request`, `sync_response`, `heads_announce`, `join_request`)
 - [ ] Implement DAG append with idempotent dedup on hash
@@ -686,4 +712,7 @@ To be compatible with v1.1 nodes, a new implementation must:
 - [ ] Implement block fetch protocol (`/anypost/blocks/1.0.0/get`) with signed, membership-checked requests
 - [ ] Respond to `subscription-change` by publishing stored envelopes
 - [ ] Use DHT provider records for group discovery (namespace: `anypost/group/{groupId}`)
+- [ ] Use DHT provider records for account discovery (namespace: `anypost/account/{accountId}`)
 - [ ] Participate in pubsub peer discovery on `_peer-discovery._p2p._pubsub` and `anypost/_peer-discovery`
+- [ ] Accept targeted messages addressed to either device PeerId or AccountId
+- [ ] Derive AccountId from `authorPublicKey` for sender identity display

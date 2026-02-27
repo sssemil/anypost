@@ -86,7 +86,7 @@ describe("Multi-group state machine", () => {
       });
 
       const group = getActiveGroup(state);
-      expect(group?.topic).toBe("anypost2/group/abc-123");
+      expect(group?.topic).toBe("anypost/group/abc-123");
     });
 
     it("should preserve join order", () => {
