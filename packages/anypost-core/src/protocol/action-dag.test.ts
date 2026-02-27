@@ -10,6 +10,7 @@ import {
   getTips,
   findMissingHashes,
   selectParentHashes,
+  findMissingParentHashes,
 } from "./action-dag.js";
 
 const DEFAULT_GROUP_ID = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11";
@@ -445,6 +446,63 @@ describe("Action DAG", () => {
       expect(parents).toHaveLength(2);
       expect(toHex(parents[0])).toBe(toHex(early.hash));
       expect(toHex(parents[1])).toBe(toHex(late.hash));
+    });
+  });
+
+  describe("findMissingParentHashes", () => {
+    it("should return empty set when all parents are in the DAG", () => {
+      const genesis = createTestAction({ parentHashes: [GENESIS_HASH] });
+      let dag = createActionDagState();
+      dag = appendAction(dag, genesis);
+
+      const child = createTestAction({ parentHashes: [genesis.hash] });
+      dag = appendAction(dag, child);
+
+      const missing = findMissingParentHashes(dag, [child]);
+
+      expect(missing.size).toBe(0);
+    });
+
+    it("should return missing parent hashes", () => {
+      const genesis = createTestAction({ parentHashes: [GENESIS_HASH] });
+      const child = createTestAction({ parentHashes: [genesis.hash] });
+
+      const dag = createActionDagState();
+
+      const missing = findMissingParentHashes(dag, [child]);
+
+      expect(missing.size).toBe(1);
+      expect(missing.has(toHex(genesis.hash))).toBe(true);
+    });
+
+    it("should ignore GENESIS_HASH as a missing parent", () => {
+      const genesis = createTestAction({ parentHashes: [GENESIS_HASH] });
+      const dag = createActionDagState();
+
+      const missing = findMissingParentHashes(dag, [genesis]);
+
+      expect(missing.size).toBe(0);
+    });
+
+    it("should handle multiple actions with overlapping missing parents", () => {
+      const genesis = createTestAction({ parentHashes: [GENESIS_HASH] });
+      const child1 = createTestAction({ parentHashes: [genesis.hash] });
+      const child2 = createTestAction({ parentHashes: [genesis.hash] });
+
+      const dag = createActionDagState();
+
+      const missing = findMissingParentHashes(dag, [child1, child2]);
+
+      expect(missing.size).toBe(1);
+      expect(missing.has(toHex(genesis.hash))).toBe(true);
+    });
+
+    it("should return empty set for empty actions array", () => {
+      const dag = createActionDagState();
+
+      const missing = findMissingParentHashes(dag, []);
+
+      expect(missing.size).toBe(0);
     });
   });
 });

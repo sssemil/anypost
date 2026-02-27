@@ -139,6 +139,24 @@ export const selectParentHashes = (
   return tipsWithHex.map((t) => t.hash).slice(0, maxParents);
 };
 
+export const findMissingParentHashes = (
+  dag: ActionDagState,
+  actions: readonly SignedAction[],
+): ReadonlySet<string> => {
+  const genesisHex = toHex(GENESIS_HASH);
+  const missing = new Set<string>();
+  for (const action of actions) {
+    for (const parentHash of action.parentHashes) {
+      const hex = toHex(parentHash);
+      if (hex === genesisHex) continue;
+      if (!dag.actions.has(hex)) {
+        missing.add(hex);
+      }
+    }
+  }
+  return missing;
+};
+
 const sortByTimestampThenHash = (
   hashes: string[],
   actions: ReadonlyMap<string, SignedAction>,

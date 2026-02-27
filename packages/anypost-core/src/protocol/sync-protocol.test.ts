@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { generateAccountKey } from "../crypto/identity.js";
 import type { SignedActionEnvelope } from "./action-chain.js";
+import { toHex } from "./action-chain.js";
 import {
   encodeSyncRequestSigningPayload,
   encodeSyncResponseSigningPayload,
@@ -9,6 +10,14 @@ import {
   signSyncResponse,
   verifySyncResponse,
   getMissingEnvelopesForKnownHash,
+  encodeHeadsAnnounceSigningPayload,
+  signHeadsAnnounce,
+  verifyHeadsAnnounce,
+  collectInlineEnvelopes,
+  shouldTriggerMerge,
+  MAX_INLINE_ENVELOPES,
+  MAX_INLINE_BYTES,
+  MERGE_TIP_THRESHOLD,
   INCOMING_SYNC_REQUEST_MAX,
   OUTGOING_SYNC_REQUEST_MAX,
   FULL_SYNC_FALLBACK_COOLDOWN_MS,
@@ -302,6 +311,278 @@ describe("Sync protocol", () => {
       expect(INCOMING_SYNC_REQUEST_MAX).toBe(40);
       expect(OUTGOING_SYNC_REQUEST_MAX).toBe(60);
       expect(FULL_SYNC_FALLBACK_COOLDOWN_MS).toBe(30_000);
+    });
+
+    it("should export inline envelope constants", () => {
+      expect(MAX_INLINE_ENVELOPES).toBe(16);
+      expect(MAX_INLINE_BYTES).toBe(65536);
+      expect(MERGE_TIP_THRESHOLD).toBe(64);
+    });
+  });
+
+  describe("encodeHeadsAnnounceSigningPayload", () => {
+    it("should return a Uint8Array", () => {
+      const result = encodeHeadsAnnounceSigningPayload({
+        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+        heads: [new Uint8Array(32)],
+        sentAt: 1000,
+        senderPeerId: "12D3KooWTest",
+        senderPublicKey: createTestPublicKey(),
+      });
+
+      expect(result).toBeInstanceOf(Uint8Array);
+      expect(result.length).toBeGreaterThan(0);
+    });
+
+    it("should produce different output for different heads", () => {
+      const publicKey = createTestPublicKey();
+      const base = {
+        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+        sentAt: 1000,
+        senderPeerId: "12D3KooWTest",
+        senderPublicKey: publicKey,
+      };
+
+      const a = encodeHeadsAnnounceSigningPayload({
+        ...base,
+        heads: [new Uint8Array(32).fill(1)],
+      });
+      const b = encodeHeadsAnnounceSigningPayload({
+        ...base,
+        heads: [new Uint8Array(32).fill(2)],
+      });
+
+      expect(toHex(a)).not.toBe(toHex(b));
+    });
+  });
+
+  describe("signHeadsAnnounce + verifyHeadsAnnounce", () => {
+    it("should produce a valid signature that verifies", () => {
+      const accountKey = generateAccountKey();
+      const payload = {
+        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+        heads: [new Uint8Array(32).fill(1)],
+        sentAt: Date.now(),
+        senderPeerId: "12D3KooWTest",
+        senderPublicKey: new Uint8Array(accountKey.publicKey),
+      };
+
+      const signature = signHeadsAnnounce(payload, accountKey.privateKey);
+
+      expect(signature).toBeInstanceOf(Uint8Array);
+      expect(signature.length).toBe(64);
+
+      const valid = verifyHeadsAnnounce({ ...payload, signature });
+      expect(valid).toBe(true);
+    });
+
+    it("should reject a tampered signature", () => {
+      const accountKey = generateAccountKey();
+      const payload = {
+        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+        heads: [],
+        sentAt: Date.now(),
+        senderPeerId: "12D3KooWTest",
+        senderPublicKey: new Uint8Array(accountKey.publicKey),
+      };
+
+      const signature = signHeadsAnnounce(payload, accountKey.privateKey);
+      const tampered = new Uint8Array(signature);
+      tampered[0] ^= 0xff;
+
+      const valid = verifyHeadsAnnounce({ ...payload, signature: tampered });
+      expect(valid).toBe(false);
+    });
+
+    it("should reject when verified with a different public key", () => {
+      const signerKey = generateAccountKey();
+      const otherKey = generateAccountKey();
+      const payload = {
+        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+        heads: [],
+        sentAt: Date.now(),
+        senderPeerId: "12D3KooWTest",
+        senderPublicKey: new Uint8Array(signerKey.publicKey),
+      };
+
+      const signature = signHeadsAnnounce(payload, signerKey.privateKey);
+
+      const valid = verifyHeadsAnnounce({
+        ...payload,
+        senderPublicKey: new Uint8Array(otherKey.publicKey),
+        signature,
+      });
+      expect(valid).toBe(false);
+    });
+
+    it("should reject tampered sentAt", () => {
+      const accountKey = generateAccountKey();
+      const payload = {
+        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+        heads: [],
+        sentAt: Date.now(),
+        senderPeerId: "12D3KooWTest",
+        senderPublicKey: new Uint8Array(accountKey.publicKey),
+      };
+
+      const signature = signHeadsAnnounce(payload, accountKey.privateKey);
+
+      const valid = verifyHeadsAnnounce({
+        ...payload,
+        sentAt: payload.sentAt + 1000,
+        signature,
+      });
+      expect(valid).toBe(false);
+    });
+  });
+
+  describe("collectInlineEnvelopes", () => {
+    it("should return empty array for empty input", () => {
+      const result = collectInlineEnvelopes([], new Set());
+
+      expect(result).toEqual([]);
+    });
+
+    it("should return first envelopes when their known heads is empty", () => {
+      const envelopes = [
+        createTestEnvelope(1),
+        createTestEnvelope(2),
+        createTestEnvelope(3),
+      ];
+
+      const result = collectInlineEnvelopes(envelopes, new Set());
+
+      expect(result).toEqual(envelopes);
+    });
+
+    it("should return envelopes after the latest known head", () => {
+      const envelopes = [
+        createTestEnvelope(1),
+        createTestEnvelope(2),
+        createTestEnvelope(3),
+      ];
+      const knownHeads = new Set([toHex(envelopes[0].hash)]);
+
+      const result = collectInlineEnvelopes(envelopes, knownHeads);
+
+      expect(result).toHaveLength(2);
+      expect(toHex(result[0].hash)).toBe(toHex(envelopes[1].hash));
+      expect(toHex(result[1].hash)).toBe(toHex(envelopes[2].hash));
+    });
+
+    it("should use latest known head position when multiple known heads exist", () => {
+      const envelopes = [
+        createTestEnvelope(1),
+        createTestEnvelope(2),
+        createTestEnvelope(3),
+        createTestEnvelope(4),
+      ];
+      const knownHeads = new Set([
+        toHex(envelopes[0].hash),
+        toHex(envelopes[2].hash),
+      ]);
+
+      const result = collectInlineEnvelopes(envelopes, knownHeads);
+
+      expect(result).toHaveLength(1);
+      expect(toHex(result[0].hash)).toBe(toHex(envelopes[3].hash));
+    });
+
+    it("should return empty when known head is the last envelope", () => {
+      const envelopes = [createTestEnvelope(1), createTestEnvelope(2)];
+      const knownHeads = new Set([toHex(envelopes[1].hash)]);
+
+      const result = collectInlineEnvelopes(envelopes, knownHeads);
+
+      expect(result).toEqual([]);
+    });
+
+    it("should return empty when no known heads are found in envelopes", () => {
+      const envelopes = [createTestEnvelope(1), createTestEnvelope(2)];
+      const unknownHash = new Uint8Array(32);
+      unknownHash[0] = 99;
+      const knownHeads = new Set([toHex(unknownHash)]);
+
+      const result = collectInlineEnvelopes(envelopes, knownHeads);
+
+      expect(result).toEqual([]);
+    });
+
+    it("should cap at MAX_INLINE_ENVELOPES", () => {
+      const envelopes: SignedActionEnvelope[] = [];
+      for (let i = 0; i < 20; i++) {
+        envelopes.push(createTestEnvelope(i));
+      }
+
+      const result = collectInlineEnvelopes(envelopes, new Set());
+
+      expect(result).toHaveLength(MAX_INLINE_ENVELOPES);
+    });
+
+    it("should cap at MAX_INLINE_BYTES total size", () => {
+      const createLargeEnvelope = (hashByte: number): SignedActionEnvelope => {
+        const hash = new Uint8Array(32);
+        hash[0] = hashByte;
+        return {
+          signedBytes: new Uint8Array(20 * 1024),
+          signature: new Uint8Array(64),
+          hash,
+        };
+      };
+
+      const envelopes: SignedActionEnvelope[] = [];
+      for (let i = 0; i < 10; i++) {
+        envelopes.push(createLargeEnvelope(i));
+      }
+
+      const result = collectInlineEnvelopes(envelopes, new Set());
+
+      const totalSize = result.reduce(
+        (sum, e) => sum + e.signedBytes.length + e.signature.length + e.hash.length,
+        0,
+      );
+      expect(totalSize).toBeLessThanOrEqual(MAX_INLINE_BYTES);
+      expect(result.length).toBeLessThan(envelopes.length);
+    });
+  });
+
+  describe("shouldTriggerMerge", () => {
+    it("should return false when tip count is at threshold", () => {
+      const result = shouldTriggerMerge(64, "author1", new Map());
+
+      expect(result).toBe(false);
+    });
+
+    it("should return true when tip count exceeds threshold", () => {
+      const result = shouldTriggerMerge(65, "author1", new Map());
+
+      expect(result).toBe(true);
+    });
+
+    it("should return false when rate limited", () => {
+      const now = Date.now();
+      const lastMerge = new Map([["author1", now - 30_000]]);
+
+      const result = shouldTriggerMerge(100, "author1", lastMerge, now);
+
+      expect(result).toBe(false);
+    });
+
+    it("should return true when rate limit has expired", () => {
+      const now = Date.now();
+      const lastMerge = new Map([["author1", now - 61_000]]);
+
+      const result = shouldTriggerMerge(100, "author1", lastMerge, now);
+
+      expect(result).toBe(true);
+    });
+
+    it("should return true when author has no merge history", () => {
+      const lastMerge = new Map([["other_author", Date.now()]]);
+
+      const result = shouldTriggerMerge(100, "author1", lastMerge);
+
+      expect(result).toBe(true);
     });
   });
 });
