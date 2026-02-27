@@ -1670,6 +1670,7 @@ export const App = () => {
               && message.senderDisplayName === canonical.senderDisplayName
               && message.text === canonical.text
               && message.timestamp === canonical.timestamp
+              && message.hashHex === canonical.hashHex
             ) {
               return message;
             }
@@ -1680,6 +1681,7 @@ export const App = () => {
               senderDisplayName: canonical.senderDisplayName,
               text: canonical.text,
               timestamp: canonical.timestamp,
+              hashHex: canonical.hashHex,
             };
           });
         if (!changed) return state;
@@ -2516,10 +2518,12 @@ export const App = () => {
   };
 
   const restorePersistedGroups = () => {
-    const storedVersion = parseInt(localStorage.getItem(PROTOCOL_VERSION_KEY) ?? "0", 10);
+    const rawVersion = parseInt(localStorage.getItem(PROTOCOL_VERSION_KEY) ?? "0", 10);
+    const storedVersion = Number.isNaN(rawVersion) ? 0 : rawVersion;
     if (storedVersion < CURRENT_PROTOCOL_VERSION) {
       const hadChains = localStorage.getItem(ACTION_CHAINS_STORAGE_KEY) !== null;
       localStorage.removeItem(ACTION_CHAINS_STORAGE_KEY);
+      localStorage.removeItem(GROUPS_STORAGE_KEY);
       localStorage.setItem(PROTOCOL_VERSION_KEY, String(CURRENT_PROTOCOL_VERSION));
       if (hadChains) {
         console.warn("Cleared v1.0 action chain data — protocol upgraded to v1.1");
@@ -3202,11 +3206,12 @@ export const App = () => {
     const name = displayName() || undefined;
     if (editTarget) {
       if (editTarget.senderPeerId !== currentChat.peerId) return;
+      if (!editTarget.hashHex) return;
       const existing = parseQuotedMessage(editTarget.text);
       const editedText = existing.quote
         ? encodeQuotedMessage(trimmedText, existing.quote)
         : trimmedText;
-      currentChat.editMessage(groupId, fromHex(editTarget.hashHex!), editedText).then(() => {
+      currentChat.editMessage(groupId, fromHex(editTarget.hashHex), editedText).then(() => {
         appendDiagnosticsEntry("message-edit-succeeded", { groupId, targetHash: editTarget.hashHex });
         setEditTargetMessage(null);
         setMessageDraft("");
@@ -3271,12 +3276,13 @@ export const App = () => {
     const activeGroup = getActiveGroup(groupState());
     if (!currentChat || !activeGroup) return;
     if (message.senderPeerId !== currentChat.peerId) return;
+    if (!message.hashHex) return;
     const groupId = activeGroup.groupId;
     appendDiagnosticsEntry("message-delete-requested", {
       groupId,
       targetHash: message.hashHex,
     });
-    currentChat.deleteMessage(groupId, fromHex(message.hashHex!)).then(() => {
+    currentChat.deleteMessage(groupId, fromHex(message.hashHex)).then(() => {
       appendDiagnosticsEntry("message-delete-succeeded", {
         groupId,
         targetHash: message.hashHex,

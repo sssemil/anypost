@@ -28,6 +28,10 @@ describe("fromHex", () => {
   });
 
   it("should reject non-hex characters", () => {
-    expect(() => fromHex("zzzz")).toThrow("Invalid hex at position 0");
+    expect(() => fromHex("zzzz")).toThrow("Invalid hex characters");
+  });
+
+  it("should reject partially valid hex like 0g", () => {
+    expect(() => fromHex("0g0g")).toThrow("Invalid hex characters");
   });
 });

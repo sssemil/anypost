@@ -114,11 +114,12 @@ export const toHex = (bytes: Uint8Array): string =>
 
 export const fromHex = (hex: string): Uint8Array => {
   if (hex.length % 2 !== 0) throw new Error("Invalid hex string length");
+  if (hex.length > 0 && !/^[0-9a-fA-F]+$/.test(hex)) {
+    throw new Error("Invalid hex characters");
+  }
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < hex.length; i += 2) {
-    const byte = parseInt(hex.slice(i, i + 2), 16);
-    if (Number.isNaN(byte)) throw new Error(`Invalid hex at position ${i}`);
-    bytes[i / 2] = byte;
+    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
   }
   return bytes;
 };
