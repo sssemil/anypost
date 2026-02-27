@@ -124,6 +124,48 @@ describe("BlockFetchRequestSchema", () => {
     const result = BlockFetchRequestSchema.safeParse(request);
     expect(result.success).toBe(false);
   });
+
+  it("should reject request with wrong-length hash", () => {
+    const request = {
+      protocolVersion: 2,
+      type: "getBlocks",
+      groupId: GROUP_ID,
+      hashes: [new Uint8Array(16)],
+      senderPublicKey: key.publicKey,
+      signature: new Uint8Array(64),
+      sentAt: Date.now(),
+    };
+    const result = BlockFetchRequestSchema.safeParse(request);
+    expect(result.success).toBe(false);
+  });
+
+  it("should reject request with wrong-length public key", () => {
+    const request = {
+      protocolVersion: 2,
+      type: "getBlocks",
+      groupId: GROUP_ID,
+      hashes: [],
+      senderPublicKey: new Uint8Array(16),
+      signature: new Uint8Array(64),
+      sentAt: Date.now(),
+    };
+    const result = BlockFetchRequestSchema.safeParse(request);
+    expect(result.success).toBe(false);
+  });
+
+  it("should reject request with wrong-length signature", () => {
+    const request = {
+      protocolVersion: 2,
+      type: "getBlocks",
+      groupId: GROUP_ID,
+      hashes: [],
+      senderPublicKey: key.publicKey,
+      signature: new Uint8Array(32),
+      sentAt: Date.now(),
+    };
+    const result = BlockFetchRequestSchema.safeParse(request);
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("BlockFetchResponseSchema", () => {
@@ -145,6 +187,13 @@ describe("BlockFetchResponseSchema", () => {
   it("should reject response with more than 256 envelopes", () => {
     const envelopes = Array.from({ length: 257 }, () => makeEnvelope());
     const response = { envelopes, missing: [] };
+    const result = BlockFetchResponseSchema.safeParse(response);
+    expect(result.success).toBe(false);
+  });
+
+  it("should reject response with more than 256 missing hashes", () => {
+    const missing = Array.from({ length: 257 }, () => new Uint8Array(32));
+    const response = { envelopes: [], missing };
     const result = BlockFetchResponseSchema.safeParse(response);
     expect(result.success).toBe(false);
   });
@@ -402,6 +451,30 @@ describe("validateBlockFetchRequest", () => {
       senderPublicKey: new Uint8Array(key.publicKey),
       signature,
       sentAt: futureTime,
+    };
+    const groupState = makeGroupState(key.publicKey);
+
+    const result = validateBlockFetchRequest(request, groupState);
+    expect(result.success).toBe(false);
+  });
+
+  it("should reject sentAt too far in the past", () => {
+    const pastTime = Date.now() - 10 * 60 * 1000;
+    const hashes = [new Uint8Array(32)];
+    const signature = new Uint8Array(
+      signBlockFetchRequest(
+        { groupId: GROUP_ID, hashes, sentAt: pastTime },
+        key.privateKey,
+      ),
+    );
+    const request = {
+      protocolVersion: 2 as const,
+      type: "getBlocks" as const,
+      groupId: GROUP_ID,
+      hashes,
+      senderPublicKey: new Uint8Array(key.publicKey),
+      signature,
+      sentAt: pastTime,
     };
     const groupState = makeGroupState(key.publicKey);
 

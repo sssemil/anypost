@@ -21,14 +21,26 @@ const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const MAX_DATA_LENGTH = 2 * 1024 * 1024;
 
 const Uint8ArraySchema = z.instanceof(Uint8Array);
+const HashSchema = z.instanceof(Uint8Array).refine(
+  (v) => v.length === 32,
+  { message: "Hash must be 32 bytes" },
+);
+const Ed25519PublicKeySchema = z.instanceof(Uint8Array).refine(
+  (v) => v.length === 32,
+  { message: "Public key must be 32 bytes" },
+);
+const Ed25519SignatureSchema = z.instanceof(Uint8Array).refine(
+  (v) => v.length === 64,
+  { message: "Signature must be 64 bytes" },
+);
 
 export const BlockFetchRequestSchema = z.object({
   protocolVersion: z.literal(2),
   type: z.literal("getBlocks"),
   groupId: GroupIdSchema,
-  hashes: z.array(Uint8ArraySchema).max(MAX_HASHES_PER_REQUEST),
-  senderPublicKey: Uint8ArraySchema,
-  signature: Uint8ArraySchema,
+  hashes: z.array(HashSchema).max(MAX_HASHES_PER_REQUEST),
+  senderPublicKey: Ed25519PublicKeySchema,
+  signature: Ed25519SignatureSchema,
   sentAt: z.number(),
 });
 
@@ -36,7 +48,7 @@ export type BlockFetchRequest = z.infer<typeof BlockFetchRequestSchema>;
 
 export const BlockFetchResponseSchema = z.object({
   envelopes: z.array(SignedActionEnvelopeSchema).max(MAX_ENVELOPES_PER_RESPONSE),
-  missing: z.array(Uint8ArraySchema),
+  missing: z.array(Uint8ArraySchema).max(MAX_HASHES_PER_REQUEST),
 });
 
 export type BlockFetchResponse = z.infer<typeof BlockFetchResponseSchema>;
@@ -140,6 +152,10 @@ export const validateBlockFetchRequest = (
     return Result.failure(new Error("Request clock skew too large"));
   }
 
+  if (request.sentAt < currentTime - MAX_CLOCK_SKEW_MS) {
+    return Result.failure(new Error("Request too old"));
+  }
+
   const senderHex = toHex(request.senderPublicKey);
   if (!groupState.members.has(senderHex)) {
     return Result.failure(new Error("Sender is not a group member"));
@@ -188,9 +204,14 @@ export const createBlockFetchHandler = (
       const raw = await lp.read();
       if (!raw) return;
 
-      const parsed = BlockFetchRequestSchema.safeParse(
-        decode(raw.subarray()),
-      );
+      let decoded: unknown;
+      try {
+        decoded = decode(raw.subarray());
+      } catch {
+        return;
+      }
+
+      const parsed = BlockFetchRequestSchema.safeParse(decoded);
       if (!parsed.success) return;
 
       const request = parsed.data;
