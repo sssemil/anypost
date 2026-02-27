@@ -74,18 +74,18 @@ libp2p.handle(BLOCK_FETCH_PROTOCOL, handleBlockFetchRequest)
 
 ## Acceptance Criteria
 
-- [ ] Handler validates request schema and rejects malformed requests
-- [ ] Handler verifies signature and rejects invalid signatures
-- [ ] Handler rejects requests with `sentAt` too far in future (>5 min)
-- [ ] Handler checks group membership and rejects non-members
-- [ ] Handler returns requested envelopes (by hash lookup) and reports missing hashes
-- [ ] Handler caps response at 256 envelopes and 1 MiB
-- [ ] Requester sends signed request and receives parsed response
-- [ ] Requester handles timeout (30s)
-- [ ] Stream is properly closed after request/response exchange
-- [ ] Length-prefixed CBOR framing works correctly
-- [ ] All schemas validated with Zod
-- [ ] Pure functions tested independently; integration tested with libp2p mock or real node
+- [x] Handler validates request schema and rejects malformed requests
+- [x] Handler verifies signature and rejects invalid signatures
+- [x] Handler rejects requests with `sentAt` too far in future (>5 min)
+- [x] Handler checks group membership and rejects non-members
+- [x] Handler returns requested envelopes (by hash lookup) and reports missing hashes
+- [x] Handler caps response at 256 envelopes and 1 MiB
+- [x] Requester sends signed request and receives parsed response
+- [x] Requester handles timeout (30s)
+- [x] Stream is properly closed after request/response exchange
+- [x] Length-prefixed CBOR framing works correctly
+- [x] All schemas validated with Zod
+- [x] Pure functions tested independently; integration tested with libp2p mock or real node
 
 ## Implementation Notes
 
@@ -103,3 +103,8 @@ libp2p.handle(BLOCK_FETCH_PROTOCOL, handleBlockFetchRequest)
 ## History
 
 - 2026-02-26 Created from brutal-plan PLAN-0002
+- 2026-02-27 00:18 Started work on this task
+- 2026-02-27 01:10 Implementation complete (TDD: 22 tests, all green)
+- 2026-02-27 01:40 Self-review #1: 0 CRITICAL, 4 MAJOR, 3 MINOR, 0 NIT
+- 2026-02-27 02:00 Fixed all 4 MAJOR findings (+5 new tests, 27 total)
+- 2026-02-27 02:15 Task completed. Final review passed with 0 CRITICAL, 0 MAJOR findings.

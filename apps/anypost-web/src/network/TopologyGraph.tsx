@@ -15,7 +15,6 @@ import {
   type GraphEdge,
   type NodeType,
   type TransportType,
-  type PeerCategory,
 } from "./topology-graph.js";
 
 export type TopologyGraphProps = {
@@ -25,7 +24,6 @@ export type TopologyGraphProps = {
   readonly contactLabelByPeerId?: ReadonlyMap<string, string>;
   readonly visiblePeerIds?: ReadonlySet<string>;
   readonly appPeerIds?: ReadonlySet<string>;
-  readonly contactPeerIds?: ReadonlySet<string>;
 };
 
 type SimNode = SimulationNodeDatum & GraphNode;
@@ -58,8 +56,7 @@ const nodeColor = (node: GraphNode): string => {
     case "relay": return "#FF9800";
     case "bootstrap": return "#9E9E9E";
     case "peer":
-      if (node.peerCategory === "contact") return "#A855F7";
-      if (node.peerCategory === "app") return "#3B82F6";
+      if (node.peerCategory === "app") return "#4CAF50";
       return "#9CA3AF";
   }
 };
@@ -84,6 +81,7 @@ const snapshotLayout = (simNodes: SimNode[], simLinks: SimLink[]): LayoutSnapsho
     id: n.id,
     label: n.label,
     nodeType: n.nodeType,
+    peerCategory: n.peerCategory,
     x: n.x ?? WIDTH / 2,
     y: n.y ?? HEIGHT / 2,
   }));
@@ -113,10 +111,9 @@ const nodeTypeLabel = (nodeType: NodeType): string => {
   }
 };
 
-const peerCategoryLabel = (category: PeerCategory): string => {
+const peerCategoryLabel = (category: "app" | "unknown"): string => {
   switch (category) {
     case "app": return "App";
-    case "contact": return "Contact";
     case "unknown": return "Unknown";
   }
 };
@@ -158,7 +155,6 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
       {
         visiblePeerIds: props.visiblePeerIds,
         appPeerIds: props.appPeerIds,
-        contactPeerIds: props.contactPeerIds,
       },
     );
 
@@ -205,7 +201,6 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
     props.contactLabelByPeerId;
     props.visiblePeerIds;
     props.appPeerIds;
-    props.contactPeerIds;
     rebuildSimulation();
   });
 
@@ -446,7 +441,7 @@ export const TopologyGraph = (props: TopologyGraphProps) => {
             </span>
           );
         })}
-        {(["app", "contact", "unknown"] as const).map((category) => {
+        {(["app", "unknown"] as const).map((category) => {
           const count = () => layout().nodes.filter((n) => n.nodeType === "peer" && n.peerCategory === category).length;
           return (
             <span>

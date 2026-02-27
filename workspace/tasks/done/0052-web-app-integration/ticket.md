@@ -39,14 +39,14 @@ On first load with v1.1 code:
 
 ## Acceptance Criteria
 
-- [ ] `canonicalMessagesByHash` index built and used for edit/delete resolution
-- [ ] `editMessage`, `deleteMessage`, `sendReadReceipt` accept hash parameter
-- [ ] UI components pass message hash to edit/delete handlers
-- [ ] Read receipts stored and resolved by hash hex
-- [ ] v1.0 localStorage data cleared on upgrade with warning log
-- [ ] Info panels display hash hex instead of UUID
-- [ ] Merge actions handled gracefully in UI (displayed or filtered as appropriate)
-- [ ] All TypeScript strict mode satisfied (SolidJS components)
+- [x] `canonicalMessagesByHash` index built and used for edit/delete resolution
+- [x] `editMessage`, `deleteMessage`, `sendReadReceipt` accept hash parameter
+- [x] UI components pass message hash to edit/delete handlers
+- [x] Read receipts stored and resolved by hash hex
+- [x] v1.0 localStorage data cleared on upgrade with warning log
+- [x] Info panels display hash hex instead of UUID
+- [x] Merge actions handled gracefully in UI (displayed or filtered as appropriate)
+- [x] All TypeScript strict mode satisfied (SolidJS components)
 
 ## Implementation Notes
 
@@ -64,3 +64,10 @@ On first load with v1.1 code:
 ## History
 
 - 2026-02-26 Created from brutal-plan PLAN-0002
+- 2026-02-27 01:56 Started work on this task
+- 2026-02-27 02:15 Core API changes: fromHex utility, hash-based editMessage/deleteMessage/sendReadReceipt signatures
+- 2026-02-27 02:30 Web app changes: hash-based maps, message dispatch, read receipt logic, info panels, localStorage migration
+- 2026-02-27 03:15 Code reduction complete
+- 2026-02-27 03:18 Self-review #1: 2 CRITICAL, 1 MAJOR, 2 MINOR
+- 2026-02-27 03:22 Fixes applied: hashHex guards, complete migration, fromHex hardening, reconciliation propagation
+- 2026-02-27 03:25 Task completed. Final review passed with 0 CRITICAL, 0 MAJOR findings.

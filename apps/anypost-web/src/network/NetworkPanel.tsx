@@ -165,7 +165,7 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
   const [contactsSearch, setContactsSearch] = createSignal("");
   const [contactsPage, setContactsPage] = createSignal(0);
   const [manualRelay, setManualRelay] = createSignal("");
-  const [appPeersOnly, setAppPeersOnly] = createSignal(true);
+  const [appPeersOnly, setAppPeersOnly] = createSignal(false);
 
   const relayAddresses = () => {
     const pool = props.relayPoolState;
@@ -179,7 +179,6 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
     for (const peerId of props.pinnedPeerIds) ids.add(peerId);
     for (const row of props.dmOutgoingDebug) ids.add(row.targetPeerId);
     for (const row of props.pendingDmDebug) ids.add(row.senderPeerId);
-    for (const row of props.profileSyncDebug) ids.add(row.peerId);
     return ids;
   });
 
@@ -252,7 +251,6 @@ export const NetworkPanel = (props: NetworkPanelProps) => {
                   ]),
                 )}
                 appPeerIds={appPeerIds()}
-                contactPeerIds={new Set([...props.contactsBook.values()].map((contact) => contact.peerId))}
                 visiblePeerIds={appPeersOnly() ? appPeerIds() : undefined}
               />
             </div>

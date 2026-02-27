@@ -41,10 +41,10 @@ Verify all acceptance criteria from PLAN-0002:
 
 ## Acceptance Criteria
 
-- [ ] PROTOCOL.md accurately describes v1.1 protocol
-- [ ] PROTOCOL.md is sufficient for building a compatible v1.1 node
-- [ ] All 13 end-to-end validation scenarios pass
-- [ ] No regressions in existing functionality (group creation, messaging, join/leave, etc.)
+- [x] PROTOCOL.md accurately describes v1.1 protocol
+- [x] PROTOCOL.md is sufficient for building a compatible v1.1 node
+- [x] All 13 end-to-end validation scenarios pass
+- [x] No regressions in existing functionality (group creation, messaging, join/leave, etc.)
 
 ### Relay app verification
 
@@ -67,3 +67,9 @@ Verify that the relay app (`apps/anypost-relay/`) works correctly with the new `
 ## History
 
 - 2026-02-26 Created from brutal-plan PLAN-0002
+- 2026-02-27 03:25 Started work on this task
+- 2026-02-27 03:35 PROTOCOL.md v1.1 rewrite committed (18209f2)
+- 2026-02-27 03:38 Code reduction complete (docs-only, no reduction needed)
+- 2026-02-27 03:39 Self-review #1: 0 CRITICAL, 5 MAJOR, 12 MINOR, 6 NIT
+- 2026-02-27 03:41 All MAJOR findings fixed (9e3fb0e)
+- 2026-02-27 03:42 Task completed. Final review passed with 0 CRITICAL, 0 MAJOR findings.

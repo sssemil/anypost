@@ -188,7 +188,7 @@ describe("buildTopologyGraph", () => {
     expect(graph.nodes.find((n) => n.id === "12D3KooWAppPeer")?.peerCategory).toBe("app");
   });
 
-  it("should classify app peers in contacts as contact", () => {
+  it("should classify contact peers as app when in appPeerIds", () => {
     const peer = createPeerInfo({
       peerId: "12D3KooWContactPeer",
       addrs: ["/ip4/1.2.3.4/tcp/9090/ws/p2p/12D3KooWContactPeer"],
@@ -196,9 +196,8 @@ describe("buildTopologyGraph", () => {
     const status = createNetworkStatus({ peers: [peer] });
     const graph = buildTopologyGraph(status, [], undefined, undefined, {
       appPeerIds: new Set(["12D3KooWContactPeer"]),
-      contactPeerIds: new Set(["12D3KooWContactPeer"]),
     });
-    expect(graph.nodes.find((n) => n.id === "12D3KooWContactPeer")?.peerCategory).toBe("contact");
+    expect(graph.nodes.find((n) => n.id === "12D3KooWContactPeer")?.peerCategory).toBe("app");
   });
 
   it("should populate latencyMs from latencyMap", () => {

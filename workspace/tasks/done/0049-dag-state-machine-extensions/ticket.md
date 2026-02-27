@@ -48,17 +48,17 @@ Add explicit check: if `action.parentHashes.length > 4`, reject. This supplement
 
 ## Acceptance Criteria
 
-- [ ] `findMissingHashes` returns correct set for: empty local DAG, partial overlap, fully synced, disjoint heads
-- [ ] `selectParentHashes` includes lastBuiltHead when it's a tip, fills remaining with oldest tips, respects maxParents
-- [ ] `selectParentHashes` handles: no tips (genesis), single tip, more tips than maxParents, lastBuiltHead not a tip
-- [ ] `applyMerge` checks membership and updates `lastMergeTimestampByAuthor`
-- [ ] Merge validation rejects: non-member, <2 tip references, rate limit violation
-- [ ] Merge validation accepts: member with ≥2 tips, respecting rate limit
-- [ ] `processBulkSignedActions` produces same final state as processing actions one-by-one
-- [ ] `processBulkSignedActions` handles: empty batch, single action, duplicates, invalid signatures
-- [ ] parentHashes >4 rejected at processing level with clear error
-- [ ] All functions are pure (no side effects)
-- [ ] All new functions tested with behavior-focused tests
+- [x] `findMissingHashes` returns correct set for: empty local DAG, partial overlap, fully synced, disjoint heads
+- [x] `selectParentHashes` includes lastBuiltHead when it's a tip, fills remaining with oldest tips, respects maxParents
+- [x] `selectParentHashes` handles: no tips (genesis), single tip, more tips than maxParents, lastBuiltHead not a tip
+- [x] `applyMerge` checks membership and updates `lastMergeTimestampByAuthor`
+- [x] Merge validation rejects: non-member, <2 tip references, rate limit violation
+- [x] Merge validation accepts: member with ≥2 tips, respecting rate limit
+- [x] `processBulkSignedActions` produces same final state as processing actions one-by-one
+- [x] `processBulkSignedActions` handles: empty batch, single action, duplicates, invalid signatures
+- [x] parentHashes >4 rejected at processing level with clear error
+- [x] All functions are pure (no side effects)
+- [x] All new functions tested with behavior-focused tests
 
 ## Implementation Notes
 
@@ -75,3 +75,7 @@ Add explicit check: if `action.parentHashes.length > 4`, reject. This supplement
 ## History
 
 - 2026-02-26 Created from brutal-plan PLAN-0002
+- 2026-02-27 01:03 Started work on this task
+- 2026-02-27 01:10 Implementation complete (findMissingHashes, selectParentHashes, processBulkSignedActions, merge validation, parentHash enforcement)
+- 2026-02-27 01:15 Self-review #1: 0 CRITICAL, 2 MAJOR (fixed), 1 MINOR (fixed)
+- 2026-02-27 01:17 Task completed. Final review passed with 0 CRITICAL, 0 MAJOR findings.
