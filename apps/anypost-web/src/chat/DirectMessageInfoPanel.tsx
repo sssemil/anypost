@@ -52,11 +52,13 @@ const summarizePayload = (payload: ActionPayload): string => {
     case "message":
       return `Message: ${payload.text.slice(0, 80)}${payload.text.length > 80 ? "..." : ""}`;
     case "message-edited":
-      return `Message edited: ${payload.targetActionId.slice(0, 8)}...`;
+      return `Message edited: ${toHex(payload.targetHash).slice(0, 8)}...`;
     case "message-deleted":
-      return `Message deleted: ${payload.targetActionId.slice(0, 8)}...`;
+      return `Message deleted: ${toHex(payload.targetHash).slice(0, 8)}...`;
     case "read-receipt":
-      return `Read receipt up to ${payload.upToActionId.slice(0, 8)}...`;
+      return `Read receipt up to ${toHex(payload.upToHash).slice(0, 8)}...`;
+    case "merge":
+      return "Merge";
   }
 };
 

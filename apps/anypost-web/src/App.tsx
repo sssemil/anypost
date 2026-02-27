@@ -10,6 +10,7 @@ import {
   getSeenPeerIds,
   hasGroup,
   toHex,
+  fromHex,
   encodeGroupInvite,
   decodeGroupInvite,
   createInviteGrant,
@@ -130,6 +131,8 @@ const OUTGOING_DM_RETRY_SWEEP_MS = 4_000;
 const ACTION_MESSAGE_DEDUP_MS = 1_500;
 const ACTION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const READ_RECEIPT_AUTO_SEND_COOLDOWN_MS = 1_500;
+const PROTOCOL_VERSION_KEY = "anypost:protocol-version";
+const CURRENT_PROTOCOL_VERSION = 2;
 const DEVTOOLS_RECORD_DURATION_MS = 3 * 60_000;
 const DEVTOOLS_RECORD_SNAPSHOT_MS = 1_000;
 const DEVTOOLS_RECORD_MAX_ENTRIES = 25_000;
@@ -1457,6 +1460,7 @@ export const App = () => {
     };
     const canonicalMessagesById = new Map<string, {
       readonly id: string;
+      readonly hashHex: string;
       readonly senderPeerId: string;
       readonly authorPublicKeyHex: string;
       readonly senderDisplayName: string | undefined;
@@ -1464,12 +1468,22 @@ export const App = () => {
       readonly timestamp: number;
       deleted: boolean;
     }>();
-    const latestEditByTargetId = new Map<string, {
+    const canonicalMessagesByHash = new Map<string, {
+      readonly id: string;
+      readonly hashHex: string;
+      readonly senderPeerId: string;
+      readonly authorPublicKeyHex: string;
+      readonly senderDisplayName: string | undefined;
+      text: string;
+      readonly timestamp: number;
+      deleted: boolean;
+    }>();
+    const latestEditByTargetHash = new Map<string, {
       readonly newText: string;
       readonly editorPublicKeyHex: string;
       readonly editedAt: number;
     }>();
-    const latestDeleteByTargetId = new Map<string, {
+    const latestDeleteByTargetHash = new Map<string, {
       readonly deleterPublicKeyHex: string;
       readonly deletedAt: number;
     }>();
@@ -1491,23 +1505,28 @@ export const App = () => {
         const senderPeerId = resolveAuthorPeerId(action.authorPublicKey);
         const authorPublicKeyHex = toHex(action.authorPublicKey);
         const senderDisplayName = memberLabelFromPublicKey(action.authorPublicKey);
-        canonicalMessagesById.set(action.id, {
+        const hashHex = toHex(action.hash);
+        const entry = {
           id: action.id,
+          hashHex,
           senderPeerId,
           authorPublicKeyHex,
           senderDisplayName,
           text: action.payload.text,
           timestamp: action.timestamp,
           deleted: false,
-        });
+        };
+        canonicalMessagesById.set(action.id, entry);
+        canonicalMessagesByHash.set(hashHex, entry);
         continue;
       }
       if (action.payload.type === "message-edited") {
         if (!canHydrateMessages) continue;
         const editorPublicKeyHex = toHex(action.authorPublicKey);
-        const previous = latestEditByTargetId.get(action.payload.targetActionId);
+        const targetHashHex = toHex(action.payload.targetHash);
+        const previous = latestEditByTargetHash.get(targetHashHex);
         if (!previous || action.timestamp > previous.editedAt) {
-          latestEditByTargetId.set(action.payload.targetActionId, {
+          latestEditByTargetHash.set(targetHashHex, {
             newText: action.payload.newText,
             editorPublicKeyHex,
             editedAt: action.timestamp,
@@ -1518,9 +1537,10 @@ export const App = () => {
       if (action.payload.type === "message-deleted") {
         if (!canHydrateMessages) continue;
         const deleterPublicKeyHex = toHex(action.authorPublicKey);
-        const previous = latestDeleteByTargetId.get(action.payload.targetActionId);
+        const targetHashHex = toHex(action.payload.targetHash);
+        const previous = latestDeleteByTargetHash.get(targetHashHex);
         if (!previous || action.timestamp > previous.deletedAt) {
-          latestDeleteByTargetId.set(action.payload.targetActionId, {
+          latestDeleteByTargetHash.set(targetHashHex, {
             deleterPublicKeyHex,
             deletedAt: action.timestamp,
           });
@@ -1584,14 +1604,14 @@ export const App = () => {
       }
     }
 
-    for (const [targetActionId, edit] of latestEditByTargetId.entries()) {
-      const target = canonicalMessagesById.get(targetActionId);
+    for (const [targetHashHex, edit] of latestEditByTargetHash.entries()) {
+      const target = canonicalMessagesByHash.get(targetHashHex);
       if (!target) continue;
       if (target.authorPublicKeyHex !== edit.editorPublicKeyHex) continue;
       target.text = edit.newText;
     }
-    for (const [targetActionId, deleted] of latestDeleteByTargetId.entries()) {
-      const target = canonicalMessagesById.get(targetActionId);
+    for (const [targetHashHex, deleted] of latestDeleteByTargetHash.entries()) {
+      const target = canonicalMessagesByHash.get(targetHashHex);
       if (!target) continue;
       if (target.authorPublicKeyHex !== deleted.deleterPublicKeyHex) continue;
       target.deleted = true;
@@ -1617,6 +1637,7 @@ export const App = () => {
         groupId,
         message: {
           id: actionMessage.id,
+          hashHex: actionMessage.hashHex,
           senderPeerId: actionMessage.senderPeerId,
           senderDisplayName: actionMessage.senderDisplayName,
           text: actionMessage.text,
@@ -2503,6 +2524,16 @@ export const App = () => {
   };
 
   const restorePersistedGroups = () => {
+    const storedVersion = parseInt(localStorage.getItem(PROTOCOL_VERSION_KEY) ?? "0", 10);
+    if (storedVersion < CURRENT_PROTOCOL_VERSION) {
+      const hadChains = localStorage.getItem(ACTION_CHAINS_STORAGE_KEY) !== null;
+      localStorage.removeItem(ACTION_CHAINS_STORAGE_KEY);
+      localStorage.setItem(PROTOCOL_VERSION_KEY, String(CURRENT_PROTOCOL_VERSION));
+      if (hadChains) {
+        console.warn("Cleared v1.0 action chain data — protocol upgraded to v1.1");
+      }
+    }
+
     const persisted = loadPersistedGroups();
     if (!persisted || persisted.joinedGroups.length === 0) {
       return;
@@ -3183,15 +3214,15 @@ export const App = () => {
       const editedText = existing.quote
         ? encodeQuotedMessage(trimmedText, existing.quote)
         : trimmedText;
-      currentChat.editMessage(groupId, editTarget.id, editedText).then(() => {
-        appendDiagnosticsEntry("message-edit-succeeded", { groupId, targetActionId: editTarget.id });
+      currentChat.editMessage(groupId, fromHex(editTarget.hashHex!), editedText).then(() => {
+        appendDiagnosticsEntry("message-edit-succeeded", { groupId, targetHash: editTarget.hashHex });
         setEditTargetMessage(null);
         setMessageDraft("");
         syncMessagesFromActionChain(groupId);
       }).catch((error) => {
         appendDiagnosticsEntry("message-edit-failed", {
           groupId,
-          targetActionId: editTarget.id,
+          targetHash: editTarget.hashHex,
           error: error instanceof Error ? error.message : String(error),
         });
       });
@@ -3251,12 +3282,12 @@ export const App = () => {
     const groupId = activeGroup.groupId;
     appendDiagnosticsEntry("message-delete-requested", {
       groupId,
-      targetActionId: message.id,
+      targetHash: message.hashHex,
     });
-    currentChat.deleteMessage(groupId, message.id).then(() => {
+    currentChat.deleteMessage(groupId, fromHex(message.hashHex!)).then(() => {
       appendDiagnosticsEntry("message-delete-succeeded", {
         groupId,
-        targetActionId: message.id,
+        targetHash: message.hashHex,
       });
       if (editTargetMessage()?.id === message.id) {
         setEditTargetMessage(null);
@@ -3266,7 +3297,7 @@ export const App = () => {
     }).catch((error) => {
       appendDiagnosticsEntry("message-delete-failed", {
         groupId,
-        targetActionId: message.id,
+        targetHash: message.hashHex,
         error: error instanceof Error ? error.message : String(error),
       });
     });
@@ -4493,7 +4524,7 @@ export const App = () => {
 
   const visibleMessageText = (text: string): string => parseQuotedMessage(text).body;
 
-  const latestReadableMessageIdForActiveGroup = (): string | null => {
+  const latestReadableMessageHashForActiveGroup = (): string | null => {
     const activeGroup = getActiveGroup(groupState());
     const currentChat = chat;
     if (!activeGroup || !currentChat) return null;
@@ -4501,7 +4532,8 @@ export const App = () => {
       const message = activeGroup.messages[index];
       if (message.senderPeerId === SYSTEM_SENDER_ID) continue;
       if (message.senderPeerId === currentChat.peerId) continue;
-      return message.id;
+      if (!message.hashHex) continue;
+      return message.hashHex;
     }
     return null;
   };
@@ -4518,33 +4550,33 @@ export const App = () => {
     const chainState = currentChat.getActionChainState(activeGroupId);
     if (!chainState) return;
     if (chainState.isDirectMessage && !chainState.dmHandshakeComplete) return;
-    const targetActionId = latestReadableMessageIdForActiveGroup();
-    if (!targetActionId) return;
+    const targetHashHex = latestReadableMessageHashForActiveGroup();
+    if (!targetHashHex) return;
     const ownKeyHex = ownPublicKeyHex();
     if (!ownKeyHex) return;
-    if (chainState.readReceipts.get(ownKeyHex) === targetActionId) {
-      readReceiptLastSentByGroup.set(activeGroupId, targetActionId);
+    if (chainState.readReceipts.get(ownKeyHex) === targetHashHex) {
+      readReceiptLastSentByGroup.set(activeGroupId, targetHashHex);
       return;
     }
-    if (readReceiptLastSentByGroup.get(activeGroupId) === targetActionId) return;
+    if (readReceiptLastSentByGroup.get(activeGroupId) === targetHashHex) return;
     const now = Date.now();
     const lastAttemptAt = readReceiptLastAttemptAtByGroup.get(activeGroupId) ?? 0;
     if (now - lastAttemptAt < READ_RECEIPT_AUTO_SEND_COOLDOWN_MS) return;
     readReceiptLastAttemptAtByGroup.set(activeGroupId, now);
     appendDiagnosticsEntry("read-receipt-send-requested", {
       groupId: activeGroupId,
-      upToActionId: targetActionId,
+      upToHash: targetHashHex,
     });
-    void currentChat.sendReadReceipt(activeGroupId, targetActionId).then(() => {
-      readReceiptLastSentByGroup.set(activeGroupId, targetActionId);
+    void currentChat.sendReadReceipt(activeGroupId, fromHex(targetHashHex)).then(() => {
+      readReceiptLastSentByGroup.set(activeGroupId, targetHashHex);
       appendDiagnosticsEntry("read-receipt-send-succeeded", {
         groupId: activeGroupId,
-        upToActionId: targetActionId,
+        upToHash: targetHashHex,
       });
     }).catch((error) => {
       appendDiagnosticsEntry("read-receipt-send-failed", {
         groupId: activeGroupId,
-        upToActionId: targetActionId,
+        upToHash: targetHashHex,
         error: error instanceof Error ? error.message : String(error),
       });
     });
@@ -4557,9 +4589,11 @@ export const App = () => {
     const allMessages = getActiveMessages(groupState())
       .filter((message) => message.senderPeerId !== SYSTEM_SENDER_ID);
     if (allMessages.length === 0) return new Map();
-    const messageIndexById = new Map<string, number>();
-    allMessages.forEach((message, index) => messageIndexById.set(message.id, index));
-    const latestReadByAuthor = new Map<string, { readonly upToActionId: string; readonly readAt: number }>();
+    const hashToMessageIndex = new Map<string, number>();
+    allMessages.forEach((message, index) => {
+      if (message.hashHex) hashToMessageIndex.set(message.hashHex, index);
+    });
+    const latestReadByAuthor = new Map<string, { readonly upToHashHex: string; readonly readAt: number }>();
     for (const envelope of currentChat.getActionChainEnvelopes(activeGroupId)) {
       const decoded = verifyAndDecodeAction(envelope);
       if (!decoded.success) continue;
@@ -4569,7 +4603,7 @@ export const App = () => {
       const previous = latestReadByAuthor.get(authorHex);
       if (!previous || action.timestamp > previous.readAt) {
         latestReadByAuthor.set(authorHex, {
-          upToActionId: action.payload.upToActionId,
+          upToHashHex: toHex(action.payload.upToHash),
           readAt: action.timestamp,
         });
       }
@@ -4578,7 +4612,7 @@ export const App = () => {
     const readersByMessageId = new Map<string, MessageReadEntry[]>();
     for (const [authorHex, receipt] of latestReadByAuthor.entries()) {
       if (authorHex === ownKeyHex) continue;
-      const upToIndex = messageIndexById.get(receipt.upToActionId);
+      const upToIndex = hashToMessageIndex.get(receipt.upToHashHex);
       if (upToIndex === undefined) continue;
       const mappedPeerId = publicKeyToPeerIdMap().get(authorHex);
       const readerPeerId = mappedPeerId ?? `pk:${authorHex.slice(0, 10)}...`;
@@ -4610,22 +4644,22 @@ export const App = () => {
     const activeGroupId = groupState().activeGroupId;
     const currentChat = chat;
     if (!activeGroupId || !currentChat) return new Map();
-    const messageAuthorById = new Map<string, string>();
-    const latestEditedAtByMessageId = new Map<string, { readonly editorHex: string; readonly editedAt: number }>();
+    const messageAuthorByHash = new Map<string, { readonly authorHex: string; readonly id: string }>();
+    const latestEditedAtByHash = new Map<string, { readonly editorHex: string; readonly editedAt: number }>();
     for (const envelope of currentChat.getActionChainEnvelopes(activeGroupId)) {
       const decoded = verifyAndDecodeAction(envelope);
       if (!decoded.success) continue;
       const action = decoded.data;
       const authorHex = toHex(action.authorPublicKey);
       if (action.payload.type === "message") {
-        messageAuthorById.set(action.id, authorHex);
+        messageAuthorByHash.set(toHex(action.hash), { authorHex, id: action.id });
         continue;
       }
       if (action.payload.type !== "message-edited") continue;
-      const targetActionId = action.payload.targetActionId;
-      const previous = latestEditedAtByMessageId.get(targetActionId);
+      const targetHashHex = toHex(action.payload.targetHash);
+      const previous = latestEditedAtByHash.get(targetHashHex);
       if (!previous || action.timestamp > previous.editedAt) {
-        latestEditedAtByMessageId.set(targetActionId, {
+        latestEditedAtByHash.set(targetHashHex, {
           editorHex: authorHex,
           editedAt: action.timestamp,
         });
@@ -4633,10 +4667,10 @@ export const App = () => {
     }
 
     const editedAtByMessageId = new Map<string, number>();
-    for (const [messageId, edit] of latestEditedAtByMessageId.entries()) {
-      const authorHex = messageAuthorById.get(messageId);
-      if (!authorHex || authorHex !== edit.editorHex) continue;
-      editedAtByMessageId.set(messageId, edit.editedAt);
+    for (const [hashHex, edit] of latestEditedAtByHash.entries()) {
+      const message = messageAuthorByHash.get(hashHex);
+      if (!message || message.authorHex !== edit.editorHex) continue;
+      editedAtByMessageId.set(message.id, edit.editedAt);
     }
     return editedAtByMessageId;
   };
