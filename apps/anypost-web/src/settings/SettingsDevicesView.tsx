@@ -9,8 +9,36 @@ type SettingsDevicesViewProps = {
   readonly onBack: () => void;
 };
 
-const truncatePeerId = (id: string): string =>
-  id.length > 16 ? `${id.slice(0, 8)}...${id.slice(-8)}` : id;
+const SUFFIX_LENGTH = 6;
+
+const PeerIdCopyButton = (props: { readonly peerId: string }) => {
+  const [copied, setCopied] = createSignal(false);
+
+  const prefix = () => props.peerId.slice(0, -SUFFIX_LENGTH);
+  const suffix = () => props.peerId.slice(-SUFFIX_LENGTH);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(props.peerId).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {});
+  };
+
+  return (
+    <button
+      class="flex items-center gap-1.5 w-full text-left cursor-pointer group"
+      onClick={handleCopy}
+    >
+      <span class="font-mono text-sm text-tg-text min-w-0 flex overflow-hidden">
+        <span class="overflow-hidden text-ellipsis whitespace-nowrap shrink">{prefix()}</span>
+        <span class="shrink-0">{suffix()}</span>
+      </span>
+      <span class="text-tg-accent text-[10px] shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+        {copied() ? "Copied!" : "Copy"}
+      </span>
+    </button>
+  );
+};
 
 export const SettingsDevicesView = (props: SettingsDevicesViewProps) => {
   const [removingDeviceId, setRemovingDeviceId] = createSignal<string | null>(null);
@@ -43,7 +71,7 @@ export const SettingsDevicesView = (props: SettingsDevicesViewProps) => {
       <div class="rounded-lg border border-tg-border bg-tg-hover overflow-hidden">
         <div class="px-3 py-2 text-[11px] text-tg-text-dim uppercase tracking-wide">This device</div>
         <div class="px-3 py-2.5 border-t border-tg-border/50">
-          <span class="font-mono text-sm text-tg-text">{truncatePeerId(props.peerId)}</span>
+          <PeerIdCopyButton peerId={props.peerId} />
         </div>
       </div>
 
@@ -53,8 +81,8 @@ export const SettingsDevicesView = (props: SettingsDevicesViewProps) => {
           <For each={otherDevices()}>
             {(device) => (
               <div class="flex items-center justify-between px-3 py-2.5 border-t border-tg-border/50">
-                <div class="min-w-0">
-                  <div class="font-mono text-sm text-tg-text truncate">{truncatePeerId(device.devicePeerId)}</div>
+                <div class="min-w-0 flex-1">
+                  <PeerIdCopyButton peerId={device.devicePeerId} />
                   <div class="text-[11px] text-tg-text-dim">
                     Last seen {new Date(device.lastSeen).toLocaleDateString()}
                   </div>
