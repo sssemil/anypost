@@ -60,7 +60,7 @@ const SyncRequestPayloadSchema = z.object({
   signature: Uint8ArraySchema,
   requestId: z.string().uuid().optional(),
   targetPeerId: PeerIdSchema.optional(),
-  knownHeads: z.array(Uint8ArraySchema),
+  knownHeads: z.array(Uint8ArraySchema).max(64),
 });
 
 const SignedActionEnvelopeWireSchema = z.object({
@@ -76,7 +76,7 @@ const SyncResponsePayloadSchema = z.object({
   signature: Uint8ArraySchema,
   requestId: z.string().uuid().optional(),
   targetPeerId: PeerIdSchema,
-  theirHeads: z.array(Uint8ArraySchema),
+  theirHeads: z.array(Uint8ArraySchema).max(64),
   envelopes: z.array(SignedActionEnvelopeWireSchema),
 });
 

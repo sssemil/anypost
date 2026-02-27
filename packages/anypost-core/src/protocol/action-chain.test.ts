@@ -282,6 +282,20 @@ describe("Action chain schemas", () => {
         }),
       ).toThrow();
     });
+
+    it("should reject action with zero parent hashes", () => {
+      expect(() =>
+        SignableActionSchema.parse({
+          protocolVersion: 2,
+          id: DEFAULT_ACTION_ID,
+          groupId: DEFAULT_GROUP_ID,
+          authorPublicKey: DEFAULT_PUBLIC_KEY,
+          timestamp: DEFAULT_TIMESTAMP,
+          parentHashes: [],
+          payload: { type: "message", text: "Hello" },
+        }),
+      ).toThrow();
+    });
   });
 
   describe("SignedActionEnvelopeSchema", () => {

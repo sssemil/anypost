@@ -426,4 +426,42 @@ describe("WireMessageSchema", () => {
 
     expect(result.success).toBe(false);
   });
+
+  it("should reject sync_request with more than 64 knownHeads", () => {
+    const wireMsg = {
+      type: "sync_request" as const,
+      protocolVersion: 2 as const,
+      payload: {
+        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+        senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
+        senderPublicKey: new Uint8Array(32).fill(3),
+        signature: new Uint8Array(64).fill(4),
+        knownHeads: Array.from({ length: 65 }, () => new Uint8Array(32).fill(1)),
+      },
+    };
+
+    const result = WireMessageSchema.safeParse(wireMsg);
+
+    expect(result.success).toBe(false);
+  });
+
+  it("should reject sync_response with more than 64 theirHeads", () => {
+    const wireMsg = {
+      type: "sync_response" as const,
+      protocolVersion: 2 as const,
+      payload: {
+        groupId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+        senderPeerId: "12D3KooWBtg3aaRMjxwedh83aGiUkwSxDwUZkzuJcfaqUmo7R3pn",
+        senderPublicKey: new Uint8Array(32).fill(3),
+        signature: new Uint8Array(64).fill(4),
+        targetPeerId: "12D3KooWQkVLLv8c9r7y9ZwzhsMvy4c8h6ivm8xv3vN4K8n9sYf2",
+        theirHeads: Array.from({ length: 65 }, () => new Uint8Array(32).fill(1)),
+        envelopes: [],
+      },
+    };
+
+    const result = WireMessageSchema.safeParse(wireMsg);
+
+    expect(result.success).toBe(false);
+  });
 });

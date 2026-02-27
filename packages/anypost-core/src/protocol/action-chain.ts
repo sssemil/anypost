@@ -88,7 +88,7 @@ export const SignableActionSchema = z.object({
   groupId: GroupIdSchema,
   authorPublicKey: Uint8ArraySchema,
   timestamp: z.number(),
-  parentHashes: z.array(Uint8ArraySchema).max(4),
+  parentHashes: z.array(Uint8ArraySchema).min(1).max(4),
   payload: ActionPayloadSchema,
 });
 
