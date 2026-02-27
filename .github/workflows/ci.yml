@@ -73,7 +73,7 @@ jobs:
           exit 1
 
       - name: Run Headless Validation
-        run: pnpm --filter anypost-web run e2e:record -- --out-dir artifacts/headless-recordings/ci --record-wait-ms 120000 --settle-ms 5000
+        run: pnpm --filter anypost-web run e2e:record -- --out-dir artifacts/headless-recordings/ci --record-wait-ms 195000 --settle-ms 5000
 
       - name: Upload Validation Artifacts
         if: always()

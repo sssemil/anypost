@@ -1,0 +1,224 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag (e.g. v0.1.0). Defaults to dev-<sha>."
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Electron app dependencies and renderer
+        run: pnpm --filter anypost-electron build
+
+      - name: Package Linux x64 AppImage
+        run: >
+          pnpm --filter anypost-electron exec electron-builder
+          --projectDir .
+          --config electron-builder.yml
+          --linux AppImage
+          --x64
+          --publish never
+          --config.directories.output=release
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-x64-appimage
+          path: apps/anypost-electron/release/*.AppImage
+          if-no-files-found: error
+
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Electron app dependencies and renderer
+        run: pnpm --filter anypost-electron build
+
+      - name: Package Windows x64 Portable EXE
+        shell: bash
+        run: >
+          pnpm --filter anypost-electron exec electron-builder
+          --projectDir .
+          --config electron-builder.yml
+          --win portable
+          --x64
+          --publish never
+          --config.directories.output=release
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-x64-portable
+          path: apps/anypost-electron/release/*.exe
+          if-no-files-found: error
+
+  build-macos:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Electron app dependencies and renderer
+        run: pnpm --filter anypost-electron build
+
+      - name: Package macOS x64 DMG + ZIP
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: >
+          pnpm --filter anypost-electron exec electron-builder
+          --projectDir .
+          --config electron-builder.yml
+          --mac dmg zip
+          --x64
+          --publish never
+          --config.directories.output=release
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-x64
+          path: |
+            apps/anypost-electron/release/*.dmg
+            apps/anypost-electron/release/*mac*.zip
+          if-no-files-found: error
+
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build core and web
+        run: |
+          pnpm --filter anypost-core build
+          pnpm --filter anypost-web build
+
+      - name: Capacitor sync
+        run: pnpm --filter anypost-android exec cap sync android
+
+      - name: Build debug APK
+        working-directory: apps/anypost-android/android
+        run: ./gradlew assembleDebug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-android-apk
+          path: apps/anypost-android/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-linux, build-windows, build-macos, build-android]
+    steps:
+      - name: Determine version tag
+        id: tag
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          GIT_REF_NAME: ${{ github.ref_name }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          if [[ -n "$INPUT_VERSION" ]]; then
+            echo "tag=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
+          elif [[ "$GIT_REF_NAME" == v* ]]; then
+            echo "tag=$GIT_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=dev-${GIT_SHA:0:8}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Rename artifacts for release
+        run: |
+          mkdir -p release
+          cp artifacts/release-linux-x64-appimage/*.AppImage release/Anypost-linux-x64.AppImage
+          cp artifacts/release-windows-x64-portable/*.exe release/Anypost-windows-x64.exe
+          cp artifacts/release-macos-x64/*.dmg release/Anypost-macos-x64.dmg
+          cp artifacts/release-macos-x64/*mac*.zip release/Anypost-macos-x64.zip
+          cp artifacts/release-android-apk/*.apk release/Anypost-android-debug.apk
+          ls -lh release/
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          PRERELEASE_FLAG=""
+          if [[ "$TAG" == dev-* ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Anypost $TAG" \
+            --generate-notes \
+            $PRERELEASE_FLAG \
+            release/*
