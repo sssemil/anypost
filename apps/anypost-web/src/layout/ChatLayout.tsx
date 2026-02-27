@@ -13,6 +13,7 @@ type ChatLayoutProps = {
   readonly contactsContent: JSX.Element;
   readonly profileContent: JSX.Element;
   readonly aboutContent: JSX.Element;
+  readonly hasActiveGroup: boolean;
   readonly mobileView: "group-list" | "chat";
   readonly rightPanel: RightPanel;
   readonly onRightPanelClose: () => void;
@@ -52,19 +53,30 @@ export const ChatLayout = (props: ChatLayoutProps) => {
             hidden: props.mobileView !== "chat" || isSidePanel(props.rightPanel),
           }}
         >
-          <div class="flex-1 min-h-0">
-            {props.messageList}
-          </div>
-
-          <div
-            class="px-3 pt-3 shrink-0"
-            style={{
-              "min-height": "calc(76px + env(safe-area-inset-bottom, 0px))",
-              "padding-bottom": `max(calc(env(safe-area-inset-bottom, 0px) + ${Math.max(0, Math.round(props.messageInputInsetPx ?? 0))}px), 12px)`,
-            }}
+          <Show
+            when={props.hasActiveGroup}
+            fallback={
+              <div class="flex-1 flex items-center justify-center">
+                <span class="text-tg-text-dim text-sm bg-tg-sidebar/60 px-4 py-2 rounded-full">
+                  Select a chat to start messaging
+                </span>
+              </div>
+            }
           >
-            {props.messageInput}
-          </div>
+            <div class="flex-1 min-h-0">
+              {props.messageList}
+            </div>
+
+            <div
+              class="px-3 pt-3 shrink-0"
+              style={{
+                "min-height": "calc(76px + env(safe-area-inset-bottom, 0px))",
+                "padding-bottom": `max(calc(env(safe-area-inset-bottom, 0px) + ${Math.max(0, Math.round(props.messageInputInsetPx ?? 0))}px), 12px)`,
+              }}
+            >
+              {props.messageInput}
+            </div>
+          </Show>
         </div>
 
         <Show when={isSidePanel(props.rightPanel)}>

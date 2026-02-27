@@ -5306,6 +5306,7 @@ export const App = () => {
                 appVersion={appVersion()}
               />
             }
+            hasActiveGroup={groupState().activeGroupId !== null}
             mobileView={mobileView().currentView}
             rightPanel={mobileView().rightPanel}
             onRightPanelClose={closeRightPanel}
