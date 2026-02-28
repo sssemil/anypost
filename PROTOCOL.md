@@ -3,7 +3,7 @@
 > Version: 1.2 (protocolVersion: 2) — derived from the reference implementation as of 2026-02-27.
 > Sufficient to build a compatible node from scratch using any libp2p implementation.
 >
-> **v1.2 additions**: Identity architecture — AccountId = PeerId derived deterministically from the account key seed. Multi-device support via device certificates and device mesh topics. Account DHT advertising.
+> **v1.2 additions**: Identity architecture — AccountId derived deterministically from account key seed, decoupled from transport PeerId. Multi-device support via device certificates and device mesh topics. Account DHT advertising.
 
 ---
 
@@ -42,10 +42,11 @@ accountIdFromPublicKeyHex(hex):
 
 ### Multi-Device Model
 
-- **Primary device**: Uses the account key as the libp2p node key. Its PeerId = AccountId.
-- **Secondary devices**: Use a random libp2p key. Their PeerId differs from AccountId. They are bound to the account via device certificates.
-- **All devices** share the same AccountKey for signing actions.
-- **Identity in the action chain**: `authorPublicKey` identifies the account, regardless of which device created the action.
+- **All devices** use a random (or persisted) libp2p key for transport — `peerId !== accountId` on every device
+- **No primary/secondary distinction** — all devices are equal
+- Each device binds its transport peerId to the account via a **device certificate**
+- All devices share the same **AccountKey** for signing actions
+- **Identity in the action chain**: `authorPublicKey` identifies the account, regardless of which device created the action
 
 ### Device Certificates
 
@@ -133,8 +134,10 @@ cid = CID.createV1(raw.code, hash)
 
 **Layer C — Group DHT Discovery**:
 - On group join: `contentRouting.provide(groupCid)`
-- Search schedule: immediate, then 5s, then every 15s ongoing
-- Max 128 tracked peers per group; 24h expiry
+- Two discovery profiles:
+  - **Balanced**: `[0, 5_000]` then every 15s
+  - **Aggressive**: `[0, 1_500, 4_000, 9_000]` then every 15s
+- Peer TTL: 5 minutes (300,000ms), no peer count cap
 
 **Layer D — Circuit Relay Harvest**:
 - Parse `self:peer:update` multiaddrs for circuit relay addresses
@@ -143,7 +146,7 @@ cid = CID.createV1(raw.code, hash)
 **Layer E — Account DHT Advertising**:
 - On startup: `contentRouting.provide(CID("anypost/account/{accountId}"))` (fire-and-forget)
 - To find a user: `contentRouting.findProviders(CID("anypost/account/{targetAccountId}"))` — returns any online device for that account
-- Each device (primary or secondary) advertises under the same AccountId
+- Each device advertises under the same AccountId
 
 ---
 
@@ -163,6 +166,14 @@ decode: Uint8Array → CBOR → Zod.parse(WireMessageSchema) → WireMessage
 ```
 Group topic:            anypost/group/{groupId}        (groupId = UUID)
 Device mesh topic:      anypost/account/{accountId}/devices
+```
+
+**System topics** (global GossipSub topics for point-to-point-style messaging over pub/sub):
+
+```
+DM request topic:       anypost/system/dm-requests/v1
+Join request topic:     anypost/system/join-requests/v1
+Profile sync topic:     anypost/system/profile/v1
 ```
 
 **Note**: The group topic prefix is `anypost/`.
@@ -322,6 +333,17 @@ TargetedPeerClaims = { kind: "targeted-peer", tokenId: UUID, groupId: UUID, issu
 OpenClaims         = { kind: "open", tokenId: UUID, groupId: UUID, issuedAt, expiresAt?, maxJoiners? }
 ```
 
+### 3.5 Direct Stream Protocols
+
+These are libp2p stream protocols (not GossipSub). Used as fallback/supplement to GossipSub topic delivery for targeted messages.
+
+```
+/anypost/direct-signed-action/1.0.0   — Point-to-point signed action delivery
+/anypost/direct-dm-request/1.0.0      — Point-to-point DM request delivery
+/anypost/direct-join-request/1.0.0    — Point-to-point join request delivery
+/anypost/direct-call-control/1.0.0    — Point-to-point call control delivery
+```
+
 ---
 
 ## 4. Signed Action Chain
@@ -371,7 +393,7 @@ SignableAction & { signature: Uint8Array, hash: Uint8Array }
 | Type | Fields | Purpose |
 |------|--------|---------|
 | `group-created` | `groupName: string`, `joinPolicy?: "manual"\|"auto_with_invite"` | Genesis action, author becomes owner |
-| `dm-created` | `peerIds: [string, string]` (sorted ascending) | DM genesis, both peers must emit |
+| `dm-created` | `peerIds: [string, string]` (sorted ascending) | DM genesis, both peers must emit. **Note**: `peerIds` contains **accountIds** (stable identities), not transport peerIds |
 | `join-request` | `requesterPublicKey: Uint8Array` | Request to join group |
 | `member-approved` | `memberPublicKey: Uint8Array`, `role: "admin"\|"member"`, `inviteTokenId?: UUID` | Admin approves pending member |
 | `member-left` | *(none)* | Author voluntarily leaves |
@@ -478,6 +500,8 @@ GroupMember = { publicKeyHex, publicKey, role: "owner"|"admin"|"member", joinedA
 
 **Note**: `readReceipts` maps author hex → target hash hex (not UUID).
 
+**Note**: `directMessagePeerIds` stores **accountIds** (stable identities), not transport peerIds. Any comparison against a runtime transport peerId must resolve the accountId first.
+
 **Permission Matrix**:
 
 | Action | Requirement |
@@ -526,7 +550,7 @@ After any member removal or departure, `normalizeOwnerInvariant` runs:
 ### 4.9 DM Handshake
 
 For `dm-created` actions:
-- `peerIds` must be a sorted tuple of exactly 2 peer ID strings
+- `peerIds` must be a sorted tuple of exactly 2 **accountId** strings (not transport peerIds)
 - Each peer independently emits a `dm-created` action
 - `dmHandshakeComplete = true` when 2+ distinct authors have emitted `dm-created`
 - Messages are blocked until handshake is complete
@@ -537,7 +561,7 @@ For `dm-created` actions:
 
 ### 5.1 Overview
 
-v1.1 uses **frontier-based sync** with three mechanisms:
+v1.2 uses **frontier-based sync** with three mechanisms:
 
 1. **Heads announce** — Broadcast DAG tips to detect divergence
 2. **Sync request/response** — Exchange small batches of envelopes inline via GossipSub
@@ -655,9 +679,9 @@ A libp2p stream protocol for fetching specific actions by hash.
 
 - Circuit Relay v2, 128 max reservations
 - DHT server mode, provides under `anypost-relay` namespace
-- Auto-subscribes to all GossipSub topics its peers use (including `anypost/group/` topics)
+- Auto-subscribes to any GossipSub topic its peers use
 - `canRelayMessage: true` for GossipSub relay
-- Forwards all v1.1 wire messages: `heads_announce`, `sync_request`, `sync_response`, `signed_action`
+- Relays all wire message types including `heads_announce`, `sync_request`, `sync_response`, `signed_action`
 
 ### 6.2 Relay Discovery (Client)
 
