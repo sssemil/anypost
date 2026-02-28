@@ -2996,8 +2996,10 @@ export const App = () => {
         maybeRequestProfileSync(evt.senderPeerId);
         setDirectMessagePeerForGroup(evt.groupId, evt.senderPeerId);
 
+        const senderAccountId = accountIdFromPublicKeyHex(toHex(evt.senderPublicKey));
         const reciprocalToOutgoing = outgoingDirectMessageRequests().some((entry) =>
-          entry.groupId === evt.groupId && entry.targetPeerId === evt.senderPeerId);
+          entry.groupId === evt.groupId &&
+          (entry.targetPeerId === evt.senderPeerId || entry.targetPeerId === senderAccountId));
         if (reciprocalToOutgoing && chat) {
           void (async () => {
             const currentChat = chat;
@@ -3034,13 +3036,23 @@ export const App = () => {
               return;
             }
             removeOutgoingDirectMessageRequests((entry) =>
-              entry.groupId === evt.groupId && entry.targetPeerId === evt.senderPeerId);
+              entry.groupId === evt.groupId &&
+              (entry.targetPeerId === evt.senderPeerId || entry.targetPeerId === senderAccountId));
             appendDiagnosticsEntry("dm-request-reciprocal-accepted", {
               requestId: evt.requestId,
               senderPeerId: evt.senderPeerId,
               groupId: evt.groupId,
             });
           })();
+          return;
+        }
+
+        if (groupState().groups.has(evt.groupId)) {
+          appendDiagnosticsEntry("dm-request-inbound-already-joined", {
+            requestId: evt.requestId,
+            senderPeerId: evt.senderPeerId,
+            groupId: evt.groupId,
+          });
           return;
         }
 
@@ -3912,8 +3924,16 @@ export const App = () => {
       syncMessagesFromActionChain(groupId);
 
       setDirectMessagePeerForGroup(groupId, request.senderPeerId);
+      let acceptedSenderAccountId: string | undefined;
+      for (const [pubKeyHex, peerId] of publicKeyToPeerIdMap()) {
+        if (peerId === request.senderPeerId) {
+          acceptedSenderAccountId = accountIdFromPublicKeyHex(pubKeyHex);
+          break;
+        }
+      }
       removeOutgoingDirectMessageRequests((entry) =>
-        entry.groupId === groupId && entry.targetPeerId === request.senderPeerId);
+        entry.groupId === groupId &&
+        (entry.targetPeerId === request.senderPeerId || entry.targetPeerId === acceptedSenderAccountId));
       removePendingDirectMessageRequest(requestId);
       appendDiagnosticsEntry("dm-request-accepted", {
         requestId,
